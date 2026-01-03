@@ -1,0 +1,39 @@
+{
+  "name": "siyuan-plugin-share",
+  "author": "取舍",
+  "url": "https://github.com/b8l8u8e8/siyuan-plugin-share",
+  "version": "0.1.0",
+  "minAppVersion": "2.9.0",
+  "disabledInPublish": false,
+  "backends": [
+    "all"
+  ],
+  "frontends": [
+    "all"
+  ],
+  "displayName": {
+    "default": "SiYuan Share",
+    "zh_CN": "思源分享"
+  },
+  "description": {
+    "default": "Free sharing of notebooks or documents as links, with support for setting passwords and expiration times.",
+    "zh_CN": "免费分享笔记本或某文档为链接,支持设置密码和到期时间。"
+  },
+  "readme": {
+    "default": "README.md",
+    "zh_CN": "README_zh_CN.md"
+  },
+  "funding": {
+    "openCollective": "",
+    "patreon": "",
+    "github": "",
+    "custom": [
+      "https://cos.jie86.cn/LightPicture/2025/03/518c36908c50c51d.jpg"
+    ]
+  },
+  "keywords": [
+    "share",
+    "markdown",
+    "分享"
+  ]
+}
