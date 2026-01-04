@@ -1,4 +1,4 @@
-﻿# Siyuan Share
+# 🔗Siyuan Share
 
 This is a free sharing plugin for SiYuan Note. It supports generating share links for notebooks or documents, allowing you to set access passwords and expiration dates.
 
@@ -31,7 +31,7 @@ This plugin relies on the server-side website [share.b0x.top](https://share.b0x.
 2.  **Server Information**:
     - Currently, [share.b0x.top](https://share.b0x.top) is a **public** server provided by the author for demonstration and short-term use.
     - **Cleanup Policy**: Due to limited server bandwidth and storage costs, the system performs periodic cleanup on large files.
-    - **Self-hosting Suggestion**: For users with long-term persistent storage needs, it is strongly recommended to refer to the [Server Deployment Tutorial](https://ccnwc9xa9692.feishu.cn/wiki/MQCtwMtQaifPuak4zl3cIMCqnLx) for self-hosting.
+    - **Self-hosting Suggestion**: For users with long-term persistent storage needs, it is strongly recommended to refer to the **[Server Deployment Tutorial](https://ccnwc9xa9692.feishu.cn/wiki/MQCtwMtQaifPuak4zl3cIMCqnLx)** for self-hosting.
 
 ## 📖 Demo
 

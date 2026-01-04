@@ -23,12 +23,16 @@ try {
 const STORAGE_SETTINGS = "settings";
 const STORAGE_SHARES = "shares";
 const DOCK_TYPE = "siyuan-plugin-share-dock";
+const ASSET_CHUNK_SIZE = 5 * 1024 * 1024;
 
 const REMOTE_API = {
   verify: "/api/v1/auth/verify",
   shares: "/api/v1/shares",
+  shareDocInit: "/api/v1/shares/doc/init",
   shareDoc: "/api/v1/shares/doc",
+  shareNotebookInit: "/api/v1/shares/notebook/init",
   shareNotebook: "/api/v1/shares/notebook",
+  shareAssetChunk: "/api/v1/shares/asset/chunk",
   deleteShare: "/api/v1/shares/delete",
 };
 
@@ -104,6 +108,17 @@ function parseDateTimeLocalInput(value) {
   if (!value) return null;
   const ts = new Date(value).getTime();
   return Number.isFinite(ts) ? ts : null;
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value <= 0) return "0 KB";
+  const kb = value / 1024;
+  if (kb < 1024) {
+    return `${kb < 10 ? kb.toFixed(1) : kb.toFixed(0)} KB`;
+  }
+  const mb = kb / 1024;
+  return `${mb < 10 ? mb.toFixed(1) : mb.toFixed(0)} MB`;
 }
 
 function throwIfAborted(controller, message) {
@@ -800,6 +815,7 @@ class SiYuanSharePlugin extends Plugin {
     this.docTreeBindTimer = null;
     this.docTreeRefreshTimer = null;
     this.progressDialog = null;
+    this.settingVisible = false;
     this.settingEls = {
       siteInput: null,
       apiKeyInput: null,
@@ -1422,10 +1438,27 @@ class SiYuanSharePlugin extends Plugin {
 
   startSettingLayoutObserver() {
     if (this.settingLayoutObserver || typeof MutationObserver === "undefined") return;
-    const observer = new MutationObserver(() => this.applySettingWideLayout());
+    const observer = new MutationObserver(() => {
+      this.applySettingWideLayout();
+      this.handleSettingVisibilityChange();
+    });
     observer.observe(document.body, {childList: true, subtree: true});
     this.settingLayoutObserver = observer;
     this.applySettingWideLayout();
+    this.handleSettingVisibilityChange();
+  }
+
+  handleSettingVisibilityChange() {
+    const {siteInput, apiKeyInput} = this.settingEls || {};
+    const isVisible = !!(siteInput?.isConnected || apiKeyInput?.isConnected);
+    if (isVisible) {
+      this.settingVisible = true;
+      return;
+    }
+    if (this.settingVisible) {
+      this.settingVisible = false;
+      void this.saveSettingsFromSetting({notify: false});
+    }
   }
 
   makeSettingRowFullWidth(actionEl) {
@@ -1712,11 +1745,16 @@ class SiYuanSharePlugin extends Plugin {
     } catch {
       // ignore
     }
-    const safeMessage = escapeHtml(message || t("siyuanShare.message.processing"));
+    const rawMessage = message || t("siyuanShare.message.processing");
+    const safeMessage = escapeHtml(rawMessage);
     const dialog = new Dialog({
       title: t("siyuanShare.title.processing"),
       content: `<div class="sps-progress">
-  <div class="sps-progress__title">${safeMessage}</div>
+  <div class="sps-progress__header">
+    <div class="sps-progress__title">${safeMessage}</div>
+    <div class="sps-progress__percent" style="display:none"></div>
+  </div>
+  <div class="sps-progress__detail" style="display:none"></div>
   <div class="sps-progress__bar"><div class="sps-progress__bar-inner"></div></div>
 </div>
 <div class="b3-dialog__action">
@@ -1729,9 +1767,66 @@ class SiYuanSharePlugin extends Plugin {
     });
     this.progressDialog = dialog;
 
-    const update = (next) => {
-      const label = dialog.element?.querySelector?.(".sps-progress__title");
-      if (label) label.textContent = String(next || "");
+    const label = dialog.element?.querySelector?.(".sps-progress__title");
+    const percentEl = dialog.element?.querySelector?.(".sps-progress__percent");
+    const detailEl = dialog.element?.querySelector?.(".sps-progress__detail");
+    const bar = dialog.element?.querySelector?.(".sps-progress__bar-inner");
+    let currentText = rawMessage;
+    const setIndeterminate = () => {
+      if (!bar) return;
+      bar.style.animation = "";
+      bar.style.width = "";
+    };
+    const setDeterminate = (value) => {
+      if (!bar) return 0;
+      const clamped = Math.max(0, Math.min(100, value));
+      bar.style.animation = "none";
+      bar.style.width = `${clamped}%`;
+      return clamped;
+    };
+    const update = (next, percent = null, detail = "") => {
+      let text = next;
+      let pct = percent;
+      let extra = detail;
+      if (next && typeof next === "object") {
+        text = next.text;
+        pct = next.percent;
+        extra = next.detail;
+      }
+      if (typeof text === "string") {
+        currentText = text;
+      } else if (text == null) {
+        text = currentText;
+      } else {
+        currentText = String(text);
+        text = currentText;
+      }
+      const extraText = extra ? String(extra) : "";
+      const hasPercent = pct !== null && pct !== undefined && pct !== "";
+      const numeric = hasPercent ? Number(pct) : NaN;
+      if (label) label.textContent = String(text || "");
+      if (detailEl) {
+        if (extraText) {
+          detailEl.textContent = extraText;
+          detailEl.style.display = "";
+        } else {
+          detailEl.textContent = "";
+          detailEl.style.display = "none";
+        }
+      }
+      if (Number.isFinite(numeric)) {
+        const clamped = setDeterminate(numeric);
+        if (percentEl) {
+          percentEl.textContent = `${Math.round(clamped)}%`;
+          percentEl.style.display = "";
+        }
+      } else {
+        setIndeterminate();
+        if (percentEl) {
+          percentEl.textContent = "";
+          percentEl.style.display = "none";
+        }
+      }
     };
     const close = () => {
       try {
@@ -2140,6 +2235,93 @@ class SiYuanSharePlugin extends Plugin {
     }
   }
 
+  formatUploadDetail(uploaded, total) {
+    return this.t("siyuanShare.progress.uploadedBytes", {
+      current: formatBytes(uploaded),
+      total: formatBytes(total),
+    });
+  }
+
+  async uploadAssetsChunked(shareId, entries, controller, progress, totalBytes = 0) {
+    const t = this.t.bind(this);
+    if (!shareId) {
+      throw new Error(t("siyuanShare.error.remoteRequestFailed", {status: "missing share id"}));
+    }
+    if (!Array.isArray(entries) || entries.length === 0) return;
+    const total = entries.length;
+    const baseLabel = t("siyuanShare.progress.uploadingContent");
+    const tracker =
+      Number.isFinite(totalBytes) && totalBytes > 0
+        ? {totalBytes, uploadedBytes: 0, label: baseLabel}
+        : null;
+    for (let index = 0; index < total; index += 1) {
+      const entry = entries[index] || {};
+      const asset = entry.asset || entry;
+      const docId = entry.docId || "";
+      const suffix = total > 1 ? ` (${index + 1}/${total})` : "";
+      const label = baseLabel + suffix;
+      if (tracker) {
+        if (tracker.uploadedBytes === 0 && index === 0) {
+          progress?.update?.({
+            text: label,
+            percent: 0,
+            detail: this.formatUploadDetail(0, tracker.totalBytes),
+          });
+        }
+      } else {
+        progress?.update?.(label);
+      }
+      await this.uploadAssetInChunks(shareId, asset, docId, controller, progress, tracker, label);
+    }
+    if (tracker) {
+      progress?.update?.({
+        text: baseLabel,
+        percent: 100,
+        detail: this.formatUploadDetail(tracker.totalBytes, tracker.totalBytes),
+      });
+    }
+  }
+
+  async uploadAssetInChunks(shareId, asset, docId, controller, progress, tracker, label) {
+    const t = this.t.bind(this);
+    const blob = asset?.blob;
+    const assetPath = asset?.path;
+    if (!blob || !assetPath) return;
+    const size = Number(blob.size) || 0;
+    const chunkSize = ASSET_CHUNK_SIZE;
+    const totalChunks = Math.max(1, Math.ceil(size / chunkSize));
+    for (let index = 0; index < totalChunks; index += 1) {
+      throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+      const start = index * chunkSize;
+      const end = Math.min(size, start + chunkSize);
+      const chunk = blob.slice(start, end);
+      const form = new FormData();
+      form.append("shareId", String(shareId));
+      form.append("assetPath", assetPath);
+      if (docId) form.append("assetDocId", String(docId));
+      form.append("chunkIndex", String(index));
+      form.append("totalChunks", String(totalChunks));
+      form.append("totalSize", String(size));
+      form.append("chunk", chunk, assetPath);
+      await this.remoteRequest(REMOTE_API.shareAssetChunk, {
+        method: "POST",
+        body: form,
+        isForm: true,
+        controller,
+        progress,
+      });
+      if (tracker && tracker.totalBytes > 0) {
+        tracker.uploadedBytes += end - start;
+        const percent = (tracker.uploadedBytes / tracker.totalBytes) * 100;
+        progress?.update?.({
+          text: label || tracker.label,
+          percent,
+          detail: this.formatUploadDetail(tracker.uploadedBytes, tracker.totalBytes),
+        });
+      }
+    }
+  }
+
 
   async shareDoc(
     docId,
@@ -2194,23 +2376,39 @@ class SiYuanSharePlugin extends Plugin {
       } else if (Number.isFinite(expiresAt) && expiresAt > 0) {
         payload.expiresAt = expiresAt;
       }
-      const form = new FormData();
-      form.append("metadata", JSON.stringify(payload));
+      const seenAssets = new Set();
+      const assetEntries = [];
+      const assetManifest = [];
       for (const asset of assets) {
-        form.append("assets[]", asset.blob, asset.path);
-        form.append("assetPaths[]", asset.path);
+        const assetPath = asset?.path || "";
+        if (!assetPath || seenAssets.has(assetPath)) continue;
+        seenAssets.add(assetPath);
+        assetEntries.push({asset, docId});
+        assetManifest.push({
+          path: assetPath,
+          size: Number(asset?.blob?.size) || 0,
+          docId,
+        });
       }
       progress.update(t("siyuanShare.progress.uploadingContent"));
       let requestError = null;
       try {
-        await this.remoteRequest(REMOTE_API.shareDoc, {
+        const init = await this.remoteRequest(REMOTE_API.shareDocInit, {
           method: "POST",
-          body: form,
-          isForm: true,
+          body: {metadata: payload, assets: assetManifest},
           progressText: t("siyuanShare.progress.uploadingContent"),
           controller,
           progress,
         });
+        const shareId = init?.shareId;
+        if (!shareId) {
+          throw new Error(t("siyuanShare.error.remoteRequestFailed", {status: "missing share id"}));
+        }
+        const totalBytes = assetEntries.reduce(
+          (sum, entry) => sum + (Number(entry.asset?.blob?.size) || 0),
+          0,
+        );
+        await this.uploadAssetsChunked(shareId, assetEntries, controller, progress, totalBytes);
       } catch (err) {
         requestError = err;
       }
@@ -2322,24 +2520,31 @@ class SiYuanSharePlugin extends Plugin {
       } else if (Number.isFinite(expiresAt) && expiresAt > 0) {
         payload.expiresAt = expiresAt;
       }
-      const form = new FormData();
-      form.append("metadata", JSON.stringify(payload));
-      for (const {asset, docId} of assetMap.values()) {
-        form.append("assets[]", asset.blob, asset.path);
-        form.append("assetPaths[]", asset.path);
-        form.append("assetDocIds[]", docId);
-      }
+      const assetEntries = Array.from(assetMap.values());
+      const assetManifest = assetEntries.map(({asset, docId}) => ({
+        path: asset.path,
+        size: Number(asset?.blob?.size) || 0,
+        docId,
+      }));
       progress.update(t("siyuanShare.progress.uploadingContent"));
       let requestError = null;
       try {
-        await this.remoteRequest(REMOTE_API.shareNotebook, {
+        const init = await this.remoteRequest(REMOTE_API.shareNotebookInit, {
           method: "POST",
-          body: form,
-          isForm: true,
+          body: {metadata: payload, assets: assetManifest},
           progressText: t("siyuanShare.progress.uploadingContent"),
           controller,
           progress,
         });
+        const shareId = init?.shareId;
+        if (!shareId) {
+          throw new Error(t("siyuanShare.error.remoteRequestFailed", {status: "missing share id"}));
+        }
+        const totalBytes = assetEntries.reduce(
+          (sum, entry) => sum + (Number(entry.asset?.blob?.size) || 0),
+          0,
+        );
+        await this.uploadAssetsChunked(shareId, assetEntries, controller, progress, totalBytes);
       } catch (err) {
         requestError = err;
       }

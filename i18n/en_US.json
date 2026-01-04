@@ -113,6 +113,7 @@
   "siyuanShare.progress.preparingNotebook": "Preparing notebook content...",
   "siyuanShare.progress.requesting": "Processing request...",
   "siyuanShare.progress.syncingShareList": "Syncing share list...",
+  "siyuanShare.progress.uploadedBytes": "Uploaded {current} / {total}",
   "siyuanShare.progress.uploadingContent": "Uploading share content...",
   "siyuanShare.progress.verifyingSite": "Verifying site...",
   "siyuanShare.section.accessSettings": "Access settings",

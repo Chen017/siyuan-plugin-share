@@ -113,6 +113,7 @@
   "siyuanShare.progress.preparingNotebook": "正在准备笔记本内容...",
   "siyuanShare.progress.requesting": "请求处理中...",
   "siyuanShare.progress.syncingShareList": "正在同步分享列表...",
+  "siyuanShare.progress.uploadedBytes": "已上传 {current} / {total}",
   "siyuanShare.progress.uploadingContent": "正在上传分享内容...",
   "siyuanShare.progress.verifyingSite": "正在验证站点连接...",
   "siyuanShare.section.accessSettings": "访问设置",

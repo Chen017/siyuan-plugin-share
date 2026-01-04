@@ -1,4 +1,4 @@
-﻿# 思源分享（Siyuan Share）
+# 🔗思源分享（Siyuan Share）
 
 这是一款免费的思源笔记分享插件，支持将笔记本或文档生成分享链接，并支持设置访问密码及有效期。
 
@@ -31,7 +31,7 @@
 2.  **服务端说明**：
     - 目前 [share.b0x.top](https://share.b0x.top) 是作者提供的**公共**服务端网站，仅供功能演示与短期使用。
     - **清理策略**：受限于服务器带宽与存储成本，系统会对大文件执行定期清理策略。
-    - **私有化建议**：对于有长期持久化存储需求的用户，强烈建议参考 [服务端网站搭建教程](https://ccnwc9xa9692.feishu.cn/wiki/MQCtwMtQaifPuak4zl3cIMCqnLx) 进行私有化部署。
+    - **私有化建议**：对于有长期持久化存储需求的用户，强烈建议参考 **[服务端网站搭建教程](https://ccnwc9xa9692.feishu.cn/wiki/MQCtwMtQaifPuak4zl3cIMCqnLx)** 进行私有化部署。
 
 ## 📖 功能演示
 
@@ -79,5 +79,4 @@
 - **问题反馈**：[GitHub Issues](https://github.com/b8l8u8e8/siyuan-plugin-share/issues)
 - **开源协议**：[MIT License](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/LICENSE)
 - **更新日志**: [CHANGELOG.md](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/CHANGELOG.md)
-
 
