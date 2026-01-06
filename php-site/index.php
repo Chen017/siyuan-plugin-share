@@ -4997,19 +4997,27 @@ if ($path === '/dashboard') {
         $accessParams[':sid'] = $accessShareId;
     }
     $accessWhereSql = implode(' AND ', $accessWhere);
+    $todayStart = date('Y-m-d H:i:s', strtotime('today'));
+    $tomorrowStart = date('Y-m-d H:i:s', strtotime('tomorrow'));
+    $yesterdayStart = date('Y-m-d H:i:s', strtotime('yesterday'));
     $summarySql = 'SELECT
-        SUM(CASE WHEN date(created_at, "localtime") = date("now", "localtime") THEN 1 ELSE 0 END) AS pv_today,
-        SUM(CASE WHEN date(created_at, "localtime") = date("now", "localtime", "-1 day") THEN 1 ELSE 0 END) AS pv_yesterday,
+        SUM(CASE WHEN created_at >= :today_start AND created_at < :tomorrow_start THEN 1 ELSE 0 END) AS pv_today,
+        SUM(CASE WHEN created_at >= :yesterday_start AND created_at < :today_start THEN 1 ELSE 0 END) AS pv_yesterday,
         COUNT(*) AS pv_total,
-        COUNT(DISTINCT CASE WHEN date(created_at, "localtime") = date("now", "localtime") THEN visitor_id END) AS uv_today,
-        COUNT(DISTINCT CASE WHEN date(created_at, "localtime") = date("now", "localtime", "-1 day") THEN visitor_id END) AS uv_yesterday,
-        COUNT(DISTINCT visitor_id || ":" || date(created_at, "localtime")) AS uv_total,
-        COUNT(DISTINCT CASE WHEN date(created_at, "localtime") = date("now", "localtime") THEN ip END) AS ip_today,
-        COUNT(DISTINCT CASE WHEN date(created_at, "localtime") = date("now", "localtime", "-1 day") THEN ip END) AS ip_yesterday,
+        COUNT(DISTINCT CASE WHEN created_at >= :today_start AND created_at < :tomorrow_start THEN visitor_id END) AS uv_today,
+        COUNT(DISTINCT CASE WHEN created_at >= :yesterday_start AND created_at < :today_start THEN visitor_id END) AS uv_yesterday,
+        COUNT(DISTINCT visitor_id || ":" || substr(created_at, 1, 10)) AS uv_total,
+        COUNT(DISTINCT CASE WHEN created_at >= :today_start AND created_at < :tomorrow_start THEN ip END) AS ip_today,
+        COUNT(DISTINCT CASE WHEN created_at >= :yesterday_start AND created_at < :today_start THEN ip END) AS ip_yesterday,
         COUNT(DISTINCT ip) AS ip_total
         FROM share_access_logs WHERE ' . $accessWhereSql;
     $summaryStmt = $pdo->prepare($summarySql);
-    $summaryStmt->execute($accessParams);
+    $summaryParams = array_merge($accessParams, [
+        ':today_start' => $todayStart,
+        ':tomorrow_start' => $tomorrowStart,
+        ':yesterday_start' => $yesterdayStart,
+    ]);
+    $summaryStmt->execute($summaryParams);
     $summaryRow = $summaryStmt->fetch(PDO::FETCH_ASSOC) ?: [];
     $accessSummary = [
         'pv_today' => (int)($summaryRow['pv_today'] ?? 0),
