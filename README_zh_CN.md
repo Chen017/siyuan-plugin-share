@@ -49,7 +49,7 @@
 
 ### 4.访问统计
 
-
+<img width="1866" height="750" alt="访问统计" src="https://github.com/user-attachments/assets/b2690a03-6e97-4845-87be-1ab3e5406847" />
 
 ## ☕ 支持作者
 
@@ -83,4 +83,5 @@
 - **问题反馈**：[GitHub Issues](https://github.com/b8l8u8e8/siyuan-plugin-share/issues)
 - **开源协议**：[MIT License](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/LICENSE)
 - **更新日志**: [CHANGELOG.md](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/CHANGELOG.md)
+
 
