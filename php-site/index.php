@@ -180,6 +180,47 @@ function migrate(PDO $pdo): void {
         updated_at TEXT NOT NULL
     );');
 
+    $pdo->exec('CREATE TABLE IF NOT EXISTS user_settings (
+        user_id INTEGER NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(user_id, key),
+        FOREIGN KEY(user_id) REFERENCES users(id)
+    );');
+
+    $pdo->exec('CREATE TABLE IF NOT EXISTS share_access_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        share_id INTEGER NOT NULL,
+        doc_id TEXT,
+        doc_title TEXT,
+        visitor_id TEXT,
+        ip TEXT,
+        ip_country TEXT,
+        ip_country_code TEXT,
+        ip_region TEXT,
+        ip_city TEXT,
+        referer TEXT,
+        created_at TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL DEFAULT 0,
+        FOREIGN KEY(user_id) REFERENCES users(id),
+        FOREIGN KEY(share_id) REFERENCES shares(id)
+    );');
+
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_share_access_user_time ON share_access_logs (user_id, created_at)');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_share_access_share_time ON share_access_logs (share_id, created_at)');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_share_access_visitor_time ON share_access_logs (visitor_id, created_at)');
+
+    $pdo->exec('CREATE TABLE IF NOT EXISTS share_access_geo_cache (
+        ip TEXT PRIMARY KEY,
+        country TEXT,
+        country_code TEXT,
+        region TEXT,
+        city TEXT,
+        updated_at TEXT NOT NULL
+    );');
+
     $pdo->exec('CREATE TABLE IF NOT EXISTS recycled_share_ids (
         share_id INTEGER PRIMARY KEY,
         created_at TEXT NOT NULL
@@ -298,6 +339,8 @@ function seed_default_settings(PDO $pdo): void {
     ensure_setting($pdo, 'banned_words', '');
     ensure_setting($pdo, 'site_icp', '');
     ensure_setting($pdo, 'site_contact_email', '');
+    ensure_setting($pdo, 'access_stats_default_enabled', '1');
+    ensure_setting($pdo, 'access_stats_default_retention_days', '7');
 }
 
 function seed_default_admin(PDO $pdo): void {
@@ -381,6 +424,61 @@ function set_setting(string $key, string $value): void {
 function get_bool_setting(string $key, bool $default = false): bool {
     $value = get_setting($key, $default ? '1' : '0');
     return (int)$value === 1;
+}
+
+function get_user_setting(int $userId, string $key, ?string $default = null): ?string {
+    $pdo = db();
+    $stmt = $pdo->prepare('SELECT value FROM user_settings WHERE user_id = :uid AND key = :key LIMIT 1');
+    $stmt->execute([
+        ':uid' => $userId,
+        ':key' => $key,
+    ]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($row && array_key_exists('value', $row)) {
+        return $row['value'];
+    }
+    return $default;
+}
+
+function set_user_setting(int $userId, string $key, string $value): void {
+    $pdo = db();
+    $stmt = $pdo->prepare('INSERT INTO user_settings (user_id, key, value, updated_at)
+        VALUES (:uid, :key, :value, :updated_at)
+        ON CONFLICT(user_id, key) DO UPDATE SET value = :value_update, updated_at = :updated_at_update');
+    $stmt->execute([
+        ':uid' => $userId,
+        ':key' => $key,
+        ':value' => $value,
+        ':updated_at' => now(),
+        ':value_update' => $value,
+        ':updated_at_update' => now(),
+    ]);
+}
+
+function access_stats_default_enabled(): bool {
+    return get_bool_setting('access_stats_default_enabled', true);
+}
+
+function access_stats_default_retention_days(): int {
+    $raw = (int)get_setting('access_stats_default_retention_days', '7');
+    return max(1, min(365, $raw));
+}
+
+function access_stats_enabled(int $userId): bool {
+    $value = get_user_setting($userId, 'access_stats_enabled', null);
+    if ($value === null) {
+        return access_stats_default_enabled();
+    }
+    return (int)$value === 1;
+}
+
+function access_stats_retention_days(int $userId): int {
+    $value = get_user_setting($userId, 'access_stats_retention_days', null);
+    if ($value === null) {
+        return access_stats_default_retention_days();
+    }
+    $days = (int)$value;
+    return max(1, min(365, $days));
 }
 
 function allow_registration(): bool {
@@ -634,6 +732,17 @@ function build_dashboard_query_url(array $overrides = []): string {
     return base_path() . '/dashboard' . ($qs ? '?' . $qs : '') . '#shares';
 }
 
+function build_access_stats_query_url(array $overrides = []): string {
+    $query = array_merge($_GET, $overrides);
+    foreach ($query as $key => $value) {
+        if ($value === null || $value === '') {
+            unset($query[$key]);
+        }
+    }
+    $qs = http_build_query($query);
+    return base_path() . '/dashboard' . ($qs ? '?' . $qs : '') . '#access-stats';
+}
+
 function render_hidden_inputs(array $values): string {
     $html = '';
     foreach ($values as $key => $value) {
@@ -704,6 +813,7 @@ function render_page(string $title, string $content, ?array $user = null, string
         $navItems = [
             ['key' => 'dashboard', 'label' => '控制台', 'href' => $base . '/dashboard'],
             ['key' => 'shares', 'label' => '分享记录', 'href' => $base . '/dashboard#shares'],
+            ['key' => 'access-stats', 'label' => '访问统计', 'href' => $base . '/dashboard#access-stats'],
             ['key' => 'account', 'label' => '账号设置', 'href' => $base . '/account'],
         ];
         if (($user['role'] ?? '') === 'admin') {
@@ -907,10 +1017,720 @@ function recalculate_user_storage(int $userId): int {
     $pdo = db();
     $stmt = $pdo->prepare('SELECT COALESCE(SUM(size_bytes), 0) AS total FROM shares WHERE user_id = :uid AND deleted_at IS NULL');
     $stmt->execute([':uid' => $userId]);
-    $total = (int)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+    $shareTotal = (int)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+    $logStmt = $pdo->prepare('SELECT COALESCE(SUM(size_bytes), 0) AS total FROM share_access_logs WHERE user_id = :uid');
+    $logStmt->execute([':uid' => $userId]);
+    $logTotal = (int)($logStmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+    $total = $shareTotal + $logTotal;
     $update = $pdo->prepare('UPDATE users SET storage_used_bytes = :total WHERE id = :id');
     $update->execute([':total' => $total, ':id' => $userId]);
     return $total;
+}
+
+function adjust_user_storage(int $userId, int $delta): void {
+    if ($delta === 0) {
+        return;
+    }
+    $pdo = db();
+    $stmt = $pdo->prepare('UPDATE users SET storage_used_bytes = CASE
+        WHEN storage_used_bytes + :delta < 0 THEN 0
+        ELSE storage_used_bytes + :delta
+    END WHERE id = :id');
+    $stmt->execute([
+        ':delta' => $delta,
+        ':id' => $userId,
+    ]);
+}
+
+function get_user_by_id(int $userId): ?array {
+    $pdo = db();
+    $stmt = $pdo->prepare('SELECT * FROM users WHERE id = :id');
+    $stmt->execute([':id' => $userId]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $row ?: null;
+}
+
+function get_client_ip(): string {
+    $candidates = [
+        'HTTP_CF_CONNECTING_IP',
+        'HTTP_X_REAL_IP',
+        'HTTP_X_FORWARDED_FOR',
+        'REMOTE_ADDR',
+    ];
+    foreach ($candidates as $key) {
+        $value = trim((string)($_SERVER[$key] ?? ''));
+        if ($value === '') {
+            continue;
+        }
+        if ($key === 'HTTP_X_FORWARDED_FOR') {
+            $parts = array_values(array_filter(array_map('trim', explode(',', $value))));
+            $value = $parts[0] ?? '';
+        }
+        if ($value !== '') {
+            return $value;
+        }
+    }
+    return '';
+}
+
+function get_visitor_id(): string {
+    $existing = trim((string)($_COOKIE['sps_uv'] ?? ''));
+    if ($existing !== '') {
+        return $existing;
+    }
+    $id = bin2hex(random_bytes(12));
+    setcookie('sps_uv', $id, time() + 86400 * 365, '/', '', false, true);
+    $_COOKIE['sps_uv'] = $id;
+    return $id;
+}
+
+function http_get_json(string $url): ?array {
+    $context = stream_context_create([
+        'http' => [
+            'timeout' => 2,
+            'header' => "User-Agent: SiyuanShareAccessStats\r\n",
+        ],
+    ]);
+    $raw = @file_get_contents($url, false, $context);
+    if ($raw === false || $raw === '') {
+        return null;
+    }
+    $json = json_decode($raw, true);
+    if (is_array($json)) {
+        return $json;
+    }
+    $converted = null;
+    if (function_exists('mb_convert_encoding')) {
+        $converted = @mb_convert_encoding($raw, 'UTF-8', 'UTF-8,GBK,GB2312,GB18030');
+    }
+    if ($converted === null && function_exists('iconv')) {
+        $converted = @iconv('GBK', 'UTF-8//IGNORE', $raw);
+        if ($converted === false || $converted === '') {
+            $converted = @iconv('GB18030', 'UTF-8//IGNORE', $raw);
+        }
+    }
+    if ($converted) {
+        $json = json_decode($converted, true);
+        if (is_array($json)) {
+            return $json;
+        }
+    }
+    return null;
+}
+
+function country_code_zh_map(): array {
+    static $map = null;
+    if ($map !== null) {
+        return $map;
+    }
+    $map = [
+        'AF' => '阿富汗',
+        'AL' => '阿尔巴尼亚',
+        'DZ' => '阿尔及利亚',
+        'AS' => '美属萨摩亚',
+        'AD' => '安道尔',
+        'AO' => '安哥拉',
+        'AI' => '安圭拉',
+        'AQ' => '南极洲',
+        'AG' => '安提瓜和巴布达',
+        'AR' => '阿根廷',
+        'AM' => '亚美尼亚',
+        'AW' => '阿鲁巴',
+        'AU' => '澳大利亚',
+        'AT' => '奥地利',
+        'AZ' => '阿塞拜疆',
+        'BS' => '巴哈马',
+        'BH' => '巴林',
+        'BD' => '孟加拉国',
+        'BB' => '巴巴多斯',
+        'BY' => '白俄罗斯',
+        'BE' => '比利时',
+        'BZ' => '伯利兹',
+        'BJ' => '贝宁',
+        'BM' => '百慕大',
+        'BT' => '不丹',
+        'BO' => '玻利维亚',
+        'BA' => '波斯尼亚和黑塞哥维那',
+        'BW' => '博茨瓦纳',
+        'BR' => '巴西',
+        'IO' => '英属印度洋领地',
+        'BN' => '文莱',
+        'BG' => '保加利亚',
+        'BF' => '布基纳法索',
+        'BI' => '布隆迪',
+        'KH' => '柬埔寨',
+        'CM' => '喀麦隆',
+        'CA' => '加拿大',
+        'CV' => '佛得角',
+        'KY' => '开曼群岛',
+        'CF' => '中非共和国',
+        'TD' => '乍得',
+        'CL' => '智利',
+        'CN' => '中国',
+        'CX' => '圣诞岛',
+        'CC' => '科科斯（基林）群岛',
+        'CO' => '哥伦比亚',
+        'KM' => '科摩罗',
+        'CG' => '刚果（布）',
+        'CD' => '刚果（金）',
+        'CK' => '库克群岛',
+        'CR' => '哥斯达黎加',
+        'CI' => '科特迪瓦',
+        'HR' => '克罗地亚',
+        'CU' => '古巴',
+        'CY' => '塞浦路斯',
+        'CZ' => '捷克',
+        'DK' => '丹麦',
+        'DJ' => '吉布提',
+        'DM' => '多米尼克',
+        'DO' => '多米尼加共和国',
+        'EC' => '厄瓜多尔',
+        'EG' => '埃及',
+        'SV' => '萨尔瓦多',
+        'GQ' => '赤道几内亚',
+        'ER' => '厄立特里亚',
+        'EE' => '爱沙尼亚',
+        'SZ' => '斯威士兰',
+        'ET' => '埃塞俄比亚',
+        'FK' => '福克兰群岛',
+        'FO' => '法罗群岛',
+        'FJ' => '斐济',
+        'FI' => '芬兰',
+        'FR' => '法国',
+        'GF' => '法属圭亚那',
+        'PF' => '法属波利尼西亚',
+        'TF' => '法属南部领地',
+        'GA' => '加蓬',
+        'GM' => '冈比亚',
+        'GE' => '格鲁吉亚',
+        'DE' => '德国',
+        'GH' => '加纳',
+        'GI' => '直布罗陀',
+        'GR' => '希腊',
+        'GL' => '格陵兰',
+        'GD' => '格林纳达',
+        'GP' => '瓜德罗普',
+        'GU' => '关岛',
+        'GT' => '危地马拉',
+        'GG' => '根西',
+        'GN' => '几内亚',
+        'GW' => '几内亚比绍',
+        'GY' => '圭亚那',
+        'HT' => '海地',
+        'HM' => '赫德岛和麦克唐纳群岛',
+        'HN' => '洪都拉斯',
+        'HK' => '中国香港',
+        'HU' => '匈牙利',
+        'IS' => '冰岛',
+        'IN' => '印度',
+        'ID' => '印度尼西亚',
+        'IR' => '伊朗',
+        'IQ' => '伊拉克',
+        'IE' => '爱尔兰',
+        'IM' => '马恩岛',
+        'IL' => '以色列',
+        'IT' => '意大利',
+        'JM' => '牙买加',
+        'JP' => '日本',
+        'JE' => '泽西',
+        'JO' => '约旦',
+        'KZ' => '哈萨克斯坦',
+        'KE' => '肯尼亚',
+        'KI' => '基里巴斯',
+        'KP' => '朝鲜',
+        'KR' => '韩国',
+        'KW' => '科威特',
+        'KG' => '吉尔吉斯斯坦',
+        'LA' => '老挝',
+        'LV' => '拉脱维亚',
+        'LB' => '黎巴嫩',
+        'LS' => '莱索托',
+        'LR' => '利比里亚',
+        'LY' => '利比亚',
+        'LI' => '列支敦士登',
+        'LT' => '立陶宛',
+        'LU' => '卢森堡',
+        'MO' => '中国澳门',
+        'MK' => '北马其顿',
+        'MG' => '马达加斯加',
+        'MW' => '马拉维',
+        'MY' => '马来西亚',
+        'MV' => '马尔代夫',
+        'ML' => '马里',
+        'MT' => '马耳他',
+        'MH' => '马绍尔群岛',
+        'MQ' => '马提尼克',
+        'MR' => '毛里塔尼亚',
+        'MU' => '毛里求斯',
+        'YT' => '马约特',
+        'MX' => '墨西哥',
+        'FM' => '密克罗尼西亚',
+        'MD' => '摩尔多瓦',
+        'MC' => '摩纳哥',
+        'MN' => '蒙古',
+        'ME' => '黑山',
+        'MS' => '蒙特塞拉特',
+        'MA' => '摩洛哥',
+        'MZ' => '莫桑比克',
+        'MM' => '缅甸',
+        'NA' => '纳米比亚',
+        'NR' => '瑙鲁',
+        'NP' => '尼泊尔',
+        'NL' => '荷兰',
+        'NC' => '新喀里多尼亚',
+        'NZ' => '新西兰',
+        'NI' => '尼加拉瓜',
+        'NE' => '尼日尔',
+        'NG' => '尼日利亚',
+        'NU' => '纽埃',
+        'NF' => '诺福克岛',
+        'MP' => '北马里亚纳群岛',
+        'NO' => '挪威',
+        'OM' => '阿曼',
+        'PK' => '巴基斯坦',
+        'PW' => '帕劳',
+        'PS' => '巴勒斯坦',
+        'PA' => '巴拿马',
+        'PG' => '巴布亚新几内亚',
+        'PY' => '巴拉圭',
+        'PE' => '秘鲁',
+        'PH' => '菲律宾',
+        'PN' => '皮特凯恩群岛',
+        'PL' => '波兰',
+        'PT' => '葡萄牙',
+        'PR' => '波多黎各',
+        'QA' => '卡塔尔',
+        'RE' => '留尼汪',
+        'RO' => '罗马尼亚',
+        'RU' => '俄罗斯',
+        'RW' => '卢旺达',
+        'BL' => '圣巴泰勒米',
+        'SH' => '圣赫勒拿',
+        'KN' => '圣基茨和尼维斯',
+        'LC' => '圣卢西亚',
+        'MF' => '法属圣马丁',
+        'PM' => '圣皮埃尔和密克隆',
+        'VC' => '圣文森特和格林纳丁斯',
+        'WS' => '萨摩亚',
+        'SM' => '圣马力诺',
+        'ST' => '圣多美和普林西比',
+        'SA' => '沙特阿拉伯',
+        'SN' => '塞内加尔',
+        'RS' => '塞尔维亚',
+        'SC' => '塞舌尔',
+        'SL' => '塞拉利昂',
+        'SG' => '新加坡',
+        'SX' => '荷属圣马丁',
+        'SK' => '斯洛伐克',
+        'SI' => '斯洛文尼亚',
+        'SB' => '所罗门群岛',
+        'SO' => '索马里',
+        'ZA' => '南非',
+        'GS' => '南乔治亚和南桑威奇群岛',
+        'SS' => '南苏丹',
+        'ES' => '西班牙',
+        'LK' => '斯里兰卡',
+        'SD' => '苏丹',
+        'SR' => '苏里南',
+        'SJ' => '斯瓦尔巴和扬马延',
+        'SE' => '瑞典',
+        'CH' => '瑞士',
+        'SY' => '叙利亚',
+        'TW' => '中国台湾',
+        'TJ' => '塔吉克斯坦',
+        'TZ' => '坦桑尼亚',
+        'TH' => '泰国',
+        'TL' => '东帝汶',
+        'TG' => '多哥',
+        'TK' => '托克劳',
+        'TO' => '汤加',
+        'TT' => '特立尼达和多巴哥',
+        'TN' => '突尼斯',
+        'TR' => '土耳其',
+        'TM' => '土库曼斯坦',
+        'TC' => '特克斯和凯科斯群岛',
+        'TV' => '图瓦卢',
+        'UG' => '乌干达',
+        'UA' => '乌克兰',
+        'AE' => '阿联酋',
+        'GB' => '英国',
+        'US' => '美国',
+        'UM' => '美国本土外小岛屿',
+        'UY' => '乌拉圭',
+        'UZ' => '乌兹别克斯坦',
+        'VU' => '瓦努阿图',
+        'VA' => '梵蒂冈',
+        'VE' => '委内瑞拉',
+        'VN' => '越南',
+        'VG' => '英属维尔京群岛',
+        'VI' => '美属维尔京群岛',
+        'WF' => '瓦利斯和富图纳',
+        'EH' => '西撒哈拉',
+        'YE' => '也门',
+        'ZM' => '赞比亚',
+        'ZW' => '津巴布韦',
+        'AX' => '奥兰群岛',
+        'BQ' => '荷兰加勒比区',
+        'CW' => '库拉索',
+        'XK' => '科索沃',
+    ];
+    return $map;
+}
+
+function has_non_ascii(string $value): bool {
+    return (bool)preg_match('/[\x80-\xFF]/', $value);
+}
+
+function normalize_country_name(string $country, string $countryCode): string {
+    $code = strtoupper(trim($countryCode));
+    if ($code !== '') {
+        $map = country_code_zh_map();
+        if (isset($map[$code])) {
+            return $map[$code];
+        }
+    }
+    return $country;
+}
+
+function normalize_us_region(string $region): string {
+    $raw = trim($region);
+    if ($raw === '') {
+        return '';
+    }
+    $abbrMap = [
+        'AL' => '阿拉巴马州',
+        'AK' => '阿拉斯加州',
+        'AZ' => '亚利桑那州',
+        'AR' => '阿肯色州',
+        'CA' => '加利福尼亚州',
+        'CO' => '科罗拉多州',
+        'CT' => '康涅狄格州',
+        'DE' => '特拉华州',
+        'FL' => '佛罗里达州',
+        'GA' => '佐治亚州',
+        'HI' => '夏威夷州',
+        'ID' => '爱达荷州',
+        'IL' => '伊利诺伊州',
+        'IN' => '印第安纳州',
+        'IA' => '爱荷华州',
+        'KS' => '堪萨斯州',
+        'KY' => '肯塔基州',
+        'LA' => '路易斯安那州',
+        'ME' => '缅因州',
+        'MD' => '马里兰州',
+        'MA' => '马萨诸塞州',
+        'MI' => '密歇根州',
+        'MN' => '明尼苏达州',
+        'MS' => '密西西比州',
+        'MO' => '密苏里州',
+        'MT' => '蒙大拿州',
+        'NE' => '内布拉斯加州',
+        'NV' => '内华达州',
+        'NH' => '新罕布什尔州',
+        'NJ' => '新泽西州',
+        'NM' => '新墨西哥州',
+        'NY' => '纽约州',
+        'NC' => '北卡罗来纳州',
+        'ND' => '北达科他州',
+        'OH' => '俄亥俄州',
+        'OK' => '俄克拉何马州',
+        'OR' => '俄勒冈州',
+        'PA' => '宾夕法尼亚州',
+        'RI' => '罗得岛州',
+        'SC' => '南卡罗来纳州',
+        'SD' => '南达科他州',
+        'TN' => '田纳西州',
+        'TX' => '德克萨斯州',
+        'UT' => '犹他州',
+        'VT' => '佛蒙特州',
+        'VA' => '弗吉尼亚州',
+        'WA' => '华盛顿州',
+        'WV' => '西弗吉尼亚州',
+        'WI' => '威斯康星州',
+        'WY' => '怀俄明州',
+        'DC' => '哥伦比亚特区',
+    ];
+    $upper = strtoupper($raw);
+    if (isset($abbrMap[$upper])) {
+        return $abbrMap[$upper];
+    }
+    $nameMap = [
+        'alabama' => '阿拉巴马州',
+        'alaska' => '阿拉斯加州',
+        'arizona' => '亚利桑那州',
+        'arkansas' => '阿肯色州',
+        'california' => '加利福尼亚州',
+        'colorado' => '科罗拉多州',
+        'connecticut' => '康涅狄格州',
+        'delaware' => '特拉华州',
+        'florida' => '佛罗里达州',
+        'georgia' => '佐治亚州',
+        'hawaii' => '夏威夷州',
+        'idaho' => '爱达荷州',
+        'illinois' => '伊利诺伊州',
+        'indiana' => '印第安纳州',
+        'iowa' => '爱荷华州',
+        'kansas' => '堪萨斯州',
+        'kentucky' => '肯塔基州',
+        'louisiana' => '路易斯安那州',
+        'maine' => '缅因州',
+        'maryland' => '马里兰州',
+        'massachusetts' => '马萨诸塞州',
+        'michigan' => '密歇根州',
+        'minnesota' => '明尼苏达州',
+        'mississippi' => '密西西比州',
+        'missouri' => '密苏里州',
+        'montana' => '蒙大拿州',
+        'nebraska' => '内布拉斯加州',
+        'nevada' => '内华达州',
+        'new hampshire' => '新罕布什尔州',
+        'new jersey' => '新泽西州',
+        'new mexico' => '新墨西哥州',
+        'new york' => '纽约州',
+        'north carolina' => '北卡罗来纳州',
+        'north dakota' => '北达科他州',
+        'ohio' => '俄亥俄州',
+        'oklahoma' => '俄克拉何马州',
+        'oregon' => '俄勒冈州',
+        'pennsylvania' => '宾夕法尼亚州',
+        'rhode island' => '罗得岛州',
+        'south carolina' => '南卡罗来纳州',
+        'south dakota' => '南达科他州',
+        'tennessee' => '田纳西州',
+        'texas' => '德克萨斯州',
+        'utah' => '犹他州',
+        'vermont' => '佛蒙特州',
+        'virginia' => '弗吉尼亚州',
+        'washington' => '华盛顿州',
+        'west virginia' => '西弗吉尼亚州',
+        'wisconsin' => '威斯康星州',
+        'wyoming' => '怀俄明州',
+        'district of columbia' => '哥伦比亚特区',
+        'washington, d.c.' => '哥伦比亚特区',
+    ];
+    $lower = strtolower($raw);
+    return $nameMap[$lower] ?? $region;
+}
+
+function normalize_ip_location(array $location): array {
+    $country = trim((string)($location['country'] ?? ''));
+    $countryCode = strtoupper(trim((string)($location['country_code'] ?? '')));
+    $region = trim((string)($location['region'] ?? ''));
+    $city = trim((string)($location['city'] ?? ''));
+    $country = normalize_country_name($country, $countryCode);
+    if ($countryCode === 'US') {
+        $region = normalize_us_region($region);
+    }
+    return [
+        'country' => $country,
+        'country_code' => $countryCode,
+        'region' => $region,
+        'city' => $city,
+    ];
+}
+
+function lookup_ip_location_cn(string $ip): array {
+    $data = http_get_json('http://whois.pconline.com.cn/ipJson.jsp?ip=' . urlencode($ip) . '&json=true');
+    if (!is_array($data)) {
+        return ['country' => '', 'country_code' => '', 'region' => '', 'city' => ''];
+    }
+    $pro = trim((string)($data['pro'] ?? ''));
+    $city = trim((string)($data['city'] ?? ''));
+    $addr = trim((string)($data['addr'] ?? ''));
+    $country = '';
+    $region = '';
+    $cityOut = '';
+    $countryCode = '';
+    if ($pro !== '' || $city !== '') {
+        $country = '中国';
+        $countryCode = 'CN';
+        $region = $pro;
+        $cityOut = $city;
+    } elseif ($addr !== '') {
+        $country = preg_replace('/\s+/', ' ', $addr);
+        if (strpos($country, '中国') !== false) {
+            $countryCode = 'CN';
+        }
+    }
+    return [
+        'country' => $country,
+        'country_code' => $countryCode,
+        'region' => $region,
+        'city' => $cityOut,
+    ];
+}
+
+function lookup_ip_location(string $ip): array {
+    $ip = trim($ip);
+    if ($ip === '') {
+        return ['country' => '', 'country_code' => '', 'region' => '', 'city' => ''];
+    }
+    $pdo = db();
+    $stmt = $pdo->prepare('SELECT * FROM share_access_geo_cache WHERE ip = :ip LIMIT 1');
+    $stmt->execute([':ip' => $ip]);
+    $cached = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($cached) {
+        $updatedAt = strtotime((string)($cached['updated_at'] ?? ''));
+        if ($updatedAt && (time() - $updatedAt) < 86400 * 30) {
+            $cachedLocation = [
+                'country' => (string)($cached['country'] ?? ''),
+                'country_code' => (string)($cached['country_code'] ?? ''),
+                'region' => (string)($cached['region'] ?? ''),
+                'city' => (string)($cached['city'] ?? ''),
+            ];
+            $text = ($cachedLocation['country'] ?? '') . ($cachedLocation['region'] ?? '') . ($cachedLocation['city'] ?? '');
+            if ($text === '' || has_non_ascii($text)) {
+                return normalize_ip_location($cachedLocation);
+            }
+        }
+    }
+    $location = lookup_ip_location_cn($ip);
+    if (trim((string)($location['country'] ?? '')) === '') {
+        $primary = http_get_json('http://ip-api.com/json/' . urlencode($ip) . '?fields=status,country,countryCode,regionName,city&lang=zh-CN');
+        if (is_array($primary) && ($primary['status'] ?? '') === 'success') {
+            $location = [
+                'country' => (string)($primary['country'] ?? ''),
+                'country_code' => (string)($primary['countryCode'] ?? ''),
+                'region' => (string)($primary['regionName'] ?? ''),
+                'city' => (string)($primary['city'] ?? ''),
+            ];
+        }
+    }
+    $stmt = $pdo->prepare('INSERT OR REPLACE INTO share_access_geo_cache (ip, country, country_code, region, city, updated_at)
+        VALUES (:ip, :country, :code, :region, :city, :updated_at)');
+    $location = normalize_ip_location($location);
+    $stmt->execute([
+        ':ip' => $ip,
+        ':country' => $location['country'],
+        ':code' => $location['country_code'],
+        ':region' => $location['region'],
+        ':city' => $location['city'],
+        ':updated_at' => now(),
+    ]);
+    return $location;
+}
+
+function format_ip_location(array $location): string {
+    $location = normalize_ip_location($location);
+    $parts = [];
+    foreach (['country', 'region', 'city'] as $key) {
+        $val = trim((string)($location[$key] ?? ''));
+        if ($val !== '') {
+            $parts[] = $val;
+        }
+    }
+    return implode(' / ', $parts);
+}
+
+function calculate_access_log_size(array $fields): int {
+    $total = 32;
+    foreach ($fields as $value) {
+        $total += strlen((string)$value);
+    }
+    return $total;
+}
+
+function purge_share_access_logs(int $shareId): ?int {
+    if ($shareId <= 0) {
+        return null;
+    }
+    $pdo = db();
+    $stmt = $pdo->prepare('SELECT user_id, COALESCE(SUM(size_bytes), 0) AS total FROM share_access_logs WHERE share_id = :sid');
+    $stmt->execute([':sid' => $shareId]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    $userId = $row ? (int)$row['user_id'] : null;
+    $total = $row ? (int)$row['total'] : 0;
+    $pdo->prepare('DELETE FROM share_access_logs WHERE share_id = :sid')->execute([':sid' => $shareId]);
+    if ($userId) {
+        adjust_user_storage($userId, -$total);
+    }
+    return $userId;
+}
+
+function purge_user_access_logs(int $userId): int {
+    $pdo = db();
+    $stmt = $pdo->prepare('SELECT COALESCE(SUM(size_bytes), 0) AS total FROM share_access_logs WHERE user_id = :uid');
+    $stmt->execute([':uid' => $userId]);
+    $total = (int)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+    $pdo->prepare('DELETE FROM share_access_logs WHERE user_id = :uid')->execute([':uid' => $userId]);
+    adjust_user_storage($userId, -$total);
+    return $total;
+}
+
+function cleanup_user_access_logs(int $userId, int $days): void {
+    $days = max(1, $days);
+    $cutoff = date('Y-m-d H:i:s', time() - ($days * 86400));
+    $pdo = db();
+    $stmt = $pdo->prepare('SELECT COALESCE(SUM(size_bytes), 0) AS total FROM share_access_logs WHERE user_id = :uid AND created_at < :cutoff');
+    $stmt->execute([
+        ':uid' => $userId,
+        ':cutoff' => $cutoff,
+    ]);
+    $total = (int)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+    if ($total <= 0) {
+        return;
+    }
+    $pdo->prepare('DELETE FROM share_access_logs WHERE user_id = :uid AND created_at < :cutoff')->execute([
+        ':uid' => $userId,
+        ':cutoff' => $cutoff,
+    ]);
+    adjust_user_storage($userId, -$total);
+}
+
+function record_share_access(array $share, ?string $docId = null, ?string $docTitle = null): void {
+    $userId = (int)($share['user_id'] ?? 0);
+    if ($userId <= 0) {
+        return;
+    }
+    if (!access_stats_enabled($userId)) {
+        return;
+    }
+    $visitorId = get_visitor_id();
+    $ip = get_client_ip();
+    $referer = trim((string)($_SERVER['HTTP_REFERER'] ?? ''));
+    $location = lookup_ip_location($ip);
+    $size = calculate_access_log_size([
+        $docId,
+        $docTitle,
+        $visitorId,
+        $ip,
+        $referer,
+        $location['country'] ?? '',
+        $location['region'] ?? '',
+        $location['city'] ?? '',
+    ]);
+    $user = get_user_by_id($userId);
+    if (!$user) {
+        return;
+    }
+    $limit = get_user_limit_bytes($user);
+    $used = (int)($user['storage_used_bytes'] ?? 0);
+    if ($limit > 0 && ($used + $size) > $limit) {
+        set_user_setting($userId, 'access_stats_enabled', '0');
+        purge_user_access_logs($userId);
+        return;
+    }
+    $pdo = db();
+    $stmt = $pdo->prepare('INSERT INTO share_access_logs
+        (user_id, share_id, doc_id, doc_title, visitor_id, ip, ip_country, ip_country_code, ip_region, ip_city, referer, created_at, size_bytes)
+        VALUES (:uid, :sid, :doc_id, :doc_title, :visitor_id, :ip, :country, :country_code, :region, :city, :referer, :created_at, :size_bytes)');
+    $stmt->execute([
+        ':uid' => $userId,
+        ':sid' => (int)($share['id'] ?? 0),
+        ':doc_id' => $docId,
+        ':doc_title' => $docTitle,
+        ':visitor_id' => $visitorId,
+        ':ip' => $ip,
+        ':country' => (string)($location['country'] ?? ''),
+        ':country_code' => (string)($location['country_code'] ?? ''),
+        ':region' => (string)($location['region'] ?? ''),
+        ':city' => (string)($location['city'] ?? ''),
+        ':referer' => $referer,
+        ':created_at' => now(),
+        ':size_bytes' => $size,
+    ]);
+    adjust_user_storage($userId, $size);
+    cleanup_user_access_logs($userId, access_stats_retention_days($userId));
 }
 
 function build_from_header(string $from, string $name): string {
@@ -1599,6 +2419,7 @@ function hard_delete_share(int $shareId): ?int {
     $userId = (int)$row['user_id'];
     purge_share_assets($shareId);
     purge_share_chunks($shareId);
+    purge_share_access_logs($shareId);
     $pdo->prepare('DELETE FROM share_docs WHERE share_id = :share_id')->execute([':share_id' => $shareId]);
     $pdo->prepare('DELETE FROM shares WHERE id = :id')->execute([':id' => $shareId]);
     recycle_share_id($shareId);
@@ -1842,8 +2663,59 @@ function handle_api(string $path): void {
             ':id' => $shareId,
             ':uid' => $user['id'],
         ]);
+        purge_share_access_logs($shareId);
         recalculate_user_storage((int)$user['id']);
         api_response(200, ['ok' => true]);
+    }
+
+    if ($path === '/api/v1/shares/access/update' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        $payload = parse_json_body();
+        $shareId = (int)($payload['shareId'] ?? 0);
+        if (!$shareId) {
+            api_response(400, null, 'Missing share id');
+        }
+        $stmt = $pdo->prepare('SELECT * FROM shares WHERE id = :id AND user_id = :uid AND deleted_at IS NULL LIMIT 1');
+        $stmt->execute([
+            ':id' => $shareId,
+            ':uid' => $user['id'],
+        ]);
+        $share = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$share) {
+            api_response(404, null, 'Share not found');
+        }
+        $password = trim((string)($payload['password'] ?? ''));
+        $clearPassword = !empty($payload['clearPassword']);
+        $expiresAt = parse_expires_at($payload['expiresAt'] ?? null);
+        $clearExpires = !empty($payload['clearExpires']);
+
+        $passwordHash = $share['password_hash'] ?? null;
+        $expiresValue = isset($share['expires_at']) ? (int)$share['expires_at'] : null;
+        if ($clearPassword) {
+            $passwordHash = null;
+        } elseif ($password !== '') {
+            $passwordHash = password_hash($password, PASSWORD_DEFAULT);
+        }
+        if ($clearExpires) {
+            $expiresValue = null;
+        } elseif ($expiresAt !== null) {
+            $expiresValue = $expiresAt;
+        }
+
+        $stmt = $pdo->prepare('UPDATE shares SET password_hash = :password_hash, expires_at = :expires_at, updated_at = :updated_at WHERE id = :id AND user_id = :uid');
+        $stmt->execute([
+            ':password_hash' => $passwordHash,
+            ':expires_at' => $expiresValue,
+            ':updated_at' => now(),
+            ':id' => $shareId,
+            ':uid' => $user['id'],
+        ]);
+        api_response(200, ['share' => [
+            'id' => (int)$share['id'],
+            'slug' => $share['slug'],
+            'url' => share_url($share['slug']),
+            'hasPassword' => !empty($passwordHash),
+            'expiresAt' => $expiresValue ? ($expiresValue * 1000) : null,
+        ]]);
     }
 
     if ($path === '/api/v1/shares/doc/init' && $_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -3053,7 +3925,7 @@ function sort_doc_tree(array &$nodes): void {
     });
 }
 
-function render_doc_tree(array $nodes, string $slug, ?string $activeId = null, int $level = 0): string {
+function render_doc_tree(array $nodes, string $slug, ?string $activeId = null, int $level = 0, string $path = ''): string {
     if (empty($nodes)) {
         return '';
     }
@@ -3063,11 +3935,14 @@ function render_doc_tree(array $nodes, string $slug, ?string $activeId = null, i
         $hasChildren = !empty($node['children']);
         $isActive = $doc && $activeId && (string)$doc['doc_id'] === (string)$activeId;
         $shouldOpen = false;
+        $nodeLabel = $doc ? (string)($doc['doc_id'] ?? '') : (string)($node['title'] ?? '');
+        $pathKey = trim($path . '/' . $nodeLabel, '/');
+        $nodeKey = $doc ? ('doc:' . $nodeLabel) : ('folder:' . $pathKey);
         $nodeClass = 'kb-tree-node';
         if ($hasChildren) {
             $nodeClass .= $shouldOpen ? ' is-open' : ' is-collapsed';
         }
-        $html .= '<li class="' . $nodeClass . '">';
+        $html .= '<li class="' . $nodeClass . '" data-tree-key="' . htmlspecialchars($nodeKey) . '">';
         $html .= '<div class="kb-tree-row">';
         if ($hasChildren) {
             $html .= '<button class="kb-tree-toggle" type="button" aria-expanded="' . ($shouldOpen ? 'true' : 'false') . '"></button>';
@@ -3085,7 +3960,7 @@ function render_doc_tree(array $nodes, string $slug, ?string $activeId = null, i
         }
         $html .= '</div>';
         if ($hasChildren) {
-            $html .= render_doc_tree($node['children'], $slug, $activeId, $level + 1);
+            $html .= render_doc_tree($node['children'], $slug, $activeId, $level + 1, $pathKey);
         }
         $html .= '</li>';
     }
@@ -3170,7 +4045,8 @@ function route_share(string $slug, ?string $docId = null): void {
         $markdown = rewrite_asset_links((string)$front['body'], $assetBasePath);
         $markdown = strip_duplicate_title_heading($markdown, $docTitleRaw);
         $shareMetaHtml = render_share_stats($share);
-        $sidebar = '<aside class="kb-sidebar" data-share-sidebar>';
+        record_share_access($share, (string)($doc['doc_id'] ?? ''), $docTitleRaw);
+        $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
         $sidebar .= '<div class="kb-side-tabs" data-share-tabs data-share-default="toc">';
         $sidebar .= '<button class="kb-side-tab is-active" type="button" data-share-tab="toc">目录</button>';
         $sidebar .= '</div>';
@@ -3194,7 +4070,7 @@ function route_share(string $slug, ?string $docId = null): void {
 
     if ($share['type'] === 'notebook') {
         $treeHtml = render_doc_tree(build_doc_tree($docs, $docId), $slug, $docId);
-        $sidebar = '<aside class="kb-sidebar" data-share-sidebar>';
+        $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
         $sidebar .= '<div class="kb-side-tabs" data-share-tabs data-share-default="tree">';
         $sidebar .= '<button class="kb-side-tab is-active" type="button" data-share-tab="tree">文档树</button>';
         $sidebar .= '<button class="kb-side-tab" type="button" data-share-tab="toc">目录</button>';
@@ -3227,6 +4103,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $markdown = rewrite_asset_links((string)$front['body'], $assetBasePath);
             $markdown = strip_duplicate_title_heading($markdown, $docTitleRaw);
             $shareMetaHtml = render_share_stats($share);
+            record_share_access($share, (string)($doc['doc_id'] ?? ''), $docTitleRaw);
             $crumbs = build_breadcrumbs((string)($doc['hpath'] ?? ''));
             if (!empty($crumbs)) {
                 array_pop($crumbs);
@@ -3255,6 +4132,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $content .= $sidebar;
             $content .= '<div class="kb-main"><div class="share-empty">请先在文档树里面先打开一个文档</div></div>';
             $content .= '</div>';
+            record_share_access($share, null, $shareTitleRaw);
             render_page($shareTitleRaw, $content, null, '', ['layout' => 'share']);
         }
 
@@ -4026,6 +4904,7 @@ if ($path === '/dashboard') {
     $limitBytes = get_user_limit_bytes($user);
     $limitLabel = $limitBytes > 0 ? format_bytes($limitBytes) : '不限';
     $limitSource = ((int)$user['storage_limit_bytes'] > 0) ? '自定义' : '默认';
+    $storageFull = $limitBytes > 0 && $usedBytes >= $limitBytes;
     $shareSearch = trim((string)($_GET['share_search'] ?? ''));
     $sharePage = max(1, (int)($_GET['share_page'] ?? 1));
     $shareSize = normalize_page_size($_GET['share_size'] ?? 10);
@@ -4065,6 +4944,114 @@ if ($path === '/dashboard') {
     $shares = $stmt->fetchAll(PDO::FETCH_ASSOC);
     $shareQuery = $_GET;
     unset($shareQuery['share_page'], $shareQuery['share_size'], $shareQuery['share_search'], $shareQuery['status']);
+    $accessShare = trim((string)($_GET['access_share'] ?? 'all'));
+    $accessPage = max(1, (int)($_GET['access_page'] ?? 1));
+    $accessSize = normalize_page_size($_GET['access_size'] ?? 10);
+    $accessSourcePage = max(1, (int)($_GET['access_source_page'] ?? 1));
+    $accessSourceSize = normalize_page_size($_GET['access_source_size'] ?? 10);
+    $accessShareId = 0;
+    if ($accessShare !== '' && $accessShare !== 'all') {
+        $accessShareId = (int)$accessShare;
+    }
+    if ($accessShareId > 0) {
+        $checkShare = $pdo->prepare('SELECT id FROM shares WHERE id = :id AND user_id = :uid LIMIT 1');
+        $checkShare->execute([':id' => $accessShareId, ':uid' => $user['id']]);
+        if (!$checkShare->fetchColumn()) {
+            $accessShareId = 0;
+        }
+    }
+    $accessEnabled = access_stats_enabled((int)$user['id']);
+    $accessRetention = access_stats_retention_days((int)$user['id']);
+    $accessShareOptionsStmt = $pdo->prepare('SELECT id, title, slug FROM shares WHERE user_id = :uid AND deleted_at IS NULL ORDER BY updated_at DESC');
+    $accessShareOptionsStmt->execute([':uid' => $user['id']]);
+    $accessShareOptions = $accessShareOptionsStmt->fetchAll(PDO::FETCH_ASSOC);
+    $accessWhere = ['share_access_logs.user_id = :uid'];
+    $accessParams = [':uid' => $user['id']];
+    if ($accessShareId > 0) {
+        $accessWhere[] = 'share_access_logs.share_id = :sid';
+        $accessParams[':sid'] = $accessShareId;
+    }
+    $accessWhereSql = implode(' AND ', $accessWhere);
+    $summarySql = 'SELECT
+        SUM(CASE WHEN date(created_at, "localtime") = date("now", "localtime") THEN 1 ELSE 0 END) AS pv_today,
+        SUM(CASE WHEN date(created_at, "localtime") = date("now", "localtime", "-1 day") THEN 1 ELSE 0 END) AS pv_yesterday,
+        COUNT(*) AS pv_total,
+        COUNT(DISTINCT CASE WHEN date(created_at, "localtime") = date("now", "localtime") THEN visitor_id END) AS uv_today,
+        COUNT(DISTINCT CASE WHEN date(created_at, "localtime") = date("now", "localtime", "-1 day") THEN visitor_id END) AS uv_yesterday,
+        COUNT(DISTINCT visitor_id || ":" || date(created_at, "localtime")) AS uv_total,
+        COUNT(DISTINCT CASE WHEN date(created_at, "localtime") = date("now", "localtime") THEN ip END) AS ip_today,
+        COUNT(DISTINCT CASE WHEN date(created_at, "localtime") = date("now", "localtime", "-1 day") THEN ip END) AS ip_yesterday,
+        COUNT(DISTINCT ip) AS ip_total
+        FROM share_access_logs WHERE ' . $accessWhereSql;
+    $summaryStmt = $pdo->prepare($summarySql);
+    $summaryStmt->execute($accessParams);
+    $summaryRow = $summaryStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+    $accessSummary = [
+        'pv_today' => (int)($summaryRow['pv_today'] ?? 0),
+        'pv_yesterday' => (int)($summaryRow['pv_yesterday'] ?? 0),
+        'pv_total' => (int)($summaryRow['pv_total'] ?? 0),
+        'uv_today' => (int)($summaryRow['uv_today'] ?? 0),
+        'uv_yesterday' => (int)($summaryRow['uv_yesterday'] ?? 0),
+        'uv_total' => (int)($summaryRow['uv_total'] ?? 0),
+        'ip_today' => (int)($summaryRow['ip_today'] ?? 0),
+        'ip_yesterday' => (int)($summaryRow['ip_yesterday'] ?? 0),
+        'ip_total' => (int)($summaryRow['ip_total'] ?? 0),
+    ];
+    $sourceCountStmt = $pdo->prepare('SELECT COUNT(*) FROM (SELECT referer FROM share_access_logs WHERE ' . $accessWhereSql . ' AND referer != "" GROUP BY referer) AS t');
+    $sourceCountStmt->execute($accessParams);
+    $accessSourceTotal = (int)$sourceCountStmt->fetchColumn();
+    [$accessSourcePage, $accessSourceSize, $accessSourcePages, $accessSourceOffset] = paginate(
+        $accessSourceTotal,
+        $accessSourcePage,
+        $accessSourceSize
+    );
+    $sourceSql = 'SELECT referer, COUNT(*) AS total FROM share_access_logs WHERE ' . $accessWhereSql . ' AND referer != "" GROUP BY referer ORDER BY total DESC LIMIT :limit OFFSET :offset';
+    $sourceStmt = $pdo->prepare($sourceSql);
+    foreach ($accessParams as $key => $value) {
+        $sourceStmt->bindValue($key, $value);
+    }
+    $sourceStmt->bindValue(':limit', $accessSourceSize, PDO::PARAM_INT);
+    $sourceStmt->bindValue(':offset', $accessSourceOffset, PDO::PARAM_INT);
+    $sourceStmt->execute();
+    $accessSources = $sourceStmt->fetchAll(PDO::FETCH_ASSOC);
+    $regionCnStmt = $pdo->prepare('SELECT ip_region AS label, COUNT(*) AS total FROM share_access_logs WHERE ' . $accessWhereSql . ' AND ip_country_code = "CN" AND ip_region != "" GROUP BY ip_region ORDER BY total DESC LIMIT 12');
+    $regionCnStmt->execute($accessParams);
+    $accessRegionsCn = $regionCnStmt->fetchAll(PDO::FETCH_ASSOC);
+    $regionIntlStmt = $pdo->prepare('SELECT ip_country AS label, COUNT(*) AS total FROM share_access_logs WHERE ' . $accessWhereSql . ' AND (ip_country_code IS NULL OR ip_country_code != "CN") AND ip_country != "" GROUP BY ip_country ORDER BY total DESC LIMIT 12');
+    $regionIntlStmt->execute($accessParams);
+    $accessRegionsIntl = $regionIntlStmt->fetchAll(PDO::FETCH_ASSOC);
+    $accessCnMax = 0;
+    foreach ($accessRegionsCn as $row) {
+        $accessCnMax = max($accessCnMax, (int)($row['total'] ?? 0));
+    }
+    $accessIntlMax = 0;
+    foreach ($accessRegionsIntl as $row) {
+        $accessIntlMax = max($accessIntlMax, (int)($row['total'] ?? 0));
+    }
+    $accessCountStmt = $pdo->prepare('SELECT COUNT(*) FROM share_access_logs WHERE ' . $accessWhereSql);
+    $accessCountStmt->execute($accessParams);
+    $accessTotal = (int)$accessCountStmt->fetchColumn();
+    [$accessPage, $accessSize, $accessPages, $accessOffset] = paginate($accessTotal, $accessPage, $accessSize);
+    $accessSql = 'SELECT share_access_logs.*, shares.slug, shares.title AS share_title
+        FROM share_access_logs
+        JOIN shares ON share_access_logs.share_id = shares.id
+        WHERE ' . $accessWhereSql . '
+        ORDER BY share_access_logs.created_at DESC
+        LIMIT :limit OFFSET :offset';
+    $accessStmt = $pdo->prepare($accessSql);
+    foreach ($accessParams as $key => $value) {
+        $accessStmt->bindValue($key, $value);
+    }
+    $accessStmt->bindValue(':limit', $accessSize, PDO::PARAM_INT);
+    $accessStmt->bindValue(':offset', $accessOffset, PDO::PARAM_INT);
+    $accessStmt->execute();
+    $accessLogs = $accessStmt->fetchAll(PDO::FETCH_ASSOC);
+    $accessQuery = $_GET;
+    unset($accessQuery['access_page'], $accessQuery['access_size']);
+    $accessFilterQuery = $accessQuery;
+    unset($accessFilterQuery['access_share']);
+    $accessSourceQuery = $_GET;
+    unset($accessSourceQuery['access_source_page'], $accessSourceQuery['access_source_size']);
     $apiKey = flash('api_key');
     $info = flash('info');
     $error = flash('error');
@@ -4152,6 +5139,201 @@ if ($path === '/dashboard') {
     $content .= '</div>';
     $content .= '</div>';
 
+    $content .= '<div class="card" id="access-stats"><h2>访问概况</h2>';
+    $content .= '<form method="post" action="' . base_path() . '/dashboard/access-stats/update" class="stats-settings">';
+    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+    $content .= '<div class="grid">';
+    $content .= '<div><label>访问统计</label><label class="checkbox stats-toggle"><input type="checkbox" name="access_enabled" value="1"' . ($accessEnabled ? ' checked' : '') . '> 开启</label></div>';
+    $content .= '<div><label>保留天数</label><input class="input" type="number" name="access_retention_days" min="1" max="365" value="' . (int)$accessRetention . '"></div>';
+    $content .= '</div>';
+    $content .= '<div class="muted stats-note">UV 按浏览器 Cookie 去重（按天），访问记录计入账号存储空间，默认保留最近 7 天（当前 ' . (int)$accessRetention . ' 天），可在此调整；存储不足会自动关闭并清空统计。</div>';
+    if ($storageFull) {
+        $content .= '<div class="notice" style="margin-top:8px">存储空间已满，当前无法开启访问统计，请先清理空间。</div>';
+    }
+    if (!$accessEnabled) {
+        $content .= '<div class="notice" style="margin-top:8px">访问统计已关闭，当前不会记录新的访问。</div>';
+    }
+    $content .= '<div style="margin-top:12px"><button class="button" type="submit">保存设置</button></div>';
+    $content .= '</form>';
+
+    $content .= '<form method="get" action="' . base_path() . '/dashboard#access-stats" class="filter-form">';
+    $content .= render_hidden_inputs($accessFilterQuery);
+    $content .= '<div class="grid">';
+    $content .= '<div><label>笔记筛选</label><select class="input" name="access_share">';
+    $content .= '<option value="all"' . ($accessShareId <= 0 ? ' selected' : '') . '>全部</option>';
+    foreach ($accessShareOptions as $option) {
+        $optionId = (int)($option['id'] ?? 0);
+        $optionTitle = (string)($option['title'] ?? '');
+        $optionSlug = (string)($option['slug'] ?? '');
+        $label = $optionTitle !== '' ? $optionTitle : $optionSlug;
+        if ($optionSlug !== '') {
+            $label .= ' /s/' . $optionSlug;
+        }
+        $selected = $accessShareId === $optionId ? ' selected' : '';
+        $content .= '<option value="' . $optionId . '"' . $selected . '>' . htmlspecialchars($label) . '</option>';
+    }
+    $content .= '</select></div>';
+    $content .= '</div>';
+    $content .= '<div style="margin-top:12px"><button class="button" type="submit">筛选</button></div>';
+    $content .= '</form>';
+
+    $content .= '<div class="stats-block">';
+    $content .= '<div class="stats-title">访问概况</div>';
+    $content .= '<table class="table stats-table"><thead><tr><th></th><th>浏览量(PV)</th><th>访客数(UV)</th><th>IP 数量</th></tr></thead><tbody>';
+    $content .= '<tr><td>今日</td><td>' . $accessSummary['pv_today'] . '</td><td>' . $accessSummary['uv_today'] . '</td><td>' . $accessSummary['ip_today'] . '</td></tr>';
+    $content .= '<tr><td>昨日</td><td>' . $accessSummary['pv_yesterday'] . '</td><td>' . $accessSummary['uv_yesterday'] . '</td><td>' . $accessSummary['ip_yesterday'] . '</td></tr>';
+    $content .= '<tr><td>总计</td><td>' . $accessSummary['pv_total'] . '</td><td>' . $accessSummary['uv_total'] . '</td><td>' . $accessSummary['ip_total'] . '</td></tr>';
+    $content .= '</tbody></table>';
+    $content .= '</div>';
+
+    $content .= '<div class="stats-block">';
+    $content .= '<div class="stats-title">来源页</div>';
+    if (empty($accessSources)) {
+        $content .= '<p class="muted">暂无来源数据。</p>';
+    } else {
+        $content .= '<table class="table stats-table"><thead><tr><th>排名</th><th>次数</th><th>来源地址</th></tr></thead><tbody>';
+        $rank = 1;
+        foreach ($accessSources as $row) {
+            $referer = (string)($row['referer'] ?? '');
+            $total = (int)($row['total'] ?? 0);
+            $content .= '<tr><td>' . $rank . '</td><td>' . $total . '</td><td class="stats-source">' . htmlspecialchars($referer) . '</td></tr>';
+            $rank++;
+        }
+        $content .= '</tbody></table>';
+        $content .= '<div class="pagination">';
+        $content .= '<a class="button ghost" href="' . build_access_stats_query_url(['access_source_page' => max(1, $accessSourcePage - 1)]) . '">上一页</a>';
+        $content .= '<div class="pagination-info">第 ' . $accessSourcePage . ' / ' . $accessSourcePages . ' 页，共 ' . $accessSourceTotal . ' 条来源</div>';
+        $content .= '<a class="button ghost" href="' . build_access_stats_query_url(['access_source_page' => min($accessSourcePages, $accessSourcePage + 1)]) . '">下一页</a>';
+        $content .= '<form method="get" action="' . base_path() . '/dashboard#access-stats" class="pagination-form">';
+        $content .= render_hidden_inputs(array_merge($accessSourceQuery, [
+            'access_share' => $accessShareId > 0 ? $accessShareId : 'all',
+        ]));
+        $content .= '<label>每页</label><select class="input" name="access_source_size">';
+        foreach ([10, 50, 200, 1000] as $size) {
+            $selected = $accessSourceSize === $size ? ' selected' : '';
+            $content .= '<option value="' . $size . '"' . $selected . '>' . $size . '</option>';
+        }
+        $content .= '</select>';
+        $content .= '<label>页码</label><input class="input small" type="number" name="access_source_page" min="1" max="' . $accessSourcePages . '" value="' . $accessSourcePage . '">';
+        $content .= '<button class="button" type="submit">跳转</button>';
+        $content .= '</form>';
+        $content .= '</div>';
+    }
+    $content .= '</div>';
+
+    $content .= '<div class="stats-block">';
+    $content .= '<div class="stats-title">访客地域分析</div>';
+    $content .= '<div class="stats-charts">';
+    $content .= '<div class="stats-chart">';
+    $content .= '<div class="stats-subtitle">国内</div>';
+    if (empty($accessRegionsCn)) {
+        $content .= '<p class="muted">暂无数据。</p>';
+    } else {
+        $content .= '<div class="stats-chart-list">';
+        foreach ($accessRegionsCn as $row) {
+            $label = (string)($row['label'] ?? '');
+            $total = (int)($row['total'] ?? 0);
+            $percent = $accessCnMax > 0 ? round(($total / $accessCnMax) * 100, 1) : 0;
+            $content .= '<div class="stats-chart-row"><div class="stats-label">' . htmlspecialchars($label) . '</div><div class="stats-bar-track"><div class="stats-bar" style="width:' . $percent . '%"></div></div><div class="stats-value">' . $total . '</div></div>';
+        }
+        $content .= '</div>';
+    }
+    $content .= '</div>';
+    $content .= '<div class="stats-chart">';
+    $content .= '<div class="stats-subtitle">国际</div>';
+    if (empty($accessRegionsIntl)) {
+        $content .= '<p class="muted">暂无数据。</p>';
+    } else {
+        $content .= '<div class="stats-chart-list">';
+        foreach ($accessRegionsIntl as $row) {
+            $label = (string)($row['label'] ?? '');
+            $total = (int)($row['total'] ?? 0);
+            $percent = $accessIntlMax > 0 ? round(($total / $accessIntlMax) * 100, 1) : 0;
+            $content .= '<div class="stats-chart-row"><div class="stats-label">' . htmlspecialchars($label) . '</div><div class="stats-bar-track"><div class="stats-bar" style="width:' . $percent . '%"></div></div><div class="stats-value">' . $total . '</div></div>';
+        }
+        $content .= '</div>';
+    }
+    $content .= '</div>';
+    $content .= '</div>';
+    $content .= '</div>';
+
+    $content .= '<div class="stats-block">';
+    $content .= '<div class="stats-title">访问记录</div>';
+    $content .= '<div class="table-actions stats-actions">';
+    $content .= '<form id="access-batch-form" method="post" action="' . base_path() . '/dashboard/access-stats/delete" class="inline-form" data-batch-form="access">';
+    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+    $content .= '<label class="checkbox"><input type="checkbox" data-check-all="access"> 全选</label>';
+    $content .= '<button class="button danger" type="submit">批量删除</button>';
+    $content .= '</form>';
+    $content .= '<form method="post" action="' . base_path() . '/dashboard/access-stats/delete-all" class="inline-form" data-confirm-message="确定删除全部访问记录吗？该操作不可恢复。">';
+    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+    $content .= '<button class="button danger" type="submit">删除全部</button>';
+    $content .= '</form>';
+    $content .= '</div>';
+    if (empty($accessLogs)) {
+        $content .= '<p class="muted">暂无访问记录。</p>';
+    } else {
+        $content .= '<table class="table stats-table"><thead><tr><th><input type="checkbox" data-check-all="access" form="access-batch-form"></th><th>标题</th><th>IP</th><th>IP归属地</th><th>访问日期</th></tr></thead><tbody>';
+        foreach ($accessLogs as $log) {
+            $logTitle = trim((string)($log['doc_title'] ?? ''));
+            if ($logTitle === '') {
+                $logTitle = (string)($log['share_title'] ?? '');
+            }
+            if ($logTitle === '') {
+                $logTitle = '未命名';
+            }
+            $slug = (string)($log['slug'] ?? '');
+            $shareLink = $slug !== '' ? share_url($slug) : '#';
+            $suffix = $slug !== '' ? '/s/' . $slug : '';
+            $ip = trim((string)($log['ip'] ?? ''));
+            if ($ip === '') {
+                $ip = '-';
+            }
+            $location = format_ip_location([
+                'country' => $log['ip_country'] ?? '',
+                'country_code' => $log['ip_country_code'] ?? '',
+                'region' => $log['ip_region'] ?? '',
+                'city' => $log['ip_city'] ?? '',
+            ]);
+            if ($location === '') {
+                $location = '-';
+            }
+            $content .= '<tr>';
+            $content .= '<td><input type="checkbox" name="access_ids[]" value="' . (int)$log['id'] . '" data-check-item="access" form="access-batch-form"></td>';
+            $content .= '<td><a href="' . htmlspecialchars($shareLink) . '" target="_blank">' . htmlspecialchars($logTitle) . '</a>';
+            if ($suffix !== '') {
+                $content .= '<div class="muted">' . htmlspecialchars($suffix) . '</div>';
+            }
+            $content .= '</td>';
+            $content .= '<td>' . htmlspecialchars($ip) . '</td>';
+            $content .= '<td>' . htmlspecialchars($location) . '</td>';
+            $content .= '<td>' . htmlspecialchars((string)($log['created_at'] ?? '')) . '</td>';
+            $content .= '</tr>';
+        }
+        $content .= '</tbody></table>';
+    }
+    $content .= '<div class="pagination">';
+    $content .= '<a class="button ghost" href="' . build_access_stats_query_url(['access_page' => max(1, $accessPage - 1)]) . '">上一页</a>';
+    $content .= '<div class="pagination-info">第 ' . $accessPage . ' / ' . $accessPages . ' 页，共 ' . $accessTotal . ' 条访问</div>';
+    $content .= '<a class="button ghost" href="' . build_access_stats_query_url(['access_page' => min($accessPages, $accessPage + 1)]) . '">下一页</a>';
+    $content .= '<form method="get" action="' . base_path() . '/dashboard#access-stats" class="pagination-form">';
+    $content .= render_hidden_inputs(array_merge($accessQuery, [
+        'access_share' => $accessShareId > 0 ? $accessShareId : 'all',
+    ]));
+    $content .= '<label>每页</label><select class="input" name="access_size">';
+    foreach ([10, 50, 200, 1000] as $size) {
+        $selected = $accessSize === $size ? ' selected' : '';
+        $content .= '<option value="' . $size . '"' . $selected . '>' . $size . '</option>';
+    }
+    $content .= '</select>';
+    $content .= '<label>页码</label><input class="input small" type="number" name="access_page" min="1" max="' . $accessPages . '" value="' . $accessPage . '">';
+    $content .= '<button class="button" type="submit">跳转</button>';
+    $content .= '</form>';
+    $content .= '</div>';
+    $content .= '</div>';
+
+    $content .= '</div>';
+
     if ($user['role'] === 'admin') {
         $content .= '<div class="card"><h2>管理员入口</h2>';
         $content .= '<a class="button" href="' . base_path() . '/admin">进入后台</a>';
@@ -4177,6 +5359,61 @@ if ($path === '/api-key/rotate' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     flash('api_key', $rawKey);
     redirect('/dashboard');
 }
+
+if ($path === '/dashboard/access-stats/update' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $user = require_login();
+    check_csrf();
+    $userId = (int)$user['id'];
+    $enabled = !empty($_POST['access_enabled']);
+    $daysRaw = (int)($_POST['access_retention_days'] ?? access_stats_retention_days($userId));
+    $days = max(1, min(365, $daysRaw));
+    set_user_setting($userId, 'access_stats_retention_days', (string)$days);
+    if ($enabled) {
+        $used = recalculate_user_storage($userId);
+        $limit = get_user_limit_bytes($user);
+        if ($limit > 0 && $used >= $limit) {
+            set_user_setting($userId, 'access_stats_enabled', '0');
+            flash('error', '存储空间已满，无法开启访问统计');
+            redirect('/dashboard#access-stats');
+        }
+        set_user_setting($userId, 'access_stats_enabled', '1');
+    } else {
+        set_user_setting($userId, 'access_stats_enabled', '0');
+    }
+    flash('info', '访问统计设置已更新');
+    redirect('/dashboard#access-stats');
+}
+
+if ($path === '/dashboard/access-stats/delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $user = require_login();
+    check_csrf();
+    $userId = (int)$user['id'];
+    $ids = $_POST['access_ids'] ?? [];
+    $ids = is_array($ids) ? array_values(array_filter($ids)) : [];
+    if (empty($ids)) {
+        redirect('/dashboard#access-stats');
+    }
+    $placeholders = implode(',', array_fill(0, count($ids), '?'));
+    $pdo = db();
+    $sumStmt = $pdo->prepare('SELECT COALESCE(SUM(size_bytes), 0) AS total FROM share_access_logs WHERE user_id = ? AND id IN (' . $placeholders . ')');
+    $sumStmt->execute(array_merge([$userId], $ids));
+    $total = (int)($sumStmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+    $delStmt = $pdo->prepare('DELETE FROM share_access_logs WHERE user_id = ? AND id IN (' . $placeholders . ')');
+    $delStmt->execute(array_merge([$userId], $ids));
+    adjust_user_storage($userId, -$total);
+    flash('info', '已删除选中的访问记录');
+    redirect('/dashboard#access-stats');
+}
+
+if ($path === '/dashboard/access-stats/delete-all' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $user = require_login();
+    check_csrf();
+    $userId = (int)$user['id'];
+    purge_user_access_logs($userId);
+    flash('info', '已清空全部访问记录');
+    redirect('/dashboard#access-stats');
+}
+
 if ($path === '/admin') {
     $admin = require_admin();
     $pdo = db();
@@ -5056,6 +6293,7 @@ if ($path === '/admin/share-batch' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $ownerId = (int)($ownerStmt->fetchColumn() ?: 0);
         if ($action === 'soft_delete') {
             $softStmt->execute([':deleted_at' => now(), ':id' => $shareId]);
+            purge_share_access_logs($shareId);
         } elseif ($action === 'restore') {
             $restoreStmt->execute([':id' => $shareId]);
         } elseif ($action === 'hard_delete') {
@@ -5100,6 +6338,7 @@ if ($path === '/admin/scan/batch' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt = $pdo->prepare('UPDATE shares SET deleted_at = :deleted_at WHERE id = :id AND deleted_at IS NULL');
         foreach (array_keys($shareIds) as $shareId) {
             $stmt->execute([':deleted_at' => now(), ':id' => $shareId]);
+            purge_share_access_logs($shareId);
         }
         flash('info', '已删除 ' . count($shareIds) . ' 个违规分享');
         redirect('/admin#scan');
@@ -5174,6 +6413,7 @@ if ($path === '/admin/share-delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         ':deleted_at' => now(),
         ':id' => $shareId,
     ]);
+    purge_share_access_logs($shareId);
     if ($ownerId) {
         recalculate_user_storage($ownerId);
     }

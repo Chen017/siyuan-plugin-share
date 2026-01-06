@@ -1731,7 +1731,6 @@ body.app-side-open {
 }
 
 .markdown-body {
-  font-family: var(--font-markdown);
   line-height: 1.8;
   font-size: 16px;
   color: #2d3440;
@@ -2058,6 +2057,93 @@ body.share-side-open .share-side-backdrop {
   color: #bf2f2f;
 }
 
+.stats-settings {
+  margin-bottom: 16px;
+}
+
+.stats-note {
+  margin-top: 8px;
+}
+
+.stats-block {
+  margin-top: 18px;
+}
+
+.stats-title {
+  font-weight: 700;
+  font-size: 1rem;
+  margin-bottom: 10px;
+}
+
+.stats-source {
+  word-break: break-all;
+}
+
+.stats-charts {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.stats-chart {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--surface-muted);
+}
+
+.stats-subtitle {
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.stats-chart-list {
+  display: grid;
+  gap: 8px;
+}
+
+.stats-chart-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 2fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.stats-label {
+  font-size: 0.9rem;
+}
+
+.stats-bar-track {
+  height: 8px;
+  background: #e6eaf3;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.stats-bar {
+  height: 100%;
+  background: #5b8def;
+  border-radius: 999px;
+}
+
+.stats-value {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-size: 0.9rem;
+  min-width: 36px;
+  text-align: right;
+}
+
+.stats-toggle {
+  margin-top: 6px;
+}
+
+.stats-actions .inline-form {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
 @media (max-width: 960px) {
   .app-shell {
     display: block;
@@ -2160,6 +2246,7 @@ body.share-side-open .share-side-backdrop {
 
   .share-footer {
     max-width: 100%;
+    background: var(--surface);
   }
 
   .kb-dir-head,

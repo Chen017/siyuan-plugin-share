@@ -23,7 +23,9 @@ try {
 const STORAGE_SETTINGS = "settings";
 const STORAGE_SHARES = "shares";
 const DOCK_TYPE = "siyuan-plugin-share-dock";
-const ASSET_CHUNK_SIZE = 5 * 1024 * 1024;
+const ASSET_CHUNK_SIZE = 2 * 1024 * 1024;
+const DEFAULT_UPLOAD_ASSET_CONCURRENCY = 4;
+const DEFAULT_UPLOAD_CHUNK_CONCURRENCY = 4;
 
 const REMOTE_API = {
   verify: "/api/v1/auth/verify",
@@ -35,6 +37,7 @@ const REMOTE_API = {
   shareAssetChunk: "/api/v1/shares/asset/chunk",
   shareUploadComplete: "/api/v1/shares/upload/complete",
   shareUploadCancel: "/api/v1/shares/upload/cancel",
+  shareAccessUpdate: "/api/v1/shares/access/update",
   deleteShare: "/api/v1/shares/delete",
 };
 
@@ -76,6 +79,26 @@ function getAuthHeaders() {
   const token = getAPIToken();
   if (!token) return {};
   return {Authorization: `Token ${token}`};
+}
+
+function normalizePositiveInt(value, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.floor(parsed);
+}
+
+async function runTasksWithConcurrency(tasks, concurrency) {
+  if (!Array.isArray(tasks) || tasks.length === 0) return;
+  const limit = Math.max(1, Math.floor(concurrency || 1));
+  let nextIndex = 0;
+  const workers = new Array(Math.min(limit, tasks.length)).fill(null).map(async () => {
+    while (nextIndex < tasks.length) {
+      const current = nextIndex;
+      nextIndex += 1;
+      await tasks[current]();
+    }
+  });
+  await Promise.all(workers);
 }
 
 function nowTs() {
@@ -803,6 +826,8 @@ class SiYuanSharePlugin extends Plugin {
     this.settings = {
       siteUrl: "",
       apiKey: "",
+      uploadAssetConcurrency: DEFAULT_UPLOAD_ASSET_CONCURRENCY,
+      uploadChunkConcurrency: DEFAULT_UPLOAD_CHUNK_CONCURRENCY,
     };
     this.shares = [];
     this.dockElement = null;
@@ -937,6 +962,7 @@ class SiYuanSharePlugin extends Plugin {
         clearInterval(this.docTreeBindTimer);
         this.docTreeBindTimer = null;
       }
+      this.refreshDocTreeMarks();
     }, 800);
   }
 
@@ -976,12 +1002,29 @@ class SiYuanSharePlugin extends Plugin {
     }, 80);
   }
 
+  refreshDocTreeMarksLater() {
+    this.attachDocTree({skipRefresh: true});
+    this.refreshDocTreeMarks();
+    this.scheduleDocTreeRefresh();
+    this.bindDocTreeLater();
+    setTimeout(() => this.scheduleDocTreeRefresh(), 300);
+    setTimeout(() => this.scheduleDocTreeRefresh(), 800);
+  }
+
   clearDocTreeMarks() {
-    const scope = this.docTreeContainer && this.docTreeContainer.isConnected ? this.docTreeContainer : document;
-    scope.querySelectorAll(`.${TREE_SHARE_CLASS}`).forEach((el) => el.remove());
-    scope.querySelectorAll(`.${TREE_SHARED_CLASS}`).forEach((el) => {
-      el.classList.remove(TREE_SHARED_CLASS);
-    });
+    const clearScope = (scope) => {
+      scope.querySelectorAll(`.${TREE_SHARE_CLASS}`).forEach((el) => el.remove());
+      scope.querySelectorAll(`.${TREE_SHARED_CLASS}`).forEach((el) => {
+        el.classList.remove(TREE_SHARED_CLASS);
+      });
+    };
+    const hasTreeRoot = this.docTreeContainer && this.docTreeContainer.isConnected;
+    if (hasTreeRoot) {
+      clearScope(this.docTreeContainer);
+      clearScope(document);
+      return;
+    }
+    clearScope(document);
   }
 
   refreshDocTreeMarks() {
@@ -989,41 +1032,53 @@ class SiYuanSharePlugin extends Plugin {
       this.detachDocTree();
       this.bindDocTreeLater();
     }
-    const scope = this.docTreeContainer && this.docTreeContainer.isConnected ? this.docTreeContainer : document;
-    let items = scope.querySelectorAll(".b3-list-item");
-    if (!items.length) {
-      items = scope.querySelectorAll("[data-type^='navigation'], [data-type*='navigation'], [data-type='notebook']");
+    if (!this.docTreeContainer || !isElementVisiblySized(this.docTreeContainer)) {
+      this.attachDocTree({skipRefresh: true});
     }
-    items.forEach((rawItem) => {
-      const item = rawItem.classList?.contains("b3-list-item") ? rawItem : rawItem.closest?.(".b3-list-item") || rawItem;
-      if (!isProbablyDocTreeItem(item)) return;
-      const info = resolveTreeItemInfo(item);
-      if (!info?.id) return;
-      const share = info.isNotebook ? this.getShareByNotebookId(info.id) : this.getShareByDocId(info.id);
-      const titleEl =
-        item.querySelector(".b3-list-item__text") ||
-        item.querySelector(".b3-list-item__title") ||
-        item.querySelector(".b3-list-item__name") ||
-        item.querySelector(".b3-list-item__label") ||
-        item.querySelector(".b3-list-item__content") ||
-        item;
-      const existing = titleEl.querySelector(`.${TREE_SHARE_CLASS}`);
-      if (share) {
-        item.classList.add(TREE_SHARED_CLASS);
-        let icon = existing;
-        if (!icon) {
-          icon = document.createElement("span");
-          icon.className = TREE_SHARE_CLASS;
-          titleEl.appendChild(icon);
-        }
-        icon.setAttribute("data-share-type", share.type);
-        icon.setAttribute("data-share-id", info.id);
-        icon.innerHTML = `<svg><use xlink:href="#${TREE_SHARE_ICON_ID}"></use></svg>`;
-      } else {
-        item.classList.remove(TREE_SHARED_CLASS);
-        if (existing) existing.remove();
+    const hasTreeRoot = this.docTreeContainer && this.docTreeContainer.isConnected;
+    const applyMarks = (scope, requireFilter) => {
+      let items = scope.querySelectorAll(".b3-list-item");
+      if (!items.length) {
+        items = scope.querySelectorAll("[data-type^='navigation'], [data-type*='navigation'], [data-type='notebook']");
       }
-    });
+      items.forEach((rawItem) => {
+        const item =
+          rawItem.classList?.contains("b3-list-item") ? rawItem : rawItem.closest?.(".b3-list-item") || rawItem;
+        if (requireFilter && !isProbablyDocTreeItem(item)) return;
+        const info = resolveTreeItemInfo(item);
+        if (!info?.id) return;
+        const share = info.isNotebook ? this.getShareByNotebookId(info.id) : this.getShareByDocId(info.id);
+        const titleEl =
+          item.querySelector(".b3-list-item__text") ||
+          item.querySelector(".b3-list-item__title") ||
+          item.querySelector(".b3-list-item__name") ||
+          item.querySelector(".b3-list-item__label") ||
+          item.querySelector(".b3-list-item__content") ||
+          item;
+        const existing = titleEl.querySelector(`.${TREE_SHARE_CLASS}`);
+        if (share) {
+          item.classList.add(TREE_SHARED_CLASS);
+          let icon = existing;
+          if (!icon) {
+            icon = document.createElement("span");
+            icon.className = TREE_SHARE_CLASS;
+            titleEl.appendChild(icon);
+          }
+          icon.setAttribute("data-share-type", share.type);
+          icon.setAttribute("data-share-id", info.id);
+          icon.innerHTML = `<svg><use xlink:href="#${TREE_SHARE_ICON_ID}"></use></svg>`;
+        } else {
+          item.classList.remove(TREE_SHARED_CLASS);
+          if (existing) existing.remove();
+        }
+      });
+    };
+    if (hasTreeRoot) {
+      applyMarks(this.docTreeContainer, false);
+      applyMarks(document, true);
+      return;
+    }
+    applyMarks(document, true);
   }
 
   onDocTreeClick = (event) => {
@@ -1330,6 +1385,9 @@ class SiYuanSharePlugin extends Plugin {
         <button class="b3-button b3-button--outline" data-action="update" data-share-id="${escapeAttr(
           share.id,
         )}">${escapeHtml(t("siyuanShare.action.updateShare"))}</button>
+        <button class="b3-button b3-button--outline" data-action="update-access" data-share-id="${escapeAttr(
+          share.id,
+        )}">${escapeHtml(t("siyuanShare.action.updateAccess"))}</button>
         <button class="b3-button b3-button--outline" data-action="delete" data-share-id="${escapeAttr(
           share.id,
         )}">${escapeHtml(t("siyuanShare.action.deleteShare"))}</button>
@@ -1397,6 +1455,13 @@ class SiYuanSharePlugin extends Plugin {
             const shareId = btn.getAttribute("data-share-id");
             const options = readShareOptions(dialog.element);
             await this.updateShare(shareId, options);
+            dialog.destroy();
+            return;
+          }
+          if (action === "update-access") {
+            const shareId = btn.getAttribute("data-share-id");
+            const options = readShareOptions(dialog.element);
+            await this.updateShareAccess(shareId, options);
             dialog.destroy();
             return;
           }
@@ -1519,6 +1584,14 @@ class SiYuanSharePlugin extends Plugin {
         if (action === "update") {
           const shareId = target.getAttribute("data-share-id");
           await this.updateShare(shareId);
+          return;
+        }
+        if (action === "update-access") {
+          const shareId = target.getAttribute("data-share-id");
+          const share = this.getShareById(shareId);
+          if (!share) throw new Error(this.t("siyuanShare.error.shareNotFound"));
+          const itemId = share.type === SHARE_TYPES.NOTEBOOK ? share.notebookId : share.docId;
+          await this.openShareDialogFor({type: share.type, id: itemId, title: share.title || ""});
           return;
         }
         if (action === "delete") {
@@ -1857,6 +1930,14 @@ class SiYuanSharePlugin extends Plugin {
     this.settings = {
       siteUrl: settings.siteUrl || "",
       apiKey: settings.apiKey || "",
+      uploadAssetConcurrency: normalizePositiveInt(
+        settings.uploadAssetConcurrency,
+        DEFAULT_UPLOAD_ASSET_CONCURRENCY,
+      ),
+      uploadChunkConcurrency: normalizePositiveInt(
+        settings.uploadChunkConcurrency,
+        DEFAULT_UPLOAD_CHUNK_CONCURRENCY,
+      ),
     };
     this.shares = Array.isArray(shares)
       ? shares.filter((s) => s && s.id && s.type)
@@ -1991,6 +2072,7 @@ class SiYuanSharePlugin extends Plugin {
     const t = this.t.bind(this);
     const {siteInput, apiKeyInput} = this.settingEls;
     const next = {
+      ...this.settings,
       siteUrl: (siteInput?.value || "").trim(),
       apiKey: (apiKeyInput?.value || "").trim(),
     };
@@ -2047,6 +2129,10 @@ class SiYuanSharePlugin extends Plugin {
         if (!share) throw new Error(t("siyuanShare.message.currentDocNoShare"));
         if (action === "copy-link") return await this.copyShareLink(share.id);
         if (action === "update") return await this.updateShare(share.id);
+        if (action === "update-access") {
+          await this.openShareDialogFor({type: SHARE_TYPES.DOC, id: docId});
+          return;
+        }
         if (action === "delete") return await this.deleteShare(share.id);
       } catch (err) {
         this.showErr(err);
@@ -2064,6 +2150,13 @@ class SiYuanSharePlugin extends Plugin {
       try {
         if (action === "copy-link") return await this.copyShareLink(shareId);
         if (action === "update") return await this.updateShare(shareId);
+        if (action === "update-access") {
+          const share = this.getShareById(shareId);
+          if (!share) throw new Error(this.t("siyuanShare.error.shareNotFound"));
+          const itemId = share.type === SHARE_TYPES.NOTEBOOK ? share.notebookId : share.docId;
+          await this.openShareDialogFor({type: share.type, id: itemId, title: share.title || ""});
+          return;
+        }
         if (action === "delete") return await this.deleteShare(shareId);
       } catch (err) {
         this.showErr(err);
@@ -2118,6 +2211,9 @@ class SiYuanSharePlugin extends Plugin {
   <div class="siyuan-plugin-share__actions">
     <button class="b3-button b3-button--outline" data-action="update">${escapeHtml(
       t("siyuanShare.action.updateShare"),
+    )}</button>
+    <button class="b3-button b3-button--outline" data-action="update-access">${escapeHtml(
+      t("siyuanShare.action.updateAccess"),
     )}</button>
     <button class="b3-button b3-button--outline" data-action="delete">${escapeHtml(
       t("siyuanShare.action.deleteShare"),
@@ -2182,6 +2278,9 @@ class SiYuanSharePlugin extends Plugin {
     <button class="b3-button b3-button--outline" data-action="update" data-share-id="${escapeAttr(
           s.id,
         )}">${escapeHtml(t("siyuanShare.action.updateShare"))}</button>
+    <button class="b3-button b3-button--outline" data-action="update-access" data-share-id="${escapeAttr(
+          s.id,
+        )}">${escapeHtml(t("siyuanShare.action.updateAccess"))}</button>
     <button class="b3-button b3-button--outline" data-action="delete" data-share-id="${escapeAttr(
           s.id,
         )}">${escapeHtml(t("siyuanShare.action.deleteShare"))}</button>
@@ -2203,6 +2302,7 @@ class SiYuanSharePlugin extends Plugin {
 
   async saveSettingsFromUI() {
     const next = {
+      ...this.settings,
       siteUrl: this.getInputValue("sps-site").trim(),
       apiKey: this.getInputValue("sps-apikey").trim(),
     };
@@ -2237,6 +2337,19 @@ class SiYuanSharePlugin extends Plugin {
     }
   }
 
+  getUploadConcurrency() {
+    return {
+      asset: normalizePositiveInt(
+        this.settings.uploadAssetConcurrency,
+        DEFAULT_UPLOAD_ASSET_CONCURRENCY,
+      ),
+      chunk: normalizePositiveInt(
+        this.settings.uploadChunkConcurrency,
+        DEFAULT_UPLOAD_CHUNK_CONCURRENCY,
+      ),
+    };
+  }
+
   formatUploadDetail(uploaded, total) {
     return this.t("siyuanShare.progress.uploadedBytes", {
       current: formatBytes(uploaded),
@@ -2252,18 +2365,20 @@ class SiYuanSharePlugin extends Plugin {
     if (!Array.isArray(entries) || entries.length === 0) return;
     const total = entries.length;
     const baseLabel = t("siyuanShare.progress.uploadingContent");
+    const {asset: assetConcurrency, chunk: chunkConcurrency} = this.getUploadConcurrency();
     const tracker =
       Number.isFinite(totalBytes) && totalBytes > 0
-        ? {totalBytes, uploadedBytes: 0, label: baseLabel}
+        ? {totalBytes, uploadedBytes: 0, label: baseLabel, started: false}
         : null;
-    for (let index = 0; index < total; index += 1) {
-      const entry = entries[index] || {};
-      const asset = entry.asset || entry;
-      const docId = entry.docId || "";
+    const tasks = entries.map((entry, index) => async () => {
+      const assetEntry = entry || {};
+      const asset = assetEntry.asset || assetEntry;
+      const docId = assetEntry.docId || "";
       const suffix = total > 1 ? ` (${index + 1}/${total})` : "";
       const label = baseLabel + suffix;
       if (tracker) {
-        if (tracker.uploadedBytes === 0 && index === 0) {
+        if (!tracker.started) {
+          tracker.started = true;
           progress?.update?.({
             text: label,
             percent: 0,
@@ -2273,8 +2388,18 @@ class SiYuanSharePlugin extends Plugin {
       } else {
         progress?.update?.(label);
       }
-      await this.uploadAssetInChunks(uploadId, asset, docId, controller, progress, tracker, label);
-    }
+      await this.uploadAssetInChunks(
+        uploadId,
+        asset,
+        docId,
+        controller,
+        progress,
+        tracker,
+        label,
+        chunkConcurrency,
+      );
+    });
+    await runTasksWithConcurrency(tasks, assetConcurrency);
     if (tracker) {
       progress?.update?.({
         text: baseLabel,
@@ -2284,7 +2409,16 @@ class SiYuanSharePlugin extends Plugin {
     }
   }
 
-  async uploadAssetInChunks(uploadId, asset, docId, controller, progress, tracker, label) {
+  async uploadAssetInChunks(
+    uploadId,
+    asset,
+    docId,
+    controller,
+    progress,
+    tracker,
+    label,
+    chunkConcurrency,
+  ) {
     const t = this.t.bind(this);
     const blob = asset?.blob;
     const assetPath = asset?.path;
@@ -2292,7 +2426,8 @@ class SiYuanSharePlugin extends Plugin {
     const size = Number(blob.size) || 0;
     const chunkSize = ASSET_CHUNK_SIZE;
     const totalChunks = Math.max(1, Math.ceil(size / chunkSize));
-    for (let index = 0; index < totalChunks; index += 1) {
+    const concurrency = normalizePositiveInt(chunkConcurrency, DEFAULT_UPLOAD_CHUNK_CONCURRENCY);
+    const uploadChunk = async (index) => {
       throwIfAborted(controller, t("siyuanShare.message.cancelled"));
       const start = index * chunkSize;
       const end = Math.min(size, start + chunkSize);
@@ -2321,7 +2456,18 @@ class SiYuanSharePlugin extends Plugin {
           detail: this.formatUploadDetail(tracker.uploadedBytes, tracker.totalBytes),
         });
       }
+    };
+    if (totalChunks === 1) {
+      await uploadChunk(0);
+      return;
     }
+    const lastChunkIndex = totalChunks - 1;
+    const tasks = [];
+    for (let index = 0; index < lastChunkIndex; index += 1) {
+      tasks.push(() => uploadChunk(index));
+    }
+    await runTasksWithConcurrency(tasks, concurrency);
+    await uploadChunk(lastChunkIndex);
   }
 
 
@@ -2453,6 +2599,7 @@ class SiYuanSharePlugin extends Plugin {
       }
       const url = this.getShareUrl(share);
       this.renderSettingCurrent();
+      this.refreshDocTreeMarksLater();
       this.notify(t("siyuanShare.message.shareCreated", {value: url || title}));
       if (url) await this.tryCopyToClipboard(url);
     } finally {
@@ -2608,6 +2755,7 @@ class SiYuanSharePlugin extends Plugin {
         console.warn("shareNotebook response error, but share exists after sync", requestError);
       }
       const url = this.getShareUrl(share);
+      this.refreshDocTreeMarksLater();
       this.notify(t("siyuanShare.message.shareCreated", {value: url || title}));
       if (url) await this.tryCopyToClipboard(url);
     } finally {
@@ -2743,6 +2891,48 @@ class SiYuanSharePlugin extends Plugin {
       clearExpires,
       allowRequestError: false,
     });
+  }
+
+  async updateShareAccess(
+    shareId,
+    {password = "", clearPassword = false, expiresAt = null, clearExpires = false} = {},
+  ) {
+    const t = this.t.bind(this);
+    if (!shareId) throw new Error(t("siyuanShare.error.missingShareId"));
+    const existing = this.getShareById(shareId);
+    if (!existing) throw new Error(t("siyuanShare.error.shareNotFound"));
+    const controller = new AbortController();
+    const progress = this.openProgressDialog(t("siyuanShare.progress.requesting"), controller);
+    try {
+      progress.update(t("siyuanShare.progress.verifyingSite"));
+      await this.verifyRemote({controller, progress});
+      throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+      const payload = {shareId: existing.id};
+      if (clearPassword) {
+        payload.clearPassword = true;
+      } else if (password) {
+        payload.password = password;
+      }
+      if (clearExpires) {
+        payload.clearExpires = true;
+      } else if (Number.isFinite(expiresAt) && expiresAt > 0) {
+        payload.expiresAt = expiresAt;
+      }
+      progress.update(t("siyuanShare.progress.requesting"));
+      await this.remoteRequest(REMOTE_API.shareAccessUpdate, {
+        method: "POST",
+        body: payload,
+        progressText: t("siyuanShare.progress.requesting"),
+        controller,
+        progress,
+      });
+      progress.update(t("siyuanShare.progress.syncingShareList"));
+      await this.syncRemoteShares({silent: true, controller, progress});
+      this.renderSettingCurrent();
+      this.notify(t("siyuanShare.message.accessUpdated"));
+    } finally {
+      progress?.close();
+    }
   }
 
   async deleteShare(shareId) {
@@ -3043,6 +3233,9 @@ class SiYuanSharePlugin extends Plugin {
       <button class="b3-button b3-button--outline" data-action="update" data-share-id="${escapeAttr(
           s.id,
         )}">${escapeHtml(t("siyuanShare.action.update"))}</button>
+      <button class="b3-button b3-button--outline" data-action="update-access" data-share-id="${escapeAttr(
+          s.id,
+        )}">${escapeHtml(t("siyuanShare.action.updateAccess"))}</button>
       <button class="b3-button b3-button--outline" data-action="delete" data-share-id="${escapeAttr(
           s.id,
         )}">${escapeHtml(t("siyuanShare.action.delete"))}</button>

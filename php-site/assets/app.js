@@ -120,11 +120,63 @@
   const initKnowledgeTree = () => {
     const toggles = document.querySelectorAll(".kb-tree-toggle");
     if (!toggles.length) return;
+    const getShareSlug = () => {
+      const host = document.querySelector("[data-share-slug]");
+      const slug = host?.dataset?.shareSlug || "";
+      if (slug) return slug;
+      const match = window.location.pathname.match(/\/s\/([^/]+)/);
+      return match ? match[1] : "";
+    };
+    const getStorageKey = () => {
+      const slug = getShareSlug();
+      return slug ? `sps-tree-state:${slug}` : "";
+    };
+    const readState = () => {
+      const key = getStorageKey();
+      if (!key) return new Set();
+      try {
+        const raw = localStorage.getItem(key);
+        if (!raw) return new Set();
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return new Set();
+        return new Set(parsed.filter(Boolean));
+      } catch {
+        return new Set();
+      }
+    };
+    const writeState = (set) => {
+      const key = getStorageKey();
+      if (!key) return;
+      try {
+        const payload = JSON.stringify(Array.from(set));
+        localStorage.setItem(key, payload);
+      } catch {
+        // ignore
+      }
+    };
+    const syncState = () => {
+      const openKeys = new Set();
+      document.querySelectorAll(".kb-tree-node.is-open[data-tree-key]").forEach((node) => {
+        const key = node.dataset.treeKey || "";
+        if (key) openKeys.add(key);
+      });
+      writeState(openKeys);
+    };
     const toggleNode = (node, nextOpen) => {
       node.classList.toggle("is-open", nextOpen);
       node.classList.toggle("is-collapsed", !nextOpen);
       const btn = node.querySelector(".kb-tree-toggle");
       if (btn) btn.setAttribute("aria-expanded", String(nextOpen));
+    };
+    const applyState = () => {
+      const openKeys = readState();
+      if (!openKeys.size) return;
+      document.querySelectorAll(".kb-tree-node[data-tree-key]").forEach((node) => {
+        if (!node.querySelector(".kb-tree-toggle")) return;
+        const key = node.dataset.treeKey || "";
+        if (!key) return;
+        toggleNode(node, openKeys.has(key));
+      });
     };
     toggles.forEach((btn) => {
       btn.addEventListener("click", (event) => {
@@ -133,6 +185,7 @@
         if (!node) return;
         const nextOpen = !node.classList.contains("is-open");
         toggleNode(node, nextOpen);
+        syncState();
       });
     });
     document.querySelectorAll(".kb-tree-folder").forEach((label) => {
@@ -141,8 +194,10 @@
         if (!node || !node.querySelector(".kb-tree-toggle")) return;
         const nextOpen = !node.classList.contains("is-open");
         toggleNode(node, nextOpen);
+        syncState();
       });
     });
+    applyState();
   };
 
   const initDocTreeScroll = () => {
