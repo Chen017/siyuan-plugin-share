@@ -1,15 +1,13 @@
 <?php
 declare(strict_types=1);
 
-session_start();
-date_default_timezone_set('UTC');
-
 $config = [
     'app_name' => '思源笔记分享',
     'db_path' => __DIR__ . '/storage/app.db',
     'uploads_dir' => __DIR__ . '/uploads',
     'allow_registration' => true,
     'default_storage_limit_mb' => 1024,
+    'session_lifetime_days' => 30,
     'chunk_ttl_seconds' => 7200,
     'chunk_cleanup_probability' => 0.05,
     'chunk_cleanup_limit' => 20,
@@ -33,6 +31,17 @@ if (file_exists(__DIR__ . '/config.php')) {
         $config = array_merge($config, $local);
     }
 }
+
+$sessionDays = (int)($config['session_lifetime_days'] ?? 30);
+if ($sessionDays <= 0) {
+    $sessionDays = 30;
+}
+$sessionLifetime = $sessionDays * 86400;
+ini_set('session.gc_maxlifetime', (string)$sessionLifetime);
+ini_set('session.cookie_lifetime', (string)$sessionLifetime);
+session_set_cookie_params($sessionLifetime, '/', '', false, true);
+session_start();
+date_default_timezone_set('UTC');
 
 if (function_exists('date_default_timezone_set')) {
     date_default_timezone_set('Asia/Shanghai');
@@ -1896,14 +1905,23 @@ function verify_reset_code(int $userId, string $email, string $code): bool {
 }
 
 function current_user(): ?array {
-    if (empty($_SESSION['user_id'])) {
+    if (empty($_SESSION['user_id']) || empty($_SESSION['password_hash'])) {
         return null;
     }
     $pdo = db();
     $stmt = $pdo->prepare('SELECT * FROM users WHERE id = :id');
     $stmt->execute([':id' => $_SESSION['user_id']]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
-    return $row ?: null;
+    if (!$row) {
+        return null;
+    }
+    $sessionHash = (string)($_SESSION['password_hash'] ?? '');
+    if ($sessionHash === '' || !hash_equals((string)$row['password_hash'], $sessionHash)) {
+        $_SESSION = [];
+        session_destroy();
+        return null;
+    }
+    return $row;
 }
 
 function require_login(): array {
@@ -4347,6 +4365,7 @@ if ($path === '/login/email' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         redirect('/login?tab=email&step=verify');
     }
     $_SESSION['user_id'] = $user['id'];
+    $_SESSION['password_hash'] = $user['password_hash'];
     $_SESSION['login_email_step'] = 'start';
     unset($_SESSION['login_email']);
     if ((int)$user['email_verified'] !== 1) {
@@ -4386,6 +4405,7 @@ if ($path === '/login') {
             redirect('/login');
         }
         $_SESSION['user_id'] = $user['id'];
+        $_SESSION['password_hash'] = $user['password_hash'];
         $_SESSION['login_email_step'] = 'start';
         unset($_SESSION['login_username']);
         if ((int)$user['must_change_password'] === 1) {
@@ -4537,13 +4557,14 @@ if ($path === '/register') {
                     redirect('/register');
                 }
             }
+            $passwordHash = password_hash($password, PASSWORD_DEFAULT);
             $stmt = $pdo->prepare('INSERT INTO users (username, email, password_hash, role, api_key_hash, api_key_prefix, api_key_last4, disabled, storage_limit_bytes, storage_used_bytes, must_change_password, email_verified, created_at, updated_at)
                 VALUES (:username, :email, :password_hash, :role, :api_key_hash, :api_key_prefix, :api_key_last4, :disabled, :storage_limit_bytes, :storage_used_bytes, :must_change_password, :email_verified, :created_at, :updated_at)');
             try {
                 $stmt->execute([
                     ':username' => $username,
                     ':email' => $email,
-                    ':password_hash' => password_hash($password, PASSWORD_DEFAULT),
+                    ':password_hash' => $passwordHash,
                     ':role' => 'user',
                     ':api_key_hash' => null,
                     ':api_key_prefix' => null,
@@ -4562,6 +4583,7 @@ if ($path === '/register') {
             }
             unset($_SESSION['register_step'], $_SESSION['register_password_hash'], $_SESSION['register_email_code_at'], $_SESSION['register_username'], $_SESSION['register_email']);
             $_SESSION['user_id'] = (int)$pdo->lastInsertId();
+            $_SESSION['password_hash'] = $passwordHash;
             redirect('/dashboard');
         }
 
@@ -4625,6 +4647,7 @@ if ($path === '/register') {
             $_SESSION['register_email']
         );
         $_SESSION['user_id'] = (int)$pdo->lastInsertId();
+        $_SESSION['password_hash'] = $passwordHash;
         redirect('/dashboard');
     }
     $error = flash('error');
@@ -4868,8 +4891,10 @@ if ($path === '/account') {
             ':updated_at' => now(),
             ':id' => $user['id'],
         ]);
-        flash('info', '密码已更新');
-        redirect('/account');
+        unset($_SESSION['user_id'], $_SESSION['password_hash']);
+        session_regenerate_id(true);
+        flash('info', '???????????');
+        redirect('/login');
     }
 
     $error = flash('error');
@@ -5031,6 +5056,10 @@ if ($path === '/dashboard') {
     $accessCountStmt = $pdo->prepare('SELECT COUNT(*) FROM share_access_logs WHERE ' . $accessWhereSql);
     $accessCountStmt->execute($accessParams);
     $accessTotal = (int)$accessCountStmt->fetchColumn();
+    $accessSizeStmt = $pdo->prepare('SELECT COALESCE(SUM(size_bytes), 0) AS total FROM share_access_logs WHERE user_id = :uid');
+    $accessSizeStmt->execute([':uid' => $user['id']]);
+    $accessLogTotalBytes = (int)$accessSizeStmt->fetchColumn();
+    $accessLogTotalLabel = format_bytes($accessLogTotalBytes);
     [$accessPage, $accessSize, $accessPages, $accessOffset] = paginate($accessTotal, $accessPage, $accessSize);
     $accessSql = 'SELECT share_access_logs.*, shares.slug, shares.title AS share_title
         FROM share_access_logs
@@ -5267,7 +5296,7 @@ if ($path === '/dashboard') {
     $content .= '</form>';
     $content .= '<form method="post" action="' . base_path() . '/dashboard/access-stats/delete-all" class="inline-form" data-confirm-message="确定删除全部访问记录吗？该操作不可恢复。">';
     $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
-    $content .= '<button class="button danger" type="submit">删除全部</button>';
+    $content .= '<button class="button danger" type="submit">删除全部（占用 ' . $accessLogTotalLabel . '）</button>';
     $content .= '</form>';
     $content .= '</div>';
     if (empty($accessLogs)) {

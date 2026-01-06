@@ -3,6 +3,8 @@ return [
     'app_name' => '思源笔记分享',
     'allow_registration' => true,
     'default_storage_limit_mb' => 1024,
+    // Session lifetime (days)
+    'session_lifetime_days' => 30,
     // Chunk cleanup (seconds, 0.05 = 5% probability per request)
     'chunk_ttl_seconds' => 7200,
     'chunk_cleanup_probability' => 0.05,
