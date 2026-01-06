@@ -1,43 +1,43 @@
-# 🔗Siyuan Share
+# 🔗 Siyuan Share
 
-This is a free sharing plugin for SiYuan Note. It supports generating share links for notebooks or documents, allowing you to set access passwords and expiration dates.
+This is a free sharing plugin for SiYuan Note. It supports generating share links for notebooks or documents, setting access passwords and expiration dates, and viewing share access statistics.
 
 [中文](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/README_zh_CN.md) | [English](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/README.md)
 
 ## ✨ Usage
 
-- **Access**: Right-click on a notebook or document in the file tree to enter the plugin menu. The menu includes the following functions:
+- **Access**: Right-click on a notebook or document in the document tree to enter the plugin menu. The menu includes the following functions:
     - Create Share
     - Update Share
     - Copy Share Link
     - Delete Share
-- **Share Management**: Go to the plugin settings page to view and manage the list of all generated shares.
+- **Share Management**: Go to the plugin settings page to view the list of all generated shares and manage them centrally.
 
-## ⚠️ Important Notes
+## ⚠️ Notes
 
 - **Update Mechanism**: If you modify the content of a document or notebook, please use the **"Update Share"** function. This keeps the original share link unchanged while syncing the latest content.
-- **Link Change**: If you select "Delete Share" and then "Create Share" again, the system will generate a new share link, and the old link will become invalid.
+- **Link Changes**: If you select "Delete Share" and then "Create Share" again, the system will generate a new share link, and the old link will become invalid.
 
 ## ⚙️ Configuration
 
 This plugin relies on the server-side website [share.b0x.top](https://share.b0x.top) for data transmission.
 
 1.  **Configuration Steps**:
-    - Please go to the website to register an account.
+    - Please go to the website and register an account.
     - Generate an **API Key** on the website.
     - Enter the API Key into the plugin settings to complete the connection between the plugin and the server.
-    - Once configured, the sharing operation uploads the corresponding document/notebook to the server.
+    - Once configured, the share operation uploads the corresponding document/notebook to the server.
 
-2.  **Server Information**:
-    - Currently, [share.b0x.top](https://share.b0x.top) is a **public** server provided by the author for demonstration and short-term use.
-    - **Cleanup Policy**: Due to limited server bandwidth and storage costs, the system performs periodic cleanup on large files.
-    - **Self-hosting Suggestion**: For users with long-term persistent storage needs, it is strongly recommended to refer to the **[Server Deployment Tutorial](https://ccnwc9xa9692.feishu.cn/wiki/MQCtwMtQaifPuak4zl3cIMCqnLx)** for self-hosting.
+2.  **Server Details**:
+    - Currently, [share.b0x.top](https://share.b0x.top) is a **public** server provided by the author, intended for functional demonstration and short-term use only.
+    - **Cleanup Policy**: Due to limits on server bandwidth and storage costs, the system implements a periodic cleanup policy for large files.
+    - **Self-hosting Recommendation**: For users with long-term persistent storage needs, it is strongly recommended to refer to the **[Server Deployment Tutorial](https://ccnwc9xa9692.feishu.cn/wiki/MQCtwMtQaifPuak4zl3cIMCqnLx)** for self-hosting.
 
-## 📖 Demo
+## 📖 Demos
 
-### 1. Generate API Key and fill it in
+### 1. Generate and Enter API Key
 
-![Generate API Key and fill it in](https://github.com/user-attachments/assets/40bb0a47-d3f5-48fc-a96b-acd46fc6287d)
+![Generate and Enter API Key](https://github.com/user-attachments/assets/40bb0a47-d3f5-48fc-a96b-acd46fc6287d)
 
 ### 2. Share Document
 
@@ -47,13 +47,17 @@ This plugin relies on the server-side website [share.b0x.top](https://share.b0x.
 
 ![Open Shared Document](https://github.com/user-attachments/assets/ba14f2b1-2bd0-4dfb-a32a-04ad1e7b5567)
 
+### 4. Access Statistics
+
+<img width="1866" height="750" alt="Access Statistics" src="https://github.com/user-attachments/assets/b2690a03-6e97-4845-87be-1ab3e5406847" />
+
 ## ☕ Support the Author
 
-If you find this project helpful, your support is welcome! It encourages me to keep updating and building better tools.
+If you find this project helpful, your support is welcome! This will encourage me to continue updates and build better tools ~
 
 <div align="center">
     <a href="https://github.com/b8l8u8e8/siyuan-plugin-share">
-        <img src="https://img.shields.io/github/stars/b8l8u8e8/siyuan-plugin-share?style=for-the-badge&color=ffd700&label=Give%20a%20Star" alt="Github Star">
+        <img src="https://img.shields.io/github/stars/b8l8u8e8/siyuan-plugin-share?style=for-the-badge&color=ffd700&label=Star%20Me" alt="Github Star">
     </a>
 </div>
 <div align="center" style="margin-top: 40px;">
@@ -71,12 +75,11 @@ If you find this project helpful, your support is welcome! It encourages me to k
             <b style="color: #1677ff; display: block; margin-top: 10px;">Alipay</b>
         </div>
     </div>
-    <p style="margin-top: 20px;"><i>Your support is my motivation for continuous iteration</i></p>
+    <p style="margin-top: 20px;"><i>Your support is my motivation for continuous iteration.</i></p>
 </div>
 
-### 🛠️ Other Information
+### 🛠️ More Info
 
-- **Feedback**: [GitHub Issues](https://github.com/b8l8u8e8/siyuan-plugin-share/issues)
+- **Issues & Feedback**: [GitHub Issues](https://github.com/b8l8u8e8/siyuan-plugin-share/issues)
 - **License**: [MIT License](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/LICENSE)
 - **Changelog**: [CHANGELOG.md](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/CHANGELOG.md)
-
