@@ -117,7 +117,7 @@
 
 <div align="center">
     <a href="https://github.com/b8l8u8e8/siyuan-plugin-share">
-        <img src="https://img.shields.io/github/stars/b8l8u8e8/siyuan-plugin-share?style=for-the-badge&color=ffd700&label=⭐%20Star%20支持一下" alt="Github Star">
+        <img src="https://img.shields.io/github/stars/b8l8u8e8/siyuan-plugin-share?style=for-the-badge&color=ffd700&label=%E7%BB%99%E4%B8%AAStar%E5%90%A7" alt="Github Star">
     </a>
 </div>
 

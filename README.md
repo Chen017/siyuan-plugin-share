@@ -122,9 +122,10 @@ Your support motivates me to **continue maintaining and improving** the plugin.
 
 <div align="center">
     <a href="https://github.com/b8l8u8e8/siyuan-plugin-share">
-        <img src="https://img.shields.io/github/stars/b8l8u8e8/siyuan-plugin-share?style=for-the-badge&color=ffd700&label=⭐%20Star%20Support" alt="Github Star">
+        <img src="https://img.shields.io/github/stars/b8l8u8e8/siyuan-plugin-share?style=for-the-badge&color=ffd700&label=Give%20a%20Star" alt="Github Star">
     </a>
 </div>
+
 
 <div align="center" style="margin-top: 40px;">
     <div style="display: flex; justify-content: center; align-items: center; gap: 30px;">
