@@ -646,6 +646,302 @@
     });
   };
 
+  const initReportModal = () => {
+    const openButtons = document.querySelectorAll("[data-report-open]");
+    if (!openButtons.length) return;
+    const open = (modal) => {
+      if (modal) modal.hidden = false;
+    };
+    const close = (modal) => {
+      if (modal) modal.hidden = true;
+    };
+    openButtons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const targetId = btn.dataset.reportTarget || "";
+        const modal = targetId
+          ? document.getElementById(targetId)
+          : document.querySelector("[data-report-modal]");
+        open(modal);
+      });
+    });
+    document.querySelectorAll("[data-report-modal]").forEach((modal) => {
+      modal.addEventListener("click", (event) => {
+        const target = event.target;
+        if (
+          target &&
+          (target.closest("[data-modal-close]") ||
+            target.classList.contains("modal-backdrop"))
+        ) {
+          close(modal);
+        }
+      });
+    });
+  };
+
+  const initToggleSubmit = () => {
+    document
+      .querySelectorAll("input[data-toggle-input]")
+      .forEach((input) => {
+        input.addEventListener("change", () => {
+          const form = input.closest("form");
+          if (!form) return;
+          const actionInput = form.querySelector("[data-toggle-action]");
+          if (actionInput) {
+            actionInput.value = input.checked ? "enable" : "disable";
+          }
+          form.submit();
+        });
+      });
+  };
+
+  const ensureToastStack = () => {
+    let stack = document.querySelector(".toast-stack");
+    if (!stack) {
+      stack = document.createElement("div");
+      stack.className = "toast-stack";
+      document.body.appendChild(stack);
+    }
+    return stack;
+  };
+
+  const showToast = (message, variant = "") => {
+    if (!message) return;
+    const stack = ensureToastStack();
+    const toast = document.createElement("div");
+    toast.className = "toast";
+    if (variant) toast.classList.add(variant);
+    toast.textContent = message;
+    stack.appendChild(toast);
+    setTimeout(() => {
+      toast.classList.add("is-hidden");
+      toast.addEventListener("transitionend", () => toast.remove(), {
+        once: true,
+      });
+    }, 4200);
+  };
+
+  const initCommentEditors = () => {
+    const editors = Array.from(document.querySelectorAll("[data-comment-editor]"));
+    if (!editors.length) return;
+    const insertAtCursor = (textarea, text) => {
+      if (!textarea) return;
+      const start = textarea.selectionStart || 0;
+      const end = textarea.selectionEnd || 0;
+      const value = textarea.value || "";
+      textarea.value = value.slice(0, start) + text + value.slice(end);
+      const pos = start + text.length;
+      textarea.setSelectionRange(pos, pos);
+      textarea.focus();
+    };
+    const closePanels = (except) => {
+      editors.forEach((editor) => {
+        const panel = editor.querySelector("[data-emoji-panel]");
+        if (panel && panel !== except) panel.hidden = true;
+      });
+    };
+    document.addEventListener("click", (event) => {
+      const target = event.target;
+      if (target && target.closest("[data-comment-editor]")) return;
+      closePanels();
+    });
+    editors.forEach((editor) => {
+      const textarea = editor.querySelector("textarea");
+      const emojiToggle = editor.querySelector("[data-emoji-toggle]");
+      const emojiPanel = editor.querySelector("[data-emoji-panel]");
+      const imageBtn = editor.querySelector("[data-image-insert]");
+      const imageInput = editor.querySelector("[data-image-input]");
+      const form = editor.closest("form");
+      const uploadUrl =
+        editor.closest("[data-comment-upload]")?.dataset.commentUpload || "";
+      if (emojiToggle && emojiPanel) {
+        emojiToggle.addEventListener("click", (event) => {
+          event.preventDefault();
+          const next = emojiPanel.hidden;
+          closePanels(emojiPanel);
+          emojiPanel.hidden = !next;
+        });
+      }
+      if (emojiPanel) {
+        emojiPanel.addEventListener("click", (event) => {
+          const btn = event.target.closest("[data-emoji]");
+          if (!btn) return;
+          insertAtCursor(textarea, btn.dataset.emoji || "");
+          emojiPanel.hidden = true;
+        });
+      }
+      const uploadImage = async (file) => {
+        if (!file) return;
+        if (!uploadUrl) {
+          showToast("无法上传图片", "error");
+          return;
+        }
+        const csrf = form?.querySelector("input[name='csrf']")?.value || "";
+        const body = new FormData();
+        if (csrf) body.append("csrf", csrf);
+        body.append("image", file);
+        if (imageBtn) imageBtn.disabled = true;
+        try {
+          const resp = await fetch(uploadUrl, {method: "POST", body});
+          const json = await resp.json().catch(() => null);
+          if (!resp.ok || !json || json.code !== 0) {
+            throw new Error(json?.msg || "图片上传失败");
+          }
+          const url = json?.data?.url || "";
+          if (!url) {
+            throw new Error("图片上传失败");
+          }
+          insertAtCursor(textarea, `![](${url})`);
+        } catch (err) {
+          showToast(err?.message || "图片上传失败", "error");
+        } finally {
+          if (imageBtn) imageBtn.disabled = false;
+          if (imageInput) imageInput.value = "";
+        }
+      };
+      if (imageBtn && imageInput) {
+        imageBtn.addEventListener("click", () => {
+          imageInput.click();
+        });
+        imageInput.addEventListener("change", () => {
+          const file = imageInput.files?.[0];
+          uploadImage(file);
+        });
+      }
+    });
+  };
+
+  const initCommentModal = () => {
+    const modal = document.querySelector("[data-comment-modal]");
+    if (!modal) return;
+    const form = modal.querySelector("[data-comment-form]");
+    if (!form) return;
+    const titleEl = modal.querySelector("[data-comment-modal-title]");
+    const noteEl = modal.querySelector("[data-comment-modal-note]");
+    const submitBtn = modal.querySelector("[data-comment-submit]");
+    const emailInput = form.querySelector("input[name='email']");
+    const captchaInput = form.querySelector("input[name='captcha']");
+    const contentInput = form.querySelector("textarea[name='content']");
+    const commentIdInput = form.querySelector("[data-comment-id]");
+    const parentIdInput = form.querySelector("[data-comment-parent]");
+    const verifyBlock = form.querySelector("[data-comment-verify]");
+    const editorBlock = form.querySelector("[data-comment-editor-wrapper]");
+    const actionBase = modal.dataset.commentActionBase || "";
+    const docId = modal.dataset.commentDocId || "";
+    const ownerDelete = modal.dataset.commentOwner === "1";
+    const defaultEmail = modal.dataset.commentDefaultEmail || "";
+    const refreshModalCaptcha = () => {
+      const img = modal.querySelector("img[data-captcha]");
+      if (img) refreshCaptcha(img);
+    };
+    const setRequired = (field, required) => {
+      if (!field) return;
+      if (required) {
+        field.setAttribute("required", "");
+      } else {
+        field.removeAttribute("required");
+      }
+    };
+    const open = (mode, dataset) => {
+      if (!actionBase) return;
+      modal.hidden = false;
+      refreshModalCaptcha();
+      const maskedEmail = dataset.commentEmail || "";
+      if (mode === "reply") {
+        if (titleEl) titleEl.textContent = "回复评论";
+        if (noteEl)
+          noteEl.textContent = maskedEmail ? `回复 ${maskedEmail}` : "回复评论";
+        if (submitBtn) submitBtn.textContent = "发布回复";
+        form.action = `${actionBase}/comment`;
+        if (commentIdInput) commentIdInput.value = "";
+        if (parentIdInput) parentIdInput.value = dataset.commentParentId || "";
+        if (emailInput) emailInput.value = defaultEmail;
+        if (captchaInput) captchaInput.value = "";
+        if (contentInput) contentInput.value = "";
+        if (verifyBlock) verifyBlock.hidden = false;
+        if (editorBlock) editorBlock.hidden = false;
+        setRequired(contentInput, true);
+        setRequired(emailInput, true);
+        setRequired(captchaInput, true);
+      } else if (mode === "edit") {
+        if (titleEl) titleEl.textContent = "编辑评论";
+        if (noteEl)
+          noteEl.textContent = maskedEmail
+            ? `邮箱验证：${maskedEmail}`
+            : "邮箱验证";
+        if (submitBtn) submitBtn.textContent = "保存修改";
+        form.action = `${actionBase}/comment/edit`;
+        if (commentIdInput) commentIdInput.value = dataset.commentId || "";
+        if (parentIdInput) parentIdInput.value = "";
+        if (emailInput) emailInput.value = "";
+        if (captchaInput) captchaInput.value = "";
+        if (contentInput) contentInput.value = dataset.commentContent || "";
+        if (verifyBlock) verifyBlock.hidden = false;
+        if (editorBlock) editorBlock.hidden = false;
+        setRequired(contentInput, true);
+        setRequired(emailInput, true);
+        setRequired(captchaInput, true);
+      } else if (mode === "delete") {
+        if (titleEl) titleEl.textContent = "删除评论";
+        if (noteEl)
+          noteEl.textContent = maskedEmail
+            ? `确认删除该评论（${maskedEmail}）？`
+            : "确认删除该评论？";
+        if (submitBtn) submitBtn.textContent = "确认删除";
+        form.action = `${actionBase}/comment/delete`;
+        if (commentIdInput) commentIdInput.value = dataset.commentId || "";
+        if (parentIdInput) parentIdInput.value = "";
+        if (contentInput) contentInput.value = "";
+        const skipVerify = ownerDelete || dataset.commentOwner === "1";
+        if (verifyBlock) verifyBlock.hidden = skipVerify;
+        if (editorBlock) editorBlock.hidden = true;
+        setRequired(contentInput, false);
+        setRequired(emailInput, !skipVerify);
+        setRequired(captchaInput, !skipVerify);
+      }
+      if (noteEl) {
+        noteEl.hidden = !noteEl.textContent;
+      }
+      if (docId) {
+        const docInput = form.querySelector("[data-comment-doc]");
+        if (docInput) docInput.value = docId;
+      }
+    };
+    const close = () => {
+      modal.hidden = true;
+    };
+    modal.addEventListener("click", (event) => {
+      const target = event.target;
+      if (
+        target &&
+        (target.closest("[data-modal-close]") ||
+          target.classList.contains("modal-backdrop"))
+      ) {
+        close();
+      }
+    });
+    document.querySelectorAll("[data-comment-action]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const mode = btn.dataset.commentAction || "";
+        if (!mode) return;
+        const details = btn.closest("details");
+        if (details) details.open = false;
+        open(mode, btn.dataset);
+      });
+    });
+    if (modal.dataset.commentReopen === "1") {
+      const mode = modal.dataset.commentReopenMode || "reply";
+      const dataset = {
+        commentParentId: modal.dataset.commentReopenParent || "",
+        commentEmail: modal.dataset.commentReopenNote || "",
+      };
+      open(mode, dataset);
+      const reopenEmail = modal.dataset.commentReopenEmail || "";
+      const reopenContent = modal.dataset.commentReopenContent || "";
+      if (emailInput && reopenEmail) emailInput.value = reopenEmail;
+      if (contentInput && reopenContent) contentInput.value = reopenContent;
+    }
+  };
+
   const initFormConfirm = () => {
     document.querySelectorAll("form[data-confirm-message]").forEach((form) => {
       form.addEventListener("submit", (event) => {
@@ -657,19 +953,35 @@
     });
   };
 
+  const initPaginationAutoSubmit = () => {
+    document.querySelectorAll(".pagination-form select").forEach((select) => {
+      select.addEventListener("change", () => {
+        const form = select.closest("form");
+        if (form) form.submit();
+      });
+    });
+  };
+
   const initFlashToast = () => {
-    if (!document.body.classList.contains("layout-app")) return;
+    const isApp = document.body.classList.contains("layout-app");
+    const isShare = document.body.classList.contains("layout-share");
+    if (!isApp && !isShare) return;
     const flashes = Array.from(document.querySelectorAll(".flash"));
     if (!flashes.length) return;
-    const stack = document.createElement("div");
-    stack.className = "toast-stack";
+    let stack = document.querySelector(".toast-stack");
+    if (!stack) {
+      stack = document.createElement("div");
+      stack.className = "toast-stack";
+      document.body.appendChild(stack);
+    }
     flashes.forEach((flash) => {
       const toast = flash.cloneNode(true);
       toast.classList.add("toast");
+      toast.classList.remove("report-flash");
+      toast.classList.remove("comment-flash");
       stack.appendChild(toast);
       flash.remove();
     });
-    document.body.appendChild(stack);
     setTimeout(() => {
       stack.querySelectorAll(".toast").forEach((toast) => {
         toast.classList.add("is-hidden");
@@ -1007,8 +1319,13 @@
   initBatchSelection();
   initUserModal();
   initBatchConfirm();
+  initReportModal();
+  initToggleSubmit();
   initFormConfirm();
+  initPaginationAutoSubmit();
   initFlashToast();
+  initCommentEditors();
+  initCommentModal();
   initScanProgress();
   try {
     initMarkdown();
