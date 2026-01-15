@@ -992,6 +992,295 @@
     }, 4200);
   };
 
+  const initImageViewer = () => {
+    if (!document.body.classList.contains("layout-share")) return;
+
+    const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+    const getImageSrc = (img) =>
+      img.getAttribute("data-src") || img.currentSrc || img.src || "";
+
+    const collectImages = () =>
+      Array.from(
+        document.querySelectorAll(".markdown-body img, .comment-content img"),
+      ).filter((img) => !img.closest(".image-viewer"));
+
+    let viewer = document.querySelector(".image-viewer");
+    if (!viewer) {
+      viewer = document.createElement("div");
+      viewer.className = "image-viewer";
+      viewer.hidden = true;
+      viewer.innerHTML = `
+        <div class="image-viewer-backdrop" data-viewer-close></div>
+        <div class="image-viewer-ui">
+          <div class="image-viewer-count" data-viewer-count></div>
+          <div class="image-viewer-actions">
+            <button class="image-viewer-btn" type="button" data-viewer-zoom-out aria-label="缩小">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M6 12h12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+            </button>
+            <span class="image-viewer-zoom" data-viewer-zoom>100%</span>
+            <button class="image-viewer-btn" type="button" data-viewer-zoom-in aria-label="放大">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 6v12M6 12h12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+            </button>
+            <a class="image-viewer-btn" data-viewer-download download>下载</a>
+            <button class="image-viewer-btn" type="button" data-viewer-close>关闭</button>
+          </div>
+          <div class="image-viewer-stage" data-viewer-stage>
+            <img class="image-viewer-img" data-viewer-img alt="">
+            <button class="image-viewer-nav prev" type="button" data-viewer-prev aria-label="上一张">‹</button>
+            <button class="image-viewer-nav next" type="button" data-viewer-next aria-label="下一张">›</button>
+          </div>
+          <div class="image-viewer-thumbs" data-viewer-thumbs></div>
+        </div>
+      `;
+      document.body.appendChild(viewer);
+    }
+
+    const stage = viewer.querySelector("[data-viewer-stage]");
+    const image = viewer.querySelector("[data-viewer-img]");
+    const zoomOut = viewer.querySelector("[data-viewer-zoom-out]");
+    const zoomIn = viewer.querySelector("[data-viewer-zoom-in]");
+    const zoomLabel = viewer.querySelector("[data-viewer-zoom]");
+    const download = viewer.querySelector("[data-viewer-download]");
+    const prevBtn = viewer.querySelector("[data-viewer-prev]");
+    const nextBtn = viewer.querySelector("[data-viewer-next]");
+    const thumbs = viewer.querySelector("[data-viewer-thumbs]");
+    const count = viewer.querySelector("[data-viewer-count]");
+
+    if (image) {
+      image.setAttribute("draggable", "false");
+    }
+    if (thumbs) {
+      thumbs.addEventListener("click", (event) => event.stopPropagation());
+      thumbs.addEventListener("pointerdown", (event) => event.stopPropagation());
+    }
+
+    let items = [];
+    let index = 0;
+    let scale = 1;
+    let translateX = 0;
+    let translateY = 0;
+    let isDragging = false;
+    let dragMoved = false;
+    let suppressClickUntil = 0;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let dragOriginX = 0;
+    let dragOriginY = 0;
+
+    const updateZoomLabel = () => {
+      if (zoomLabel) zoomLabel.textContent = `${Math.round(scale * 100)}%`;
+    };
+
+    const applyTransform = () => {
+      if (!image) return;
+      image.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+      updateZoomLabel();
+    };
+
+    const clampTranslation = () => {
+      if (!stage || !image) return;
+      const stageRect = stage.getBoundingClientRect();
+      const imgRect = image.getBoundingClientRect();
+      const baseWidth = imgRect.width / Math.max(scale, 0.01);
+      const baseHeight = imgRect.height / Math.max(scale, 0.01);
+      const scaledWidth = baseWidth * scale;
+      const scaledHeight = baseHeight * scale;
+      const maxX = Math.max(0, (scaledWidth - stageRect.width) / 2);
+      const maxY = Math.max(0, (scaledHeight - stageRect.height) / 2);
+      translateX = clamp(translateX, -maxX, maxX);
+      translateY = clamp(translateY, -maxY, maxY);
+    };
+
+    const setScale = (nextScale) => {
+      scale = clamp(nextScale, 0.5, 3);
+      applyTransform();
+      requestAnimationFrame(() => {
+        clampTranslation();
+        applyTransform();
+      });
+    };
+
+    const resetZoom = () => {
+      scale = 1;
+      translateX = 0;
+      translateY = 0;
+      applyTransform();
+    };
+
+    const updateThumbs = () => {
+      if (!thumbs) return;
+      thumbs.innerHTML = "";
+      items.forEach((item, idx) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = `image-viewer-thumb${idx === index ? " is-active" : ""}`;
+        const img = document.createElement("img");
+        img.src = getImageSrc(item);
+        img.alt = item.alt || "";
+        btn.appendChild(img);
+        btn.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setIndex(idx);
+        });
+        thumbs.appendChild(btn);
+      });
+      const active = thumbs.querySelector(".image-viewer-thumb.is-active");
+      if (active && active.scrollIntoView) {
+        active.scrollIntoView({block: "nearest", inline: "center"});
+      }
+    };
+
+    const updateNav = () => {
+      const disabled = items.length <= 1;
+      if (prevBtn) prevBtn.disabled = disabled;
+      if (nextBtn) nextBtn.disabled = disabled;
+    };
+
+    const updateView = () => {
+      if (!image || !items.length) return;
+      const item = items[index];
+      const src = getImageSrc(item);
+      image.src = src;
+      image.alt = item.alt || "";
+      if (download) download.href = src;
+      if (count) count.textContent = `${index + 1} / ${items.length}`;
+      updateNav();
+      updateThumbs();
+      image.onload = () => {
+        resetZoom();
+      };
+      resetZoom();
+    };
+
+    const setIndex = (nextIndex) => {
+      if (!items.length) return;
+      index = (nextIndex + items.length) % items.length;
+      updateView();
+    };
+
+    const openViewer = (startIndex) => {
+      items = collectImages();
+      if (!items.length) return;
+      index = clamp(startIndex, 0, items.length - 1);
+      viewer.hidden = false;
+      document.body.classList.add("image-viewer-open");
+      updateView();
+    };
+
+    const closeViewer = () => {
+      viewer.hidden = true;
+      document.body.classList.remove("image-viewer-open");
+    };
+
+    document.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!target) return;
+      const img = target.closest("img");
+      if (!img) return;
+      if (img.closest(".image-viewer")) return;
+      if (!img.matches(".markdown-body img, .comment-content img")) return;
+      const list = collectImages();
+      const startIndex = list.indexOf(img);
+      if (startIndex < 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      openViewer(startIndex);
+    });
+
+    viewer.addEventListener("click", (event) => {
+      if (Date.now() < suppressClickUntil) return;
+      const target = event.target;
+      if (!target) return;
+      if (target.closest("[data-viewer-close]")) {
+        closeViewer();
+        return;
+      }
+      if (target.closest(".image-viewer-actions")) return;
+      if (target.closest(".image-viewer-count")) return;
+      if (target.closest(".image-viewer-nav")) return;
+      if (target.closest(".image-viewer-img")) return;
+      if (target.closest(".image-viewer-thumb")) return;
+      if (target.closest(".image-viewer-thumbs")) return;
+      closeViewer();
+    });
+
+    if (prevBtn) prevBtn.addEventListener("click", () => setIndex(index - 1));
+    if (nextBtn) nextBtn.addEventListener("click", () => setIndex(index + 1));
+    if (zoomIn) zoomIn.addEventListener("click", () => setScale(scale + 0.25));
+    if (zoomOut) zoomOut.addEventListener("click", () => setScale(scale - 0.25));
+
+    const startDrag = (event) => {
+      if (!stage || scale <= 1) return;
+      const target = event.target;
+      if (target && target.closest(".image-viewer-nav")) return;
+      if (target && target.closest(".image-viewer-actions")) return;
+      if (event.button !== undefined && event.button !== 0) return;
+      isDragging = true;
+      dragMoved = false;
+      dragStartX = event.clientX;
+      dragStartY = event.clientY;
+      dragOriginX = translateX;
+      dragOriginY = translateY;
+      stage.classList.add("is-dragging");
+      if (stage.setPointerCapture) {
+        stage.setPointerCapture(event.pointerId);
+      }
+      event.preventDefault();
+    };
+
+    const onDrag = (event) => {
+      if (!isDragging) return;
+      const deltaX = event.clientX - dragStartX;
+      const deltaY = event.clientY - dragStartY;
+      if (!dragMoved && (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3)) {
+        dragMoved = true;
+      }
+      translateX = dragOriginX + deltaX;
+      translateY = dragOriginY + deltaY;
+      clampTranslation();
+      applyTransform();
+    };
+
+    const endDrag = (event) => {
+      if (!isDragging) return;
+      isDragging = false;
+      if (stage) stage.classList.remove("is-dragging");
+      if (stage && stage.releasePointerCapture) {
+        stage.releasePointerCapture(event.pointerId);
+      }
+      if (dragMoved) {
+        suppressClickUntil = Date.now() + 320;
+      }
+    };
+
+    if (stage) {
+      stage.addEventListener("pointerdown", startDrag);
+    }
+    window.addEventListener("pointermove", onDrag);
+    window.addEventListener("pointerup", endDrag);
+    window.addEventListener("pointercancel", endDrag);
+
+    document.addEventListener("keydown", (event) => {
+      if (viewer.hidden) return;
+      if (event.key === "Escape") {
+        closeViewer();
+      } else if (event.key === "ArrowLeft") {
+        setIndex(index - 1);
+      } else if (event.key === "ArrowRight") {
+        setIndex(index + 1);
+      } else if (event.key === "+" || event.key === "=") {
+        setScale(scale + 0.25);
+      } else if (event.key === "-" || event.key === "_") {
+        setScale(scale - 0.25);
+      }
+    });
+  };
+
   const initScanProgress = () => {
     const form = document.querySelector("[data-scan-form]");
     const wrapper = document.querySelector("[data-scan-progress]");
@@ -1337,6 +1626,7 @@
   } catch (err) {
     console.error(err);
   }
+  initImageViewer();
   initShareSidebarTabs();
   initShareDrawer();
   initAppDrawer();
