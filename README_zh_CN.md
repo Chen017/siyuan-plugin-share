@@ -155,4 +155,6 @@
 - 🏅 贡献列表：  
 
   [Contributors List](https://github.com/b8l8u8e8/siyuan-plugin-share/graphs/contributors)
-
+  
+- 💖 赞助列表：  
+[Sponsor List](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/sponsor-list.md)

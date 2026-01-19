@@ -162,3 +162,5 @@ Your support motivates me to **continue maintaining and improving** the plugin.
 
   [Contributors List](https://github.com/b8l8u8e8/siyuan-plugin-share/graphs/contributors)
 
+- 💖 Sponsor List:  
+  [Sponsor List](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/sponsor-list.md)
