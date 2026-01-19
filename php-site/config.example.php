@@ -2,7 +2,7 @@
 return [
     'app_name' => '思源笔记分享',
     // Site version shown in dashboard header, e.g. "0.2.2"
-    'site_version' => '0.2.5',
+    'site_version' => '0.2.6',
     'allow_registration' => true,
     'default_storage_limit_mb' => 1024,
     // Session lifetime (days)
