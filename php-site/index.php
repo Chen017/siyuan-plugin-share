@@ -2,16 +2,23 @@
 declare(strict_types=1);
 
 $exampleVersion = null;
+$exampleCentralStatsUrl = null;
 if (file_exists(__DIR__ . '/config.example.php')) {
     $exampleConfig = require __DIR__ . '/config.example.php';
-    if (is_array($exampleConfig) && array_key_exists('site_version', $exampleConfig)) {
-        $exampleVersion = trim((string)($exampleConfig['site_version'] ?? ''));
+    if (is_array($exampleConfig)) {
+        if (array_key_exists('site_version', $exampleConfig)) {
+            $exampleVersion = trim((string)($exampleConfig['site_version'] ?? ''));
+        }
+        if (array_key_exists('central_stats_url', $exampleConfig)) {
+            $exampleCentralStatsUrl = trim((string)($exampleConfig['central_stats_url'] ?? ''));
+        }
     }
 }
 
 $config = [
     'app_name' => '思源笔记分享',
     'site_version' => '',
+    'central_stats_url' => '',
     'db_path' => __DIR__ . '/storage/app.db',
     'uploads_dir' => __DIR__ . '/uploads',
     'allow_registration' => true,
@@ -44,6 +51,9 @@ if (file_exists(__DIR__ . '/config.php')) {
 }
 if ($exampleVersion !== null) {
     $config['site_version'] = $exampleVersion;
+}
+if ($exampleCentralStatsUrl !== null) {
+    $config['central_stats_url'] = $exampleCentralStatsUrl;
 }
 
 $sessionDays = (int)($config['session_lifetime_days'] ?? 30);
@@ -300,6 +310,15 @@ function migrate(PDO $pdo): void {
     );');
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_share_reports_share ON share_reports (share_id, created_at)');
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_share_reports_handled ON share_reports (handled_at)');
+
+    $pdo->exec('CREATE TABLE IF NOT EXISTS instance_heartbeats (
+        instance_id TEXT PRIMARY KEY,
+        first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        version TEXT,
+        ip TEXT
+    );');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_instance_heartbeats_seen ON instance_heartbeats (last_seen)');
 
     $pdo->exec('CREATE TABLE IF NOT EXISTS recycled_share_ids (
         share_id INTEGER PRIMARY KEY,
@@ -946,7 +965,7 @@ function render_share_stats(array $share, string $extraHtml = ''): string {
     return $html;
 }
 
-function format_bytes(int $bytes): string {
+function format_bytes(float $bytes): string {
     if ($bytes <= 0) {
         return '0 B';
     }
@@ -1060,6 +1079,9 @@ function render_page(string $title, string $content, ?array $user = null, string
     $layoutClass = 'layout-' . preg_replace('/[^a-z0-9_-]+/i', '', $layout);
     $includeMarkdown = !empty($options['markdown']);
     $navKey = (string)($options['nav'] ?? '');
+    if ($user && $layout !== 'auth' && $layout !== 'share') {
+        maybe_send_instance_heartbeat();
+    }
     echo "<!doctype html>";
     echo "<html lang='zh-CN'>";
     echo "<head>";
@@ -1103,6 +1125,7 @@ function render_page(string $title, string $content, ?array $user = null, string
             $navItems = [
                 ['key' => 'dashboard', 'label' => '控制台', 'href' => $base . '/dashboard'],
                 ['key' => 'account', 'label' => '账号设置', 'href' => $base . '/account'],
+                ['key' => 'admin-home', 'label' => '数据统计', 'href' => $base . '/admin-home'],
                 ['key' => 'admin-settings', 'label' => '站点设置', 'href' => $base . '/admin#settings'],
                 ['key' => 'admin-announcements', 'label' => '公告管理', 'href' => $base . '/admin#announcements'],
                 ['key' => 'admin-reports', 'label' => '举报管理', 'href' => $base . '/admin#reports', 'badge' => $reportBadge],
@@ -1407,6 +1430,42 @@ function http_get_json(string $url): ?array {
     return null;
 }
 
+function http_post_json(string $url, array $payload): ?array {
+    $context = stream_context_create([
+        'http' => [
+            'method' => 'POST',
+            'timeout' => 2,
+            'header' => "User-Agent: SiyuanShareAccessStats\r\nContent-Type: application/json\r\n",
+            'content' => json_encode($payload, JSON_UNESCAPED_UNICODE),
+        ],
+    ]);
+    $raw = @file_get_contents($url, false, $context);
+    if ($raw === false || $raw === '') {
+        return null;
+    }
+    $json = json_decode($raw, true);
+    if (is_array($json)) {
+        return $json;
+    }
+    $converted = null;
+    if (function_exists('mb_convert_encoding')) {
+        $converted = @mb_convert_encoding($raw, 'UTF-8', 'UTF-8,GBK,GB2312,GB18030');
+    }
+    if ($converted === null && function_exists('iconv')) {
+        $converted = @iconv('GBK', 'UTF-8//IGNORE', $raw);
+        if ($converted === false || $converted === '') {
+            $converted = @iconv('GB18030', 'UTF-8//IGNORE', $raw);
+        }
+    }
+    if ($converted) {
+        $json = json_decode($converted, true);
+        if (is_array($json)) {
+            return $json;
+        }
+    }
+    return null;
+}
+
 function min_chunk_size_bytes(): int {
     global $config;
     $kb = (int)($config['min_chunk_size_kb'] ?? 256);
@@ -1437,6 +1496,48 @@ function chunk_size_limits(): array {
 function site_version(): string {
     global $config;
     return trim((string)($config['site_version'] ?? ''));
+}
+
+function central_stats_url(): string {
+    global $config;
+    $raw = trim((string)($config['central_stats_url'] ?? ''));
+    return rtrim($raw, '/');
+}
+
+function get_instance_id(): string {
+    try {
+        $existing = trim((string)get_setting('instance_id', ''));
+        if ($existing !== '') {
+            return $existing;
+        }
+        $generated = bin2hex(random_bytes(16));
+        set_setting('instance_id', $generated);
+        return $generated;
+    } catch (Throwable $e) {
+        return bin2hex(random_bytes(16));
+    }
+}
+
+function maybe_send_instance_heartbeat(): void {
+    $base = central_stats_url();
+    if ($base === '') {
+        return;
+    }
+    $interval = 3600;
+    $lastAttempt = (int)get_setting('instance_heartbeat_attempt', '0');
+    if ($lastAttempt > 0 && (time() - $lastAttempt) < $interval) {
+        return;
+    }
+    set_setting('instance_heartbeat_attempt', (string)time());
+    $payload = [
+        'instance_id' => get_instance_id(),
+        'version' => site_version(),
+        'timestamp' => time(),
+    ];
+    $resp = http_post_json($base . '/api/instances/heartbeat', $payload);
+    if (is_array($resp) && (int)($resp['code'] ?? 1) === 0) {
+        set_setting('instance_heartbeat_at', (string)time());
+    }
 }
 
 function fetch_latest_release_info(): ?array {
@@ -1523,6 +1624,7 @@ function fetch_latest_release_info(): ?array {
 
 function site_update_info(): ?array {
     $current = site_version();
+    maybe_send_instance_heartbeat();
     $latest = fetch_latest_release_info();
     if (!$latest || empty($latest['has_php_site']) || ($latest['version'] ?? '') === '') {
         return null;
@@ -1544,6 +1646,124 @@ function site_update_info(): ?array {
         'version' => $latestVersion,
         'url' => (string)($latest['url'] ?? ''),
     ];
+}
+
+function fetch_central_instance_stats(): ?array {
+    $base = central_stats_url();
+    if ($base === '') {
+        return null;
+    }
+    $cached = null;
+    $cachedRaw = (string)get_setting('central_stats_cache', '');
+    if ($cachedRaw !== '') {
+        $cached = json_decode($cachedRaw, true);
+        if (!is_array($cached)) {
+            $cached = null;
+        }
+    }
+    $resp = http_get_json($base . '/api/instances/stats');
+    if (!is_array($resp) || (int)($resp['code'] ?? 1) !== 0) {
+        return $cached;
+    }
+    $data = $resp['data'] ?? null;
+    if (!is_array($data)) {
+        return $cached;
+    }
+    $data['fetched_at'] = now();
+    set_setting('central_stats_cache', json_encode($data, JSON_UNESCAPED_UNICODE));
+    return $data;
+}
+
+function build_date_range(int $days): array {
+    $days = max(1, $days);
+    $dates = [];
+    for ($i = $days - 1; $i >= 0; $i--) {
+        $dates[] = date('Y-m-d', strtotime("-{$i} days"));
+    }
+    return $dates;
+}
+
+function fill_series(array $dates, array $rows, string $field): array {
+    $map = [];
+    foreach ($rows as $row) {
+        $day = (string)($row['day'] ?? '');
+        if ($day === '') {
+            continue;
+        }
+        $map[$day] = (float)($row[$field] ?? 0);
+    }
+    $series = [];
+    foreach ($dates as $day) {
+        $series[] = (float)($map[$day] ?? 0);
+    }
+    return $series;
+}
+
+function build_chart_paths(array $values, int $width, int $height, int $padding, float $maxValue): array {
+    $count = count($values);
+    if ($count === 0) {
+        return ['line' => '', 'area' => ''];
+    }
+    $step = $count > 1 ? ($width - $padding * 2) / ($count - 1) : 0;
+    $points = [];
+    for ($i = 0; $i < $count; $i++) {
+        $val = (float)$values[$i];
+        $ratio = $maxValue > 0 ? ($val / $maxValue) : 0;
+        $x = $padding + ($step * $i);
+        $y = $height - $padding - ($ratio * ($height - $padding * 2));
+        $points[] = [$x, $y];
+    }
+    $line = 'M ' . implode(' L ', array_map(fn($pt) => round($pt[0], 2) . ' ' . round($pt[1], 2), $points));
+    $areaPoints = $points;
+    $areaPoints[] = [$padding + ($step * ($count - 1)), $height - $padding];
+    $areaPoints[] = [$padding, $height - $padding];
+    $area = 'M ' . implode(' L ', array_map(fn($pt) => round($pt[0], 2) . ' ' . round($pt[1], 2), $areaPoints)) . ' Z';
+    return ['line' => $line, 'area' => $area];
+}
+
+function render_chart_svg(array $seriesList, int $width = 360, int $height = 120): string {
+    $maxValue = 0;
+    foreach ($seriesList as $series) {
+        foreach ($series['values'] as $value) {
+            $maxValue = max($maxValue, (float)$value);
+        }
+    }
+    if ($maxValue <= 0) {
+        $maxValue = 1;
+    }
+    $padding = 12;
+    $gridLines = [];
+    foreach ([0.33, 0.66] as $ratio) {
+        $y = $height - $padding - ($ratio * ($height - $padding * 2));
+        $gridLines[] = '<line x1="' . $padding . '" y1="' . round($y, 2) . '" x2="' . ($width - $padding) . '" y2="' . round($y, 2) . '"></line>';
+    }
+    $paths = '';
+    foreach ($seriesList as $series) {
+        $pathsData = build_chart_paths($series['values'], $width, $height, $padding, $maxValue);
+        $areaClass = $series['area_class'] ?? '';
+        if ($areaClass !== '') {
+            $paths .= '<path class="' . $areaClass . '" d="' . $pathsData['area'] . '"></path>';
+        }
+    }
+    foreach ($seriesList as $series) {
+        $lineClass = $series['line_class'] ?? '';
+        $pathsData = build_chart_paths($series['values'], $width, $height, $padding, $maxValue);
+        $paths .= '<path class="' . $lineClass . '" d="' . $pathsData['line'] . '"></path>';
+    }
+    return '<svg class="admin-chart" viewBox="0 0 ' . $width . ' ' . $height . '" preserveAspectRatio="none">'
+        . '<g class="admin-chart__grid">' . implode('', $gridLines) . '</g>'
+        . $paths
+        . '</svg>';
+}
+
+function render_kpi_card(string $label, string $value, string $meta, string $iconSvg, string $extraHtml = ''): string {
+    return '<div class="admin-kpi">'
+        . '<div class="admin-kpi__head"><div><div class="admin-kpi__label">' . $label . '</div>'
+        . '<div class="admin-kpi__value">' . $value . '</div></div>'
+        . '<div class="admin-kpi__icon">' . $iconSvg . '</div></div>'
+        . '<div class="admin-kpi__meta">' . $meta . '</div>'
+        . $extraHtml
+        . '</div>';
 }
 
 function build_topbar_title(string $title, ?array $user): string {
@@ -2789,6 +3009,22 @@ function handle_share_comment_submit(string $slug): void {
         flash('comment_error', '评论内容过长');
         redirect($redirectPath);
     }
+    $bannedWords = get_banned_words();
+    if (!empty($bannedWords)) {
+        $hit = find_banned_word($content, $bannedWords);
+        if ($hit) {
+            $state = [
+                'mode' => $parentId > 0 ? 'reply' : 'comment',
+                'email' => $email,
+                'content' => $content,
+                'parent_id' => $parentId > 0 ? $parentId : 0,
+                'note' => $parentEmail !== '' ? mask_email($parentEmail) : '',
+            ];
+            flash('comment_form', json_encode($state, JSON_UNESCAPED_UNICODE));
+            flash('comment_error', '触发违禁词：' . $hit['word']);
+            redirect($redirectPath);
+        }
+    }
     $owner = get_user_by_id((int)$share['user_id']);
     if (!$owner) {
         flash('comment_error', '分享所属用户不存在');
@@ -2977,6 +3213,14 @@ function handle_share_comment_edit(string $slug): void {
     if ($contentLength > 2000) {
         flash('comment_error', '评论内容过长');
         redirect($redirectPath);
+    }
+    $bannedWords = get_banned_words();
+    if (!empty($bannedWords)) {
+        $hit = find_banned_word($content, $bannedWords);
+        if ($hit) {
+            flash('comment_error', '触发违禁词：' . $hit['word']);
+            redirect($redirectPath);
+        }
     }
     $pdo = db();
     $stmt = $pdo->prepare('SELECT * FROM share_comments WHERE id = :id AND share_id = :share_id');
@@ -3457,6 +3701,68 @@ function render_announcement_modal(array $items): string {
     return $html;
 }
 
+function build_scan_item_link(array $meta): string {
+    $itemType = (string)($meta['item_type'] ?? 'doc');
+    $slug = (string)($meta['slug'] ?? '');
+    if ($itemType === 'comment') {
+        $commentId = (int)($meta['comment_id'] ?? 0);
+        $commentEmail = (string)($meta['comment_email'] ?? '');
+        $commentCreatedAt = (string)($meta['comment_created_at'] ?? '');
+        $commentContent = (string)($meta['comment_content'] ?? '');
+        $shareTitle = (string)($meta['share_title'] ?? '');
+        $label = $commentId > 0 ? '评论#' . $commentId : '评论';
+        $attrs = ' data-admin-comment-edit="1"'
+            . ' data-admin-comment-id="' . $commentId . '"'
+            . ' data-admin-comment-email="' . htmlspecialchars($commentEmail, ENT_QUOTES) . '"'
+            . ' data-admin-comment-created="' . htmlspecialchars(format_share_datetime($commentCreatedAt), ENT_QUOTES) . '"'
+            . ' data-admin-comment-share="' . htmlspecialchars($shareTitle, ENT_QUOTES) . '"'
+            . ' data-admin-comment-content="' . htmlspecialchars($commentContent, ENT_QUOTES) . '"';
+        return '<button type="button" class="scan-comment-link"' . $attrs . '>' . htmlspecialchars($label) . '</button>';
+    }
+    $docId = (string)($meta['doc_id'] ?? '');
+    $docTitle = (string)($meta['doc_title'] ?? '');
+    $docLabel = trim($docTitle) !== '' ? $docTitle : $docId;
+    $docLabel = $docLabel !== '' ? '文档：' . $docLabel : '文档';
+    $docUrl = '';
+    if ($slug !== '') {
+        $docUrl = $docId !== '' ? base_url() . build_share_redirect_path($slug, $docId, '') : share_url($slug);
+    }
+    if ($docUrl !== '') {
+        return '<a class="scan-comment-link" href="' . htmlspecialchars($docUrl) . '" target="_blank">' . htmlspecialchars($docLabel) . '</a>';
+    }
+    return htmlspecialchars($docLabel);
+}
+
+function build_scan_log_entry(array $meta, ?array $hit): string {
+    $prefix = $hit ? '命中违禁词 [' . htmlspecialchars((string)$hit['word']) . ']：' : '未命中：';
+    $parts = [];
+    $shareTitle = trim((string)($meta['share_title'] ?? ''));
+    if ($shareTitle !== '') {
+        $parts[] = htmlspecialchars($shareTitle);
+    }
+    $parts[] = build_scan_item_link($meta);
+    $username = trim((string)($meta['username'] ?? ''));
+    if ($username !== '') {
+        $parts[] = htmlspecialchars($username);
+    }
+    if ((string)($meta['item_type'] ?? '') === 'comment') {
+        $commentEmail = trim((string)($meta['comment_email'] ?? ''));
+        if ($commentEmail !== '') {
+            $parts[] = '邮箱：' . htmlspecialchars($commentEmail);
+        }
+        $commentCreatedAt = (string)($meta['comment_created_at'] ?? '');
+        if ($commentCreatedAt !== '') {
+            $parts[] = '时间：' . htmlspecialchars(format_share_datetime($commentCreatedAt));
+        }
+    } else {
+        $hpath = trim((string)($meta['hpath'] ?? ''));
+        if ($hpath !== '') {
+            $parts[] = '路径：' . htmlspecialchars($hpath);
+        }
+    }
+    return $prefix . implode(' / ', $parts);
+}
+
 function scan_banned_shares(array $words): array {
     if (empty($words)) {
         return [];
@@ -3481,6 +3787,7 @@ function scan_banned_shares(array $words): array {
             continue;
         }
         $results[] = [
+            'item_type' => 'doc',
             'share_id' => (int)$row['share_id'],
             'share_title' => $row['share_title'],
             'share_type' => $row['type'],
@@ -3494,60 +3801,182 @@ function scan_banned_shares(array $words): array {
             'snippet' => extract_snippet($markdown, $hit['word']),
         ];
     }
+    $commentSql = 'SELECT share_comments.id AS comment_id, share_comments.email AS comment_email, share_comments.content AS comment_content,
+        share_comments.created_at AS comment_created_at, shares.id AS share_id, shares.title AS share_title, shares.type, shares.slug,
+        shares.user_id, users.username
+        FROM share_comments
+        JOIN shares ON share_comments.share_id = shares.id
+        JOIN users ON shares.user_id = users.id
+        WHERE shares.deleted_at IS NULL
+        ORDER BY share_comments.created_at DESC, share_comments.id DESC';
+    $commentStmt = $pdo->query($commentSql);
+    foreach ($commentStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $commentContent = (string)($row['comment_content'] ?? '');
+        if ($commentContent === '') {
+            continue;
+        }
+        $hit = find_banned_word($commentContent, $words);
+        if (!$hit) {
+            continue;
+        }
+        $results[] = [
+            'item_type' => 'comment',
+            'share_id' => (int)$row['share_id'],
+            'share_title' => $row['share_title'],
+            'share_type' => $row['type'],
+            'slug' => $row['slug'],
+            'user_id' => (int)$row['user_id'],
+            'username' => $row['username'],
+            'doc_id' => null,
+            'doc_title' => null,
+            'hpath' => null,
+            'comment_id' => (int)$row['comment_id'],
+            'comment_email' => $row['comment_email'],
+            'comment_created_at' => $row['comment_created_at'],
+            'comment_content' => $commentContent,
+            'word' => $hit['word'],
+            'snippet' => extract_snippet($commentContent, $hit['word']),
+        ];
+    }
     return $results;
 }
 
-function count_scannable_docs(): int {
+function count_scannable_share_docs(): int {
     $pdo = db();
     $stmt = $pdo->query('SELECT COUNT(*) FROM share_docs JOIN shares ON share_docs.share_id = shares.id WHERE shares.deleted_at IS NULL');
     return $stmt ? (int)$stmt->fetchColumn() : 0;
+}
+
+function count_scannable_comments(): int {
+    $pdo = db();
+    $stmt = $pdo->query('SELECT COUNT(*) FROM share_comments JOIN shares ON share_comments.share_id = shares.id WHERE shares.deleted_at IS NULL');
+    return $stmt ? (int)$stmt->fetchColumn() : 0;
+}
+
+function count_scannable_docs(): int {
+    return count_scannable_share_docs() + count_scannable_comments();
 }
 
 function scan_banned_shares_batch(array $words, int $offset, int $limit): array {
     if (empty($words)) {
         return ['hits' => [], 'logs' => [], 'count' => 0];
     }
-    $pdo = db();
-    $sql = 'SELECT shares.id AS share_id, shares.title AS share_title, shares.type, shares.slug, shares.user_id,
-        users.username, share_docs.doc_id, share_docs.title AS doc_title, share_docs.hpath, share_docs.markdown
-        FROM share_docs
-        JOIN shares ON share_docs.share_id = shares.id
-        JOIN users ON shares.user_id = users.id
-        WHERE shares.deleted_at IS NULL
-        ORDER BY share_docs.id ASC
-        LIMIT :limit OFFSET :offset';
-    $stmt = $pdo->prepare($sql);
-    $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-    $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
-    $stmt->execute();
-    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
     $hits = [];
     $logs = [];
-    foreach ($rows as $row) {
-        $markdown = (string)($row['markdown'] ?? '');
-        $docTitle = (string)($row['doc_title'] ?? $row['doc_id'] ?? '');
-        $label = trim((string)$row['share_title']) . ' / ' . $docTitle . ' / ' . (string)($row['username'] ?? '');
-        $hit = $markdown !== '' ? find_banned_word($markdown, $words) : null;
-        if ($hit) {
-            $hits[] = [
-                'share_id' => (int)$row['share_id'],
+    $count = 0;
+    $docCount = count_scannable_share_docs();
+    $remaining = $limit;
+    $docOffset = $offset;
+    if ($docOffset < $docCount) {
+        $docLimit = min($remaining, $docCount - $docOffset);
+        $pdo = db();
+        $sql = 'SELECT shares.id AS share_id, shares.title AS share_title, shares.type, shares.slug, shares.user_id,
+            users.username, share_docs.doc_id, share_docs.title AS doc_title, share_docs.hpath, share_docs.markdown
+            FROM share_docs
+            JOIN shares ON share_docs.share_id = shares.id
+            JOIN users ON shares.user_id = users.id
+            WHERE shares.deleted_at IS NULL
+            ORDER BY share_docs.id ASC
+            LIMIT :limit OFFSET :offset';
+        $stmt = $pdo->prepare($sql);
+        $stmt->bindValue(':limit', $docLimit, PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $docOffset, PDO::PARAM_INT);
+        $stmt->execute();
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $count += count($rows);
+        foreach ($rows as $row) {
+            $markdown = (string)($row['markdown'] ?? '');
+            $meta = [
+                'item_type' => 'doc',
                 'share_title' => $row['share_title'],
-                'share_type' => $row['type'],
                 'slug' => $row['slug'],
-                'user_id' => (int)$row['user_id'],
-                'username' => $row['username'],
                 'doc_id' => $row['doc_id'],
                 'doc_title' => $row['doc_title'],
                 'hpath' => $row['hpath'],
-                'word' => $hit['word'],
-                'snippet' => extract_snippet($markdown, $hit['word']),
+                'username' => $row['username'],
             ];
-            $logs[] = '命中违禁词 [' . $hit['word'] . ']：' . $label;
-        } else {
-            $logs[] = '未命中：' . $label;
+            $hit = $markdown !== '' ? find_banned_word($markdown, $words) : null;
+            if ($hit) {
+                $hits[] = [
+                    'item_type' => 'doc',
+                    'share_id' => (int)$row['share_id'],
+                    'share_title' => $row['share_title'],
+                    'share_type' => $row['type'],
+                    'slug' => $row['slug'],
+                    'user_id' => (int)$row['user_id'],
+                    'username' => $row['username'],
+                    'doc_id' => $row['doc_id'],
+                    'doc_title' => $row['doc_title'],
+                    'hpath' => $row['hpath'],
+                    'word' => $hit['word'],
+                    'snippet' => extract_snippet($markdown, $hit['word']),
+                ];
+                $logs[] = build_scan_log_entry($meta, $hit);
+            } else {
+                $logs[] = build_scan_log_entry($meta, null);
+            }
+        }
+        $remaining -= count($rows);
+    }
+    if ($remaining > 0) {
+        $commentOffset = max(0, $offset - $docCount);
+        $pdo = $pdo ?? db();
+        $sql = 'SELECT share_comments.id AS comment_id, share_comments.email AS comment_email, share_comments.content AS comment_content,
+            share_comments.created_at AS comment_created_at, shares.id AS share_id, shares.title AS share_title, shares.type, shares.slug,
+            shares.user_id, users.username
+            FROM share_comments
+            JOIN shares ON share_comments.share_id = shares.id
+            JOIN users ON shares.user_id = users.id
+            WHERE shares.deleted_at IS NULL
+            ORDER BY share_comments.id ASC
+            LIMIT :limit OFFSET :offset';
+        $stmt = $pdo->prepare($sql);
+        $stmt->bindValue(':limit', $remaining, PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $commentOffset, PDO::PARAM_INT);
+        $stmt->execute();
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $count += count($rows);
+        foreach ($rows as $row) {
+            $commentContent = (string)($row['comment_content'] ?? '');
+            $commentId = (int)($row['comment_id'] ?? 0);
+            $commentEmail = trim((string)($row['comment_email'] ?? ''));
+            $meta = [
+                'item_type' => 'comment',
+                'share_title' => $row['share_title'],
+                'slug' => $row['slug'],
+                'username' => $row['username'],
+                'comment_id' => $commentId,
+                'comment_email' => $commentEmail,
+                'comment_created_at' => $row['comment_created_at'],
+                'comment_content' => $commentContent,
+            ];
+            $hit = $commentContent !== '' ? find_banned_word($commentContent, $words) : null;
+            if ($hit) {
+                $hits[] = [
+                    'item_type' => 'comment',
+                    'share_id' => (int)$row['share_id'],
+                    'share_title' => $row['share_title'],
+                    'share_type' => $row['type'],
+                    'slug' => $row['slug'],
+                    'user_id' => (int)$row['user_id'],
+                    'username' => $row['username'],
+                    'doc_id' => null,
+                    'doc_title' => null,
+                    'hpath' => null,
+                    'comment_id' => $commentId,
+                    'comment_email' => $commentEmail,
+                    'comment_created_at' => $row['comment_created_at'],
+                    'comment_content' => $commentContent,
+                    'word' => $hit['word'],
+                    'snippet' => extract_snippet($commentContent, $hit['word']),
+                ];
+                $logs[] = build_scan_log_entry($meta, $hit);
+            } else {
+                $logs[] = build_scan_log_entry($meta, null);
+            }
         }
     }
-    return ['hits' => $hits, 'logs' => $logs, 'count' => count($rows)];
+    return ['hits' => $hits, 'logs' => $logs, 'count' => $count];
 }
 
 function ensure_dir(string $path): void {
@@ -4021,6 +4450,58 @@ function recalculate_share_size(int $shareId): int {
         ':id' => $shareId,
     ]);
     return $total;
+}
+
+function handle_instance_heartbeat(): void {
+    if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+        api_response(200, ['ok' => true], '');
+    }
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        api_response(405, null, 'Method Not Allowed');
+    }
+    $payload = parse_json_body();
+    $instanceId = trim((string)($payload['instance_id'] ?? ''));
+    if ($instanceId === '') {
+        api_response(400, null, 'Missing instance_id');
+    }
+    $version = trim((string)($payload['version'] ?? ''));
+    $now = now();
+    $pdo = db();
+    $stmt = $pdo->prepare('INSERT INTO instance_heartbeats (instance_id, first_seen, last_seen, version, ip)
+        VALUES (:id, :first_seen, :last_seen, :version, :ip)
+        ON CONFLICT(instance_id) DO UPDATE SET last_seen = :last_seen, version = :version, ip = :ip');
+    $stmt->execute([
+        ':id' => $instanceId,
+        ':first_seen' => $now,
+        ':last_seen' => $now,
+        ':version' => $version,
+        ':ip' => get_client_ip(),
+    ]);
+    api_response(200, ['instance_id' => $instanceId]);
+}
+
+function handle_instance_stats(): void {
+    if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+        api_response(200, ['ok' => true], '');
+    }
+    if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
+        api_response(405, null, 'Method Not Allowed');
+    }
+    $pdo = db();
+    $total = (int)$pdo->query('SELECT COUNT(*) FROM instance_heartbeats')->fetchColumn();
+    $cutoff30 = date('Y-m-d H:i:s', strtotime('-30 days'));
+    $cutoff7 = date('Y-m-d H:i:s', strtotime('-7 days'));
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM instance_heartbeats WHERE last_seen >= :cutoff');
+    $stmt->execute([':cutoff' => $cutoff30]);
+    $active30 = (int)$stmt->fetchColumn();
+    $stmt->execute([':cutoff' => $cutoff7]);
+    $active7 = (int)$stmt->fetchColumn();
+    api_response(200, [
+        'total' => $total,
+        'active_30' => $active30,
+        'active_7' => $active7,
+        'updated_at' => now(),
+    ]);
 }
 
 function handle_api(string $path): void {
@@ -5666,15 +6147,16 @@ function route_share(string $slug, ?string $docId = null): void {
         $content = '<div class="share-shell share-shell--notebook">';
         $content .= $sidebar;
         $content .= '<div class="kb-main">';
-        $content .= '<div class="share-article">';
+        $content .= '<div class="share-article" data-share-view="preview">';
         $content .= '<div class="kb-header">';
         $content .= '<div class="kb-title-row">';
         $content .= '<h1 class="kb-title">' . $docTitle . '</h1>';
+        $content .= '<button class="button ghost share-view-toggle" type="button" data-share-toggle aria-pressed="false">源码</button>';
         $content .= '</div>';
         $content .= $shareMetaHtml;
         $content .= '</div>';
         $content .= '<div class="markdown-body" data-md-id="doc">' . render_markdown($markdown) . '</div>';
-        $content .= '<textarea class="markdown-source" data-md-id="doc">' . htmlspecialchars($markdown) . '</textarea>';
+        $content .= '<textarea class="markdown-source" data-md-id="doc" readonly spellcheck="false" aria-label="Markdown 源码">' . htmlspecialchars($markdown) . '</textarea>';
         $content .= $commentHtml;
         $content .= $reportModalHtml;
         $content .= '</div></div></div>';
@@ -5732,15 +6214,16 @@ function route_share(string $slug, ?string $docId = null): void {
             $content = '<div class="share-shell share-shell--notebook">';
             $content .= $sidebar;
             $content .= '<div class="kb-main">';
-            $content .= '<div class="share-article">';
+            $content .= '<div class="share-article" data-share-view="preview">';
             $content .= '<div class="kb-header">' . $breadcrumbsHtml;
             $content .= '<div class="kb-title-row">';
             $content .= '<h1 class="kb-title">' . $docTitle . '</h1>';
+            $content .= '<button class="button ghost share-view-toggle" type="button" data-share-toggle aria-pressed="false">源码</button>';
             $content .= '</div>';
             $content .= $shareMetaHtml;
             $content .= '</div>';
             $content .= '<div class="markdown-body" data-md-id="doc">' . render_markdown($markdown) . '</div>';
-            $content .= '<textarea class="markdown-source" data-md-id="doc">' . htmlspecialchars($markdown) . '</textarea>';
+            $content .= '<textarea class="markdown-source" data-md-id="doc" readonly spellcheck="false" aria-label="Markdown 源码">' . htmlspecialchars($markdown) . '</textarea>';
             $content .= $commentHtml;
             $content .= $reportModalHtml;
             $content .= '</div></div></div>';
@@ -5808,6 +6291,14 @@ if ($base && strpos($path, $base) === 0) {
     if ($path === '') {
         $path = '/';
     }
+}
+
+if ($path === '/api/instances/heartbeat') {
+    handle_instance_heartbeat();
+}
+
+if ($path === '/api/instances/stats') {
+    handle_instance_stats();
 }
 
 if (strpos($path, '/api/v1/') === 0) {
@@ -6918,7 +7409,7 @@ if ($path === '/dashboard') {
     $content .= '<div><label>访问统计</label><label class="checkbox stats-toggle"><input type="checkbox" name="access_enabled" value="1"' . ($accessEnabled ? ' checked' : '') . '> 开启</label></div>';
     $content .= '<div><label>保留天数</label><input class="input" type="number" name="access_retention_days" min="1" max="365" value="' . (int)$accessRetention . '"></div>';
     $content .= '</div>';
-    $content .= '<div class="muted stats-note">UV 按浏览器 Cookie 去重（按天），访问记录计入账号存储空间，默认保留最近 7 天（当前 ' . (int)$accessRetention . ' 天），可在此调整；存储不足会自动关闭并清空统计。</div>';
+    $content .= '<div class="muted stats-note">访客数(UV) 按浏览器 Cookie 去重（按天），访问记录计入账号存储空间，默认保留最近 7 天（当前 ' . (int)$accessRetention . ' 天），可在此调整；存储不足会自动关闭并清空统计。</div>';
     if ($storageFull) {
         $content .= '<div class="notice" style="margin-top:8px">存储空间已满，当前无法开启访问统计，请先清理空间。</div>';
     }
@@ -7108,12 +7599,310 @@ if ($path === '/dashboard') {
 
     if ($user['role'] === 'admin') {
         $content .= '<div class="card"><h2>管理员入口</h2>';
-        $content .= '<a class="button" href="' . base_path() . '/admin">进入后台</a>';
+        $content .= '<a class="button" href="' . base_path() . '/admin-home">进入后台</a>';
         $content .= '</div>';
     }
 
     $titleHtml = build_topbar_title('控制台', $user);
     render_page('控制台', $content, $user, '', ['layout' => 'app', 'nav' => 'dashboard', 'title_html' => $titleHtml]);
+}
+
+if ($path === '/admin-home') {
+    $admin = require_admin();
+    $pdo = db();
+    $totalUsers = (int)$pdo->query('SELECT COUNT(*) FROM users')->fetchColumn();
+    $disabledUsers = (int)$pdo->query('SELECT COUNT(*) FROM users WHERE disabled = 1')->fetchColumn();
+    $totalSharesAll = (int)$pdo->query('SELECT COUNT(*) FROM shares')->fetchColumn();
+    $totalSharesActive = (int)$pdo->query('SELECT COUNT(*) FROM shares WHERE deleted_at IS NULL')->fetchColumn();
+    $deletedShares = max(0, $totalSharesAll - $totalSharesActive);
+    $totalAccess = (int)$pdo->query('SELECT COUNT(*) FROM share_access_logs')->fetchColumn();
+    $totalUv = (int)$pdo->query('SELECT COUNT(DISTINCT visitor_id) FROM share_access_logs WHERE visitor_id IS NOT NULL AND visitor_id != ""')->fetchColumn();
+    $todayStart = date('Y-m-d 00:00:00');
+    $tomorrowStart = date('Y-m-d 00:00:00', strtotime('+1 day'));
+    $todayStmt = $pdo->prepare('SELECT COUNT(*) AS pv, COUNT(DISTINCT CASE WHEN visitor_id IS NULL OR visitor_id = "" THEN NULL ELSE visitor_id END) AS uv
+        FROM share_access_logs WHERE created_at >= :start AND created_at < :end');
+    $todayStmt->execute([':start' => $todayStart, ':end' => $tomorrowStart]);
+    $todayRow = $todayStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+    $todayPv = (int)($todayRow['pv'] ?? 0);
+    $todayUv = (int)($todayRow['uv'] ?? 0);
+    $activeStart30 = date('Y-m-d H:i:s', strtotime('-30 days'));
+    $activeStart7 = date('Y-m-d H:i:s', strtotime('-7 days'));
+    $activeStmt = $pdo->prepare('SELECT COUNT(DISTINCT user_id) FROM shares WHERE updated_at >= :start AND deleted_at IS NULL');
+    $activeStmt->execute([':start' => $activeStart30]);
+    $activeUsers30 = (int)$activeStmt->fetchColumn();
+    $activeStmt->execute([':start' => $activeStart7]);
+    $activeUsers7 = (int)$activeStmt->fetchColumn();
+    $shareBytes = (int)$pdo->query('SELECT COALESCE(SUM(size_bytes), 0) FROM shares WHERE deleted_at IS NULL')->fetchColumn();
+    $logBytes = (int)$pdo->query('SELECT COALESCE(SUM(size_bytes), 0) FROM share_access_logs')->fetchColumn();
+    $usedBytes = $shareBytes + $logBytes;
+    $defaultLimitBytes = default_storage_limit_bytes();
+    $limitStmt = $pdo->prepare('SELECT SUM(CASE WHEN storage_limit_bytes > 0 THEN storage_limit_bytes ELSE :default_limit END) AS total FROM users');
+    $limitStmt->execute([':default_limit' => $defaultLimitBytes]);
+    $totalLimitBytes = (int)($limitStmt->fetchColumn() ?: 0);
+    if ($totalUsers === 0) {
+        $totalLimitBytes = 0;
+    }
+    $remainingBytes = $totalLimitBytes > 0 ? max(0, $totalLimitBytes - $usedBytes) : 0;
+    $storagePercent = $totalLimitBytes > 0 ? min(100, round($usedBytes / max(1, $totalLimitBytes) * 100, 1)) : 0;
+    $commentTotal = (int)$pdo->query('SELECT COUNT(*) FROM share_comments')->fetchColumn();
+    $commentStmt = $pdo->prepare('SELECT COUNT(*) FROM share_comments WHERE created_at >= :start');
+    $commentStmt->execute([':start' => $activeStart7]);
+    $commentNew7 = (int)$commentStmt->fetchColumn();
+    $reportTotal = (int)$pdo->query('SELECT COUNT(*) FROM share_reports')->fetchColumn();
+    $reportPending = (int)$pdo->query('SELECT COUNT(*) FROM share_reports WHERE handled_at IS NULL OR handled_at = ""')->fetchColumn();
+
+    $range7 = build_date_range(7);
+    $range30 = build_date_range(30);
+    $range7Start = $range7[0] . ' 00:00:00';
+    $range30Start = $range30[0] . ' 00:00:00';
+
+    $accessDailySql = 'SELECT substr(created_at, 1, 10) AS day,
+        COUNT(*) AS pv,
+        COUNT(DISTINCT CASE WHEN visitor_id IS NULL OR visitor_id = "" THEN NULL ELSE visitor_id END) AS uv
+        FROM share_access_logs WHERE created_at >= :start GROUP BY day ORDER BY day';
+    $accessDailyStmt = $pdo->prepare($accessDailySql);
+    $accessDailyStmt->execute([':start' => $range7Start]);
+    $accessRows7 = $accessDailyStmt->fetchAll(PDO::FETCH_ASSOC);
+    $accessDailyStmt->execute([':start' => $range30Start]);
+    $accessRows30 = $accessDailyStmt->fetchAll(PDO::FETCH_ASSOC);
+    $pvSeries7 = fill_series($range7, $accessRows7, 'pv');
+    $uvSeries7 = fill_series($range7, $accessRows7, 'uv');
+    $pvSeries30 = fill_series($range30, $accessRows30, 'pv');
+    $uvSeries30 = fill_series($range30, $accessRows30, 'uv');
+
+    $shareDailySql = 'SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS total FROM shares WHERE created_at >= :start GROUP BY day ORDER BY day';
+    $shareDailyStmt = $pdo->prepare($shareDailySql);
+    $shareDailyStmt->execute([':start' => $range7Start]);
+    $shareRows7 = $shareDailyStmt->fetchAll(PDO::FETCH_ASSOC);
+    $shareDailyStmt->execute([':start' => $range30Start]);
+    $shareRows30 = $shareDailyStmt->fetchAll(PDO::FETCH_ASSOC);
+    $shareSeries7 = fill_series($range7, $shareRows7, 'total');
+    $shareSeries30 = fill_series($range30, $shareRows30, 'total');
+
+    $userDailySql = 'SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS total FROM users WHERE created_at >= :start GROUP BY day ORDER BY day';
+    $userDailyStmt = $pdo->prepare($userDailySql);
+    $userDailyStmt->execute([':start' => $range7Start]);
+    $userRows7 = $userDailyStmt->fetchAll(PDO::FETCH_ASSOC);
+    $userDailyStmt->execute([':start' => $range30Start]);
+    $userRows30 = $userDailyStmt->fetchAll(PDO::FETCH_ASSOC);
+    $userSeries7 = fill_series($range7, $userRows7, 'total');
+    $userSeries30 = fill_series($range30, $userRows30, 'total');
+
+    $shareBytesSql = 'SELECT substr(created_at, 1, 10) AS day, COALESCE(SUM(size_bytes), 0) AS total
+        FROM shares WHERE created_at >= :start AND deleted_at IS NULL GROUP BY day ORDER BY day';
+    $logBytesSql = 'SELECT substr(created_at, 1, 10) AS day, COALESCE(SUM(size_bytes), 0) AS total
+        FROM share_access_logs WHERE created_at >= :start GROUP BY day ORDER BY day';
+    $shareBytesStmt = $pdo->prepare($shareBytesSql);
+    $logBytesStmt = $pdo->prepare($logBytesSql);
+    $shareBytesStmt->execute([':start' => $range7Start]);
+    $shareBytesRows7 = $shareBytesStmt->fetchAll(PDO::FETCH_ASSOC);
+    $logBytesStmt->execute([':start' => $range7Start]);
+    $logBytesRows7 = $logBytesStmt->fetchAll(PDO::FETCH_ASSOC);
+    $shareBytesStmt->execute([':start' => $range30Start]);
+    $shareBytesRows30 = $shareBytesStmt->fetchAll(PDO::FETCH_ASSOC);
+    $logBytesStmt->execute([':start' => $range30Start]);
+    $logBytesRows30 = $logBytesStmt->fetchAll(PDO::FETCH_ASSOC);
+    $shareBytesSeries7 = fill_series($range7, $shareBytesRows7, 'total');
+    $logBytesSeries7 = fill_series($range7, $logBytesRows7, 'total');
+    $shareBytesSeries30 = fill_series($range30, $shareBytesRows30, 'total');
+    $logBytesSeries30 = fill_series($range30, $logBytesRows30, 'total');
+    $storageBytesSeries7 = [];
+    $storageBytesSeries30 = [];
+    foreach ($shareBytesSeries7 as $index => $value) {
+        $storageBytesSeries7[] = $value + ($logBytesSeries7[$index] ?? 0);
+    }
+    foreach ($shareBytesSeries30 as $index => $value) {
+        $storageBytesSeries30[] = $value + ($logBytesSeries30[$index] ?? 0);
+    }
+    $storageSeries7 = array_map(fn($value) => round($value / 1024 / 1024, 2), $storageBytesSeries7);
+    $storageSeries30 = array_map(fn($value) => round($value / 1024 / 1024, 2), $storageBytesSeries30);
+    $pvTotal7 = array_sum($pvSeries7);
+    $uvTotal7 = array_sum($uvSeries7);
+    $pvTotal30 = array_sum($pvSeries30);
+    $uvTotal30 = array_sum($uvSeries30);
+    $shareTotal7 = array_sum($shareSeries7);
+    $shareTotal30 = array_sum($shareSeries30);
+    $userTotal7 = array_sum($userSeries7);
+    $userTotal30 = array_sum($userSeries30);
+    $storageTotal7 = array_sum($storageBytesSeries7);
+    $storageTotal30 = array_sum($storageBytesSeries30);
+
+    $pvUvChart7 = render_chart_svg([
+        ['values' => $pvSeries7, 'line_class' => 'chart-line chart-line--primary', 'area_class' => 'chart-area chart-area--primary'],
+        ['values' => $uvSeries7, 'line_class' => 'chart-line chart-line--accent'],
+    ]);
+    $pvUvChart30 = render_chart_svg([
+        ['values' => $pvSeries30, 'line_class' => 'chart-line chart-line--primary', 'area_class' => 'chart-area chart-area--primary'],
+        ['values' => $uvSeries30, 'line_class' => 'chart-line chart-line--accent'],
+    ]);
+    $shareChart7 = render_chart_svg([
+        ['values' => $shareSeries7, 'line_class' => 'chart-line chart-line--secondary', 'area_class' => 'chart-area chart-area--secondary'],
+    ]);
+    $shareChart30 = render_chart_svg([
+        ['values' => $shareSeries30, 'line_class' => 'chart-line chart-line--secondary', 'area_class' => 'chart-area chart-area--secondary'],
+    ]);
+    $userChart7 = render_chart_svg([
+        ['values' => $userSeries7, 'line_class' => 'chart-line chart-line--info', 'area_class' => 'chart-area chart-area--info'],
+    ]);
+    $userChart30 = render_chart_svg([
+        ['values' => $userSeries30, 'line_class' => 'chart-line chart-line--info', 'area_class' => 'chart-area chart-area--info'],
+    ]);
+    $storageChart7 = render_chart_svg([
+        ['values' => $storageSeries7, 'line_class' => 'chart-line chart-line--storage', 'area_class' => 'chart-area chart-area--storage'],
+    ]);
+    $storageChart30 = render_chart_svg([
+        ['values' => $storageSeries30, 'line_class' => 'chart-line chart-line--storage', 'area_class' => 'chart-area chart-area--storage'],
+    ]);
+
+    $instanceStats = fetch_central_instance_stats();
+    $instanceTotal = $instanceStats ? (int)($instanceStats['total'] ?? 0) : null;
+    $instanceActive30 = $instanceStats ? (int)($instanceStats['active_30'] ?? 0) : null;
+    $instanceUpdatedAt = $instanceStats ? (string)($instanceStats['updated_at'] ?? '') : '';
+
+    $greetingLabel = '你好';
+    $hour = (int)date('G');
+    if ($hour < 6) {
+        $greetingLabel = '凌晨好';
+    } elseif ($hour < 12) {
+        $greetingLabel = '上午好';
+    } elseif ($hour < 18) {
+        $greetingLabel = '下午好';
+    } else {
+        $greetingLabel = '晚上好';
+    }
+    $adminName = htmlspecialchars((string)($admin['username'] ?? ''));
+    $greeting = $greetingLabel . '，' . $adminName;
+
+    $content = '<section class="admin-home">';
+    $content .= '<div class="admin-hero card">';
+    $content .= '<div class="admin-hero__main">';
+    $content .= '<div class="admin-hero__eyebrow">数据统计</div>';
+    $content .= '<div class="admin-hero__title">' . $greeting . '</div>';
+    $content .= '<div class="admin-hero__meta">今日访问 浏览量(PV) ' . number_format($todayPv) . ' / 访客数(UV) ' . number_format($todayUv) . '</div>';
+    $content .= '</div>';
+    $content .= '<div class="admin-hero__aside">';
+    $content .= '<div class="admin-hero__panel">';
+    $content .= '<div class="admin-hero__panel-label">系统在用实例</div>';
+    if ($instanceTotal === null) {
+        $content .= '<div class="admin-hero__panel-value">—</div>';
+        $content .= '<div class="admin-hero__panel-meta muted">统计暂不可用</div>';
+    } else {
+        $content .= '<div class="admin-hero__panel-value">' . number_format($instanceTotal) . '</div>';
+        $content .= '<div class="admin-hero__panel-meta">30天活跃 ' . number_format($instanceActive30 ?? 0) . '</div>';
+        if ($instanceUpdatedAt !== '') {
+            $content .= '<div class="admin-hero__panel-sub muted">更新时间 ' . htmlspecialchars($instanceUpdatedAt) . '</div>';
+        }
+    }
+    $content .= '</div>';
+    $content .= '</div>';
+    $content .= '</div>';
+
+    $iconUser = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-4 0-7 2-7 4.5V20h14v-1.5C19 16 16 14 12 14z"/></svg>';
+    $iconActive = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 12h4l2-5 4 10 2-5h4v2h-3l-3 7-4-10-2 5H3z"/></svg>';
+    $iconShare = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M18 8a3 3 0 1 0-2.83-4H15a3 3 0 0 0 0 4 2.96 2.96 0 0 0 1 .19zM6 14a3 3 0 1 0 2.83 4H9a3 3 0 0 0 0-4 2.96 2.96 0 0 0-1-.19zM18 20a3 3 0 1 0-2.83-4H15a3 3 0 0 0 0 4 2.96 2.96 0 0 0 1 .19zM8.41 12.59l7.18 3.59.9-1.79-7.18-3.59-.9 1.79zM15.59 9.59l-7.18 3.59.9 1.79 7.18-3.59-.9-1.79z"/></svg>';
+    $iconAccess = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 5c5.5 0 9.5 5.5 9.5 7s-4 7-9.5 7S2.5 14.5 2.5 12 6.5 5 12 5zm0 3a4 4 0 1 0 4 4 4 4 0 0 0-4-4z"/></svg>';
+    $iconStorage = '<svg class="kpi-icon kpi-icon--storage" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 6c0-1.1 3.6-2 8-2s8 .9 8 2-3.6 2-8 2-8-.9-8-2zm0 4c0 1.1 3.6 2 8 2s8-.9 8-2V8c-1.7 1.2-5.1 2-8 2s-6.3-.8-8-2zm0 4c0 1.1 3.6 2 8 2s8-.9 8-2v-2c-1.7 1.2-5.1 2-8 2s-6.3-.8-8-2zm0 4c0 1.1 3.6 2 8 2s8-.9 8-2v-2c-1.7 1.2-5.1 2-8 2s-6.3-.8-8-2z"/></svg>';
+
+    $storageValue = format_bytes($usedBytes) . ($totalLimitBytes > 0 ? ' / ' . format_bytes($totalLimitBytes) : '');
+    $storageMeta = $totalLimitBytes > 0 ? '剩余 ' . format_bytes($remainingBytes) : '总量不限';
+    $storageProgress = '<div class="admin-kpi__progress"><span style="width:' . $storagePercent . '%"></span></div>';
+
+    $content .= '<div class="admin-kpi-grid">';
+    $content .= render_kpi_card('总用户', number_format($totalUsers), '含禁用 ' . number_format($disabledUsers), $iconUser);
+    $content .= render_kpi_card('活跃用户', number_format($activeUsers30), '近7天 ' . number_format($activeUsers7), $iconActive);
+    $content .= render_kpi_card('总分享', number_format($totalSharesActive), '已软删除 ' . number_format($deletedShares), $iconShare);
+    $content .= render_kpi_card('总访问', number_format($totalAccess), '访客数(UV) 总计 ' . number_format($totalUv), $iconAccess);
+    $content .= render_kpi_card('存储占用/剩余', htmlspecialchars($storageValue), htmlspecialchars($storageMeta), $iconStorage, $storageProgress);
+    $content .= '</div>';
+
+    $content .= '<div class="admin-chart-grid">';
+    $content .= '<div class="admin-chart-card" data-range-switch data-range-default="7">';
+    $content .= '<div class="admin-chart-card__head">';
+    $content .= '<div><div class="admin-chart-card__title">PV/UV 走势</div><div class="admin-chart-card__meta" data-range-label>近7天</div></div>';
+    $content .= '<div class="range-toggle">';
+    $content .= '<button class="range-btn is-active" type="button" data-range-value="7">7天</button>';
+    $content .= '<button class="range-btn" type="button" data-range-value="30">30天</button>';
+    $content .= '</div></div>';
+    $content .= '<div class="admin-chart-card__body">';
+    $content .= '<div class="admin-chart-panel" data-range-panel="7">';
+    $content .= '<div class="admin-chart-summary"><div class="admin-legend"><span class="legend-dot is-primary"></span>浏览量(PV) ' . number_format($pvTotal7) . '</div>';
+    $content .= '<div class="admin-legend"><span class="legend-dot is-accent"></span>访客数(UV) ' . number_format($uvTotal7) . '</div></div>';
+    $content .= $pvUvChart7 . '</div>';
+    $content .= '<div class="admin-chart-panel" data-range-panel="30" hidden>';
+    $content .= '<div class="admin-chart-summary"><div class="admin-legend"><span class="legend-dot is-primary"></span>浏览量(PV) ' . number_format($pvTotal30) . '</div>';
+    $content .= '<div class="admin-legend"><span class="legend-dot is-accent"></span>访客数(UV) ' . number_format($uvTotal30) . '</div></div>';
+    $content .= $pvUvChart30 . '</div>';
+    $content .= '</div>';
+    $content .= '</div>';
+
+    $content .= '<div class="admin-chart-card" data-range-switch data-range-default="7">';
+    $content .= '<div class="admin-chart-card__head">';
+    $content .= '<div><div class="admin-chart-card__title">分享新增量</div><div class="admin-chart-card__meta" data-range-label>近7天</div></div>';
+    $content .= '<div class="range-toggle">';
+    $content .= '<button class="range-btn is-active" type="button" data-range-value="7">7天</button>';
+    $content .= '<button class="range-btn" type="button" data-range-value="30">30天</button>';
+    $content .= '</div></div>';
+    $content .= '<div class="admin-chart-card__body">';
+    $content .= '<div class="admin-chart-panel" data-range-panel="7">';
+    $content .= '<div class="admin-chart-summary muted">期间新增 ' . number_format($shareTotal7) . ' 条</div>';
+    $content .= $shareChart7 . '</div>';
+    $content .= '<div class="admin-chart-panel" data-range-panel="30" hidden>';
+    $content .= '<div class="admin-chart-summary muted">期间新增 ' . number_format($shareTotal30) . ' 条</div>';
+    $content .= $shareChart30 . '</div>';
+    $content .= '</div>';
+    $content .= '</div>';
+
+    $content .= '<div class="admin-chart-card" data-range-switch data-range-default="7">';
+    $content .= '<div class="admin-chart-card__head">';
+    $content .= '<div><div class="admin-chart-card__title">用户新增量</div><div class="admin-chart-card__meta" data-range-label>近7天</div></div>';
+    $content .= '<div class="range-toggle">';
+    $content .= '<button class="range-btn is-active" type="button" data-range-value="7">7天</button>';
+    $content .= '<button class="range-btn" type="button" data-range-value="30">30天</button>';
+    $content .= '</div></div>';
+    $content .= '<div class="admin-chart-card__body">';
+    $content .= '<div class="admin-chart-panel" data-range-panel="7">';
+    $content .= '<div class="admin-chart-summary muted">期间新增 ' . number_format($userTotal7) . ' 人</div>';
+    $content .= $userChart7 . '</div>';
+    $content .= '<div class="admin-chart-panel" data-range-panel="30" hidden>';
+    $content .= '<div class="admin-chart-summary muted">期间新增 ' . number_format($userTotal30) . ' 人</div>';
+    $content .= $userChart30 . '</div>';
+    $content .= '</div>';
+    $content .= '</div>';
+
+    $content .= '<div class="admin-chart-card" data-range-switch data-range-default="7">';
+    $content .= '<div class="admin-chart-card__head">';
+    $content .= '<div><div class="admin-chart-card__title">存储增长</div><div class="admin-chart-card__meta" data-range-label>近7天</div></div>';
+    $content .= '<div class="range-toggle">';
+    $content .= '<button class="range-btn is-active" type="button" data-range-value="7">7天</button>';
+    $content .= '<button class="range-btn" type="button" data-range-value="30">30天</button>';
+    $content .= '</div></div>';
+    $content .= '<div class="admin-chart-card__body">';
+    $content .= '<div class="admin-chart-panel" data-range-panel="7">';
+    $content .= '<div class="admin-chart-summary muted">期间增长 ' . htmlspecialchars(format_bytes($storageTotal7)) . '</div>';
+    $content .= $storageChart7 . '</div>';
+    $content .= '<div class="admin-chart-panel" data-range-panel="30" hidden>';
+    $content .= '<div class="admin-chart-summary muted">期间增长 ' . htmlspecialchars(format_bytes($storageTotal30)) . '</div>';
+    $content .= $storageChart30 . '</div>';
+    $content .= '</div>';
+    $content .= '</div>';
+    $content .= '</div>';
+
+    $content .= '<div class="admin-governance-grid">';
+    $content .= '<div class="admin-governance card">';
+    $content .= '<div class="admin-governance__label">评论总量</div>';
+    $content .= '<div class="admin-governance__value">' . number_format($commentTotal) . '</div>';
+    $content .= '<div class="admin-governance__meta">近7天新增 ' . number_format($commentNew7) . '</div>';
+    $content .= '</div>';
+    $content .= '<div class="admin-governance card">';
+    $content .= '<div class="admin-governance__label">举报总量</div>';
+    $content .= '<div class="admin-governance__value">' . number_format($reportTotal) . '</div>';
+    $content .= '<div class="admin-governance__meta">待处理 ' . number_format($reportPending) . '</div>';
+    $content .= '</div>';
+    $content .= '</div>';
+    $content .= '</section>';
+
+    $titleHtml = build_topbar_title('数据统计', $admin);
+    render_page('数据统计', $content, $admin, '', ['layout' => 'app', 'nav' => 'admin-home', 'title_html' => $titleHtml]);
 }
 
 if ($path === '/api-key/rotate' && $_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -7256,12 +8045,28 @@ if ($path === '/admin') {
     $siteIcp = get_setting('site_icp', '');
     $siteContactEmail = get_setting('site_contact_email', '');
     $bannedWordsRaw = get_banned_words_raw();
+    $scanKeep = ((string)($_GET['scan_keep'] ?? '')) === '1';
+    if (!$scanKeep) {
+        unset($_SESSION['scan_results'], $_SESSION['scan_logs'], $_SESSION['scan_done'], $_SESSION['scan_at'], $_SESSION['scan_total']);
+    }
     $scanResults = $_SESSION['scan_results'] ?? [];
     $scanAt = (int)($_SESSION['scan_at'] ?? 0);
     $scanResults = is_array($scanResults) ? $scanResults : [];
+    $scanLogs = $_SESSION['scan_logs'] ?? [];
+    $scanLogs = is_array($scanLogs) ? $scanLogs : [];
+    $scanDone = (int)($_SESSION['scan_done'] ?? 0) === 1;
     $scanPage = max(1, (int)($_GET['scan_page'] ?? 1));
     $scanSize = normalize_page_size($_GET['scan_size'] ?? 10);
     $scanTotal = count($scanResults);
+    $scanKeepParam = (!empty($scanLogs) || $scanTotal > 0) ? '1' : null;
+    $scanLogHtml = '';
+    foreach ($scanLogs as $log) {
+        $scanLogHtml .= '<div>' . $log . '</div>';
+    }
+    $scanProgressHidden = $scanLogHtml === '' ? ' hidden' : '';
+    $scanReady = $scanDone || $scanLogHtml !== '';
+    $scanStatusLabel = $scanReady ? ('扫描完成，共命中 ' . number_format($scanTotal) . ' 条记录') : '等待扫描...';
+    $scanBarStyle = $scanReady ? ' style="width:100%"' : '';
     [$scanPage, $scanSize, $scanPages, $scanOffset] = paginate($scanTotal, $scanPage, $scanSize);
     $scanPageResults = array_slice($scanResults, $scanOffset, $scanSize);
     [$chunkTtlSeconds] = chunk_cleanup_settings();
@@ -7397,6 +8202,11 @@ if ($path === '/admin') {
     unset($reportQuery['report_page'], $reportQuery['report_size'], $reportQuery['report_status']);
     $scanQuery = $_GET;
     unset($scanQuery['scan_page'], $scanQuery['scan_size']);
+    if ($scanKeepParam !== null) {
+        $scanQuery['scan_keep'] = $scanKeepParam;
+    } else {
+        unset($scanQuery['scan_keep']);
+    }
 
     $content = '';
     if ($error) {
@@ -7421,7 +8231,7 @@ if ($path === '/admin') {
     $content .= '<div style="margin-top:12px">';
     $content .= '<label>违禁词（用 | 分隔）</label>';
     $content .= '<textarea class="input" name="banned_words" rows="2" placeholder="示例：词1|词2|词3">' . htmlspecialchars($bannedWordsRaw) . '</textarea>';
-    $content .= '<div class="muted">命中任意违禁词将拒绝上传，并在扫描结果中标记。</div>';
+    $content .= '<div class="muted">用户分享和分享页评论命中任意违禁词将拒绝分享和评论，并在扫描结果中标记。</div>';
     $content .= '</div>';
     $content .= '<div class="grid" style="margin-top:12px">';
     $content .= '<label><input type="checkbox" name="allow_registration" value="1"' . ($allowRegistration ? ' checked' : '') . '> 允许注册</label>';
@@ -7889,11 +8699,10 @@ if ($path === '/admin') {
     $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
     $content .= '<button class="button" type="submit">开始扫描</button>';
     $content .= '</form>';
-    $content .= '<div class="scan-progress" data-scan-progress hidden>';
-    $content .= '<div class="scan-progress__bar"><span data-scan-bar></span></div>';
-    $content .= '<div class="scan-progress__status" data-scan-status>等待扫描...</div>';
-    $content .= '<div class="scan-log" data-scan-log></div>';
-    $content .= '<div class="scan-progress__actions"><button class="button" type="button" data-scan-refresh hidden>刷新结果</button></div>';
+    $content .= '<div class="scan-progress" data-scan-progress' . $scanProgressHidden . '>';
+    $content .= '<div class="scan-progress__bar"><span data-scan-bar' . $scanBarStyle . '></span></div>';
+    $content .= '<div class="scan-progress__status" data-scan-status>' . htmlspecialchars($scanStatusLabel) . '</div>';
+    $content .= '<div class="scan-log" data-scan-log>' . $scanLogHtml . '</div>';
     $content .= '</div>';
     if (!empty($scanResults)) {
         $shareIds = [];
@@ -7929,22 +8738,71 @@ if ($path === '/admin') {
         $content .= '<button class="button" type="submit">执行</button>';
         $content .= '</div>';
         $content .= '</form>';
-        $content .= '<table class="table scan-table" style="margin-top:12px"><thead><tr><th><input type="checkbox" data-check-all="scan" form="scan-batch-form"></th><th>分享</th><th>文档</th><th>用户</th><th>违禁词</th><th>预览</th><th>链接</th></tr></thead><tbody>';
+        $content .= '<table class="table scan-table" style="margin-top:12px"><thead><tr><th><input type="checkbox" data-check-all="scan" form="scan-batch-form"></th><th>分享</th><th>文档/评论</th><th>用户</th><th>违禁词</th><th>预览</th><th>链接</th></tr></thead><tbody>';
         foreach ($scanPageResults as $hit) {
-            $shareTitle = htmlspecialchars((string)($hit['share_title'] ?? ''));
-            $docTitle = htmlspecialchars((string)($hit['doc_title'] ?? $hit['doc_id'] ?? ''));
+            $itemType = (string)($hit['item_type'] ?? 'doc');
+            $shareTitleRaw = (string)($hit['share_title'] ?? '');
+            $shareTitle = htmlspecialchars($shareTitleRaw);
+            $docTitleRaw = (string)($hit['doc_title'] ?? $hit['doc_id'] ?? '');
+            $docTitle = htmlspecialchars($docTitleRaw);
             $hPath = trim((string)($hit['hpath'] ?? ''), '/');
             $userName = htmlspecialchars((string)($hit['username'] ?? ''));
             $word = htmlspecialchars((string)($hit['word'] ?? ''));
             $snippet = htmlspecialchars((string)($hit['snippet'] ?? ''));
             $shareUrl = $hit['slug'] ? share_url((string)$hit['slug']) : '';
+            $commentId = (int)($hit['comment_id'] ?? 0);
+            $commentEmail = trim((string)($hit['comment_email'] ?? ''));
+            $commentCreatedAt = (string)($hit['comment_created_at'] ?? '');
+            $commentContent = (string)($hit['comment_content'] ?? '');
             $value = (int)($hit['share_id'] ?? 0) . '|' . (int)($hit['user_id'] ?? 0);
+            $slug = (string)($hit['slug'] ?? '');
+            $detailTitleHtml = htmlspecialchars($docTitleRaw);
+            $detailMeta = $hPath;
+            $docId = (string)($hit['doc_id'] ?? '');
+            if ($itemType === 'doc') {
+                $docLabel = trim($docTitleRaw) !== '' ? $docTitleRaw : $docId;
+                $docLabel = $docLabel !== '' ? '文档：' . $docLabel : '文档';
+                $detailTitleHtml = htmlspecialchars($docLabel);
+                $detailMeta = $hPath !== '' ? '路径：' . $hPath : '';
+                $docUrl = $shareUrl;
+                if ($slug !== '' && $docId !== '') {
+                    $docUrl = base_url() . build_share_redirect_path($slug, $docId, '');
+                }
+                if ($docUrl !== '') {
+                    $detailTitleHtml = '<a class="scan-comment-link" href="' . htmlspecialchars($docUrl) . '" target="_blank">' . htmlspecialchars($docLabel) . '</a>';
+                    $shareUrl = $docUrl;
+                }
+            }
+            if ($itemType === 'comment') {
+                $metaParts = [];
+                if ($commentEmail !== '') {
+                    $metaParts[] = '邮箱：' . $commentEmail;
+                }
+                if ($commentCreatedAt !== '') {
+                    $metaParts[] = '时间：' . format_share_datetime($commentCreatedAt);
+                }
+                $detailMeta = implode(' / ', $metaParts);
+                if ($shareUrl !== '' && $commentId > 0) {
+                    $shareUrl .= '#comment-' . $commentId;
+                }
+                if ($commentId > 0) {
+                    $detailTitleHtml = '<button type="button" class="scan-comment-link" data-admin-comment-edit="1"'
+                        . ' data-admin-comment-id="' . $commentId . '"'
+                        . ' data-admin-comment-email="' . htmlspecialchars($commentEmail, ENT_QUOTES) . '"'
+                        . ' data-admin-comment-created="' . htmlspecialchars(format_share_datetime($commentCreatedAt), ENT_QUOTES) . '"'
+                        . ' data-admin-comment-share="' . htmlspecialchars($shareTitleRaw, ENT_QUOTES) . '"'
+                        . ' data-admin-comment-content="' . htmlspecialchars($commentContent, ENT_QUOTES) . '"'
+                        . '>评论#' . $commentId . '</button>';
+                } else {
+                    $detailTitleHtml = '评论';
+                }
+            }
             $content .= '<tr>';
             $content .= '<td><input type="checkbox" name="scan_ids[]" value="' . htmlspecialchars($value) . '" data-check-item="scan" form="scan-batch-form"></td>';
             $content .= '<td>' . $shareTitle . '</td>';
-            $content .= '<td>' . $docTitle;
-            if ($hPath !== '') {
-                $content .= '<div class="muted">' . htmlspecialchars($hPath) . '</div>';
+            $content .= '<td>' . $detailTitleHtml;
+            if ($detailMeta !== '') {
+                $content .= '<div class="muted">' . htmlspecialchars($detailMeta) . '</div>';
             }
             $content .= '</td>';
             $content .= '<td>' . $userName . '</td>';
@@ -7962,9 +8820,9 @@ if ($path === '/admin') {
         $content .= '</tbody></table>';
 
         $content .= '<div class="pagination">';
-        $content .= '<a class="button ghost" href="' . build_admin_query_url('scan', ['scan_page' => max(1, $scanPage - 1)]) . '">上一页</a>';
+        $content .= '<a class="button ghost" href="' . build_admin_query_url('scan', ['scan_page' => max(1, $scanPage - 1), 'scan_keep' => $scanKeepParam]) . '">上一页</a>';
         $content .= '<div class="pagination-info">第 ' . $scanPage . ' / ' . $scanPages . ' 页，共 ' . $scanTotal . ' 条记录</div>';
-        $content .= '<a class="button ghost" href="' . build_admin_query_url('scan', ['scan_page' => min($scanPages, $scanPage + 1)]) . '">下一页</a>';
+        $content .= '<a class="button ghost" href="' . build_admin_query_url('scan', ['scan_page' => min($scanPages, $scanPage + 1), 'scan_keep' => $scanKeepParam]) . '">下一页</a>';
         $content .= '<form method="get" action="' . base_path() . '/admin#scan" class="pagination-form">';
         $content .= render_hidden_inputs($scanQuery);
         $content .= '<label>每页</label><select class="input" name="scan_size">';
@@ -7991,6 +8849,24 @@ if ($path === '/admin') {
     $content .= '</div>';
     $content .= '<div style="margin-top:12px"><button class="button danger" type="submit">删除所有数据</button></div>';
     $content .= '</form></div>';
+$content .= '<div class="modal admin-comment-modal" data-admin-comment-modal hidden>';
+    $content .= '<div class="modal-backdrop" data-modal-close></div>';
+    $content .= '<div class="modal-card">';
+    $content .= '<div class="modal-header">编辑评论</div>';
+    $content .= '<form method="post" action="' . base_path() . '/admin/comment/edit" data-admin-comment-form>';
+    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+    $content .= '<input type="hidden" name="comment_id" value="" data-admin-comment-id>';
+    $content .= '<div class="modal-body">';
+    $content .= '<div class="muted" data-admin-comment-note hidden></div>';
+    $content .= '<textarea class="input" name="content" rows="6" placeholder="请输入评论内容" data-admin-comment-content required></textarea>';
+    $content .= '</div>';
+    $content .= '<div class="modal-actions">';
+    $content .= '<button class="button" type="button" data-modal-close>取消</button>';
+    $content .= '<button class="button primary" type="submit">保存修改</button>';
+    $content .= '</div>';
+    $content .= '</form>';
+    $content .= '</div>';
+    $content .= '</div>';
 
     $content .= '<div class="modal" data-user-modal hidden>';
     $content .= '<div class="modal-backdrop" data-modal-close></div>';
@@ -8722,6 +9598,8 @@ if ($path === '/admin/scan/start' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     $total = count_scannable_docs();
     $_SESSION['scan_results'] = [];
+    $_SESSION['scan_logs'] = [];
+    $_SESSION['scan_done'] = 0;
     $_SESSION['scan_at'] = time();
     $_SESSION['scan_total'] = $total;
     api_response(200, ['total' => $total]);
@@ -8744,9 +9622,16 @@ if ($path === '/admin/scan/step' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     $existing = array_merge($existing, $batch['hits']);
     $_SESSION['scan_results'] = $existing;
+    $existingLogs = $_SESSION['scan_logs'] ?? [];
+    if (!is_array($existingLogs)) {
+        $existingLogs = [];
+    }
+    $existingLogs = array_merge($existingLogs, $batch['logs']);
+    $_SESSION['scan_logs'] = $existingLogs;
     $_SESSION['scan_at'] = time();
     $nextOffset = $offset + (int)$batch['count'];
     $done = $nextOffset >= $total || $batch['count'] === 0;
+    $_SESSION['scan_done'] = $done ? 1 : 0;
     api_response(200, [
         'nextOffset' => $nextOffset,
         'done' => $done,
@@ -8766,6 +9651,8 @@ if ($path === '/admin/scan' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     $results = scan_banned_shares($words);
     $_SESSION['scan_results'] = $results;
+    $_SESSION['scan_logs'] = [];
+    $_SESSION['scan_done'] = 1;
     $_SESSION['scan_at'] = time();
     flash('info', '扫描完成，共命中 ' . count($results) . ' 条记录');
     redirect('/admin#scan');
@@ -8822,6 +9709,89 @@ if ($path === '/admin/scan/disable' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt->execute([':id' => $userId]);
     }
     flash('info', '已停用 ' . count($userIds) . ' 个违规账号');
+    redirect('/admin#scan');
+}
+
+if ($path === '/admin/comment/edit' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_admin();
+    check_csrf();
+    $commentId = max(0, (int)($_POST['comment_id'] ?? 0));
+    $content = trim((string)($_POST['content'] ?? ''));
+    if ($commentId <= 0) {
+        flash('error', '缺少评论ID');
+        redirect('/admin#scan');
+    }
+    if ($content === '') {
+        flash('error', '评论内容不能为空');
+        redirect('/admin#scan');
+    }
+    $contentLength = function_exists('mb_strlen') ? mb_strlen($content, 'UTF-8') : strlen($content);
+    if ($contentLength > 2000) {
+        flash('error', '评论内容过长');
+        redirect('/admin#scan');
+    }
+    $bannedWords = get_banned_words();
+    if (!empty($bannedWords)) {
+        $hit = find_banned_word($content, $bannedWords);
+        if ($hit) {
+            flash('error', '触发违禁词：' . $hit['word']);
+            redirect('/admin#scan');
+        }
+    }
+    $pdo = db();
+    $stmt = $pdo->prepare('SELECT share_comments.*, shares.user_id AS share_user_id FROM share_comments
+        JOIN shares ON share_comments.share_id = shares.id
+        WHERE share_comments.id = :id');
+    $stmt->execute([':id' => $commentId]);
+    $comment = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$comment) {
+        flash('error', '评论不存在');
+        redirect('/admin#scan');
+    }
+    $shareId = (int)($comment['share_id'] ?? 0);
+    $shareUserId = (int)($comment['share_user_id'] ?? 0);
+    if ($shareId <= 0 || $shareUserId <= 0) {
+        flash('error', '评论关联的分享不存在');
+        redirect('/admin#scan');
+    }
+    $commentEmail = (string)($comment['email'] ?? '');
+    $newSize = calculate_comment_size($commentEmail, $content);
+    $oldSize = (int)($comment['size_bytes'] ?? 0);
+    $oldAssets = extract_comment_asset_paths((string)($comment['content'] ?? ''), $shareId);
+    $newAssets = extract_comment_asset_paths($content, $shareId);
+    $removeAssets = array_values(array_diff($oldAssets, $newAssets));
+    if (!empty($removeAssets)) {
+        $removeAssets = filter_unused_comment_assets($shareId, $removeAssets, [$commentId]);
+    }
+    $removeAssetSize = sum_share_asset_sizes($shareId, $removeAssets);
+    $delta = $newSize - $oldSize;
+    $netDelta = $delta - $removeAssetSize;
+    if ($netDelta > 0) {
+        $owner = get_user_by_id($shareUserId);
+        if (!$owner) {
+            flash('error', '分享所属用户不存在');
+            redirect('/admin#scan');
+        }
+        $used = recalculate_user_storage((int)$owner['id']);
+        $limit = get_user_limit_bytes($owner);
+        if ($limit > 0 && ($used + $netDelta) > $limit) {
+            flash('error', '存储空间不足，无法保存修改');
+            redirect('/admin#scan');
+        }
+    }
+    $update = $pdo->prepare('UPDATE share_comments SET content = :content, size_bytes = :size_bytes WHERE id = :id');
+    $update->execute([
+        ':content' => $content,
+        ':size_bytes' => $newSize,
+        ':id' => $commentId,
+    ]);
+    $deletedAssetSize = delete_comment_assets($shareId, $removeAssets);
+    $totalDelta = $delta - $deletedAssetSize;
+    if ($totalDelta !== 0) {
+        adjust_share_size($shareId, $totalDelta);
+        adjust_user_storage($shareUserId, $totalDelta);
+    }
+    flash('info', '评论已更新');
     redirect('/admin#scan');
 }
 

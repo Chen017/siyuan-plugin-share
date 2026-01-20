@@ -450,6 +450,20 @@
     }
   };
 
+  const initShareMarkdownToggle = () => {
+    if (!document.body.classList.contains("layout-share")) return;
+    document.querySelectorAll("[data-share-toggle]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const container = btn.closest(".share-article");
+        if (!container) return;
+        const isMarkdown = container.classList.toggle("is-markdown");
+        container.setAttribute("data-share-view", isMarkdown ? "markdown" : "preview");
+        btn.textContent = isMarkdown ? "预览" : "源码";
+        btn.setAttribute("aria-pressed", isMarkdown ? "true" : "false");
+      });
+    });
+  };
+
   const initAppDrawer = () => {
     const openBtn = document.querySelector("[data-app-drawer-open]");
     const backdrop = document.querySelector("[data-app-drawer-close]");
@@ -626,6 +640,38 @@
         modal.querySelector("[data-user-field='limit']").value =
           dataset.userLimit || "0";
       });
+    });
+  };
+
+  const initRangeSwitch = () => {
+    const switches = document.querySelectorAll("[data-range-switch]");
+    if (!switches.length) return;
+    switches.forEach((card) => {
+      const buttons = Array.from(card.querySelectorAll("[data-range-value]"));
+      const panels = Array.from(card.querySelectorAll("[data-range-panel]"));
+      const label = card.querySelector("[data-range-label]");
+      if (!buttons.length || !panels.length) return;
+      const setRange = (value) => {
+        const target = String(value || "");
+        buttons.forEach((btn) => {
+          btn.classList.toggle(
+            "is-active",
+            btn.dataset.rangeValue === target,
+          );
+        });
+        panels.forEach((panel) => {
+          panel.hidden = panel.dataset.rangePanel !== target;
+        });
+        if (label) {
+          label.textContent = target === "30" ? "近30天" : "近7天";
+        }
+      };
+      buttons.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          setRange(btn.dataset.rangeValue || "");
+        });
+      });
+      setRange(card.dataset.rangeDefault || "7");
     });
   };
 
@@ -967,6 +1013,54 @@
       if (emailInput && reopenEmail) emailInput.value = reopenEmail;
       if (contentInput && reopenContent) contentInput.value = reopenContent;
     }
+  };
+
+  const initAdminCommentModal = () => {
+    const modal = document.querySelector("[data-admin-comment-modal]");
+    if (!modal) return;
+    const form = modal.querySelector("[data-admin-comment-form]");
+    if (!form) return;
+    const idInput = form.querySelector("[data-admin-comment-id]");
+    const contentInput = form.querySelector("[data-admin-comment-content]");
+    const noteEl = modal.querySelector("[data-admin-comment-note]");
+    const close = () => {
+      modal.hidden = true;
+    };
+    const open = (dataset) => {
+      modal.hidden = false;
+      if (idInput) idInput.value = dataset.adminCommentId || "";
+      if (contentInput) contentInput.value = dataset.adminCommentContent || "";
+      const noteParts = [];
+      const share = dataset.adminCommentShare || "";
+      const email = dataset.adminCommentEmail || "";
+      const created = dataset.adminCommentCreated || "";
+      if (share) noteParts.push(`分享：${share}`);
+      if (email) noteParts.push(`邮箱：${email}`);
+      if (created) noteParts.push(`时间：${created}`);
+      if (noteEl) {
+        noteEl.textContent = noteParts.join(" / ");
+        noteEl.hidden = !noteEl.textContent;
+      }
+      if (contentInput) contentInput.focus();
+    };
+    modal.addEventListener("click", (event) => {
+      const target = event.target;
+      if (
+        target &&
+        (target.closest("[data-modal-close]") ||
+          target.classList.contains("modal-backdrop"))
+      ) {
+        close();
+      }
+    });
+    document.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!target) return;
+      const trigger = target.closest("[data-admin-comment-edit]");
+      if (!trigger) return;
+      event.preventDefault();
+      open(trigger.dataset);
+    });
   };
 
   const initFormConfirm = () => {
@@ -1315,11 +1409,12 @@
     const bar = wrapper.querySelector("[data-scan-bar]");
     const status = wrapper.querySelector("[data-scan-status]");
     const log = wrapper.querySelector("[data-scan-log]");
-    const refresh = wrapper.querySelector("[data-scan-refresh]");
     const submitBtn = form.querySelector("button[type='submit']");
     const csrf = form.querySelector("input[name='csrf']")?.value || "";
     const logQueue = [];
     let logTimer = null;
+    let doneMessage = "";
+    let autoRefreshTimer = null;
     const post = async (url, payload) => {
       const body = new URLSearchParams(payload).toString();
       const resp = await fetch(url, {
@@ -1334,6 +1429,27 @@
       return json.data || {};
     };
 
+    const finalizeScan = () => {
+      if (!doneMessage || logQueue.length || logTimer || autoRefreshTimer) return;
+      if (status) status.textContent = doneMessage;
+      doneMessage = "";
+      autoRefreshTimer = setTimeout(() => {
+        const url = new URL(window.location.href);
+        url.searchParams.set("scan_keep", "1");
+        url.hash = "scan";
+        window.location.href = url.toString();
+      }, 800);
+    };
+
+    const stripScanKeep = () => {
+      const url = new URL(window.location.href);
+      if (!url.searchParams.has("scan_keep")) return;
+      url.searchParams.delete("scan_keep");
+      const qs = url.searchParams.toString();
+      const next = url.pathname + (qs ? `?${qs}` : "") + url.hash;
+      window.history.replaceState(null, "", next);
+    };
+
     const appendLogs = (logs) => {
       if (!log || !Array.isArray(logs) || !logs.length) return;
       logQueue.push(...logs);
@@ -1341,17 +1457,20 @@
       const flush = () => {
         if (!logQueue.length || !log) {
           logTimer = null;
+          finalizeScan();
           return;
         }
         const msg = logQueue.shift();
         const row = document.createElement("div");
-        row.textContent = msg;
+        row.innerHTML = msg;
         log.appendChild(row);
         log.scrollTop = log.scrollHeight;
         logTimer = setTimeout(flush, 40);
       };
       flush();
     };
+
+    stripScanKeep();
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -1364,8 +1483,12 @@
       }
       if (status) status.textContent = "初始化扫描...";
       if (bar) bar.style.width = "0%";
-      if (refresh) refresh.hidden = true;
       if (submitBtn) submitBtn.disabled = true;
+      doneMessage = "";
+      if (autoRefreshTimer) {
+        clearTimeout(autoRefreshTimer);
+        autoRefreshTimer = null;
+      }
 
       try {
         const start = await post(form.action.replace(/\/scan$/, "/scan/start"), {
@@ -1383,23 +1506,15 @@
           const progress = total > 0 ? Math.min(100, Math.round((offset / total) * 100)) : 100;
           if (bar) bar.style.width = `${progress}%`;
           if (status) {
-            status.textContent = step.done
-              ? `扫描完成，共命中 ${step.hitCount || 0} 条记录`
-              : `扫描中：${offset}/${total || "-"} (${progress}%)`;
+            status.textContent = `扫描中：${offset}/${total || "-"} (${progress}%)`;
+          }
+          if (step.done) {
+            doneMessage = `扫描完成，共命中 ${step.hitCount || 0} 条记录`;
           }
           appendLogs(step.logs || []);
           if (step.done) break;
         }
-        if (refresh) {
-          refresh.hidden = false;
-          refresh.addEventListener(
-            "click",
-            () => {
-              window.location.reload();
-            },
-            {once: true},
-          );
-        }
+        finalizeScan();
       } catch (err) {
         if (status) status.textContent = err?.message || "扫描失败";
       } finally {
@@ -1630,6 +1745,7 @@
 
   initAnnouncementModal();
   initNav();
+  initRangeSwitch();
   initKnowledgeTree();
   initDocTreeScroll();
   initBatchSelection();
@@ -1643,6 +1759,7 @@
   initFlashToast();
   initCommentEditors();
   initCommentModal();
+  initAdminCommentModal();
   initScanProgress();
   try {
     initMarkdown();
@@ -1657,6 +1774,7 @@
   initImageViewer();
   initShareSidebarTabs();
   initShareDrawer();
+  initShareMarkdownToggle();
   initAppDrawer();
   initScrollTop();
   initLoginTabs();
