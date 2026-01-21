@@ -1212,6 +1212,13 @@ function render_page(string $title, string $content, ?array $user = null, string
         echo "<script src='{$base}/assets/vendor/katex.min.js'></script>";
         echo "<script src='{$base}/assets/vendor/highlight.min.js'></script>";
         echo "<script src='{$base}/assets/vendor/mermaid.min.js'></script>";
+        echo "<script src='{$base}/assets/vendor/pako.min.js'></script>";
+        echo "<script src='{$base}/assets/vendor/echarts.min.js'></script>";
+        echo "<script src='{$base}/assets/vendor/abcjs-basic-min.js'></script>";
+        echo "<script src='{$base}/assets/vendor/raphael.min.js'></script>";
+        echo "<script src='{$base}/assets/vendor/flowchart.min.js'></script>";
+        echo "<script src='{$base}/assets/vendor/viz.js'></script>";
+        echo "<script src='{$base}/assets/vendor/full.render.js'></script>";
     }
     echo "<script src='{$base}/assets/app.js'></script>";
     echo "</body>";

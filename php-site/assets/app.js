@@ -1559,6 +1559,67 @@
       options ? md.use(plugin, options) : md.use(plugin);
     };
 
+    const registerCalloutSupport = () => {
+      const calloutPattern = /^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION|INFO)\]\s*/i;
+      const calloutClassMap = {
+        note: "note",
+        tip: "tip",
+        important: "important",
+        warning: "warning",
+        caution: "caution",
+        info: "info",
+      };
+      const calloutMetaMap = {
+        note: {label: "Note", icon: "🖊️"},
+        tip: {label: "Tip", icon: "💡"},
+        important: {label: "Important", icon: "❗"},
+        warning: {label: "Warning", icon: "⚠️"},
+        caution: {label: "Caution", icon: "🚨"},
+        info: {label: "Info", icon: "ℹ️"},
+      };
+
+      md.core.ruler.after("block", "siyuan_callout", (state) => {
+        const tokens = state.tokens;
+        tokens.forEach((token, index) => {
+          if (token.type !== "blockquote_open") return;
+          let inline = null;
+          for (let i = index + 1; i < tokens.length; i += 1) {
+            if (tokens[i].type === "inline") {
+              inline = tokens[i];
+              break;
+            }
+            if (tokens[i].type === "blockquote_close") break;
+          }
+          if (!inline) return;
+          const match = String(inline.content || "").match(calloutPattern);
+          if (!match) return;
+          const typeKey = match[1].toLowerCase();
+          const classKey = calloutClassMap[typeKey] || "note";
+          const meta = calloutMetaMap[classKey] || calloutMetaMap.note;
+          token.attrJoin("class", "md-alert");
+          token.attrJoin("class", `md-alert--${classKey}`);
+          inline.content = inline.content.replace(calloutPattern, "");
+          if (Array.isArray(inline.children)) {
+            let removed = false;
+            inline.children.forEach((child) => {
+              if (removed || child.type !== "text") return;
+              const next = child.content.replace(calloutPattern, "");
+              child.content = next;
+              removed = true;
+            });
+          }
+          const TitleToken = state.Token || md.Token;
+          if (TitleToken) {
+            const titleToken = new TitleToken("html_block", "", 0);
+            titleToken.content =
+              `<div class="md-alert__title"><span class="md-alert__icon">${meta.icon}</span>` +
+              `<span class="md-alert__label">${meta.label}</span></div>\n`;
+            tokens.splice(index + 1, 0, titleToken);
+          }
+        });
+      });
+    };
+
     const useKatex = () => {
       if (typeof window.markdownitKatex === "function") {
         md.use(window.markdownitKatex, {throwOnError: false, errorColor: "#cc0000"});
@@ -1656,6 +1717,7 @@
     usePlugin(window.markdownitIns);
     usePlugin(window.markdownitMultimdTable);
     usePlugin(window.markdownItAnchor || window.markdownitAnchor, {permalink: false});
+    registerCalloutSupport();
 
     if (typeof window.markdownitContainer === "function") {
       const containers = ["info", "success", "warning", "danger", "tip", "note"];
@@ -1672,30 +1734,514 @@
     }
 
     let mermaidReady = false;
-    const renderMermaid = (container) => {
-      if (!window.mermaid) return;
-      if (!mermaidReady) {
+    let chartResizeBound = false;
+    const chartInstances = [];
+    let diagramIndex = 0;
+    let vizInstance = null;
+    const PLANTUML_SERVER = "https://plantuml.com/plantuml";
+    let mermaidFontPromise = null;
+
+    const nextDiagramId = (prefix) => {
+      diagramIndex += 1;
+      return `md-${prefix}-${diagramIndex}`;
+    };
+
+    const getLanguage = (code) => {
+      if (!code) return "";
+      const classes = Array.from(code.classList || []);
+      for (const cls of classes) {
+        if (cls.startsWith("language-")) {
+          const lang = cls.slice(9).toLowerCase();
+          if (["", "undefined", "text", "plain", "plaintext", "nohighlight"].includes(lang)) {
+            continue;
+          }
+          return lang;
+        }
+        if (cls.startsWith("lang-")) {
+          const lang = cls.slice(5).toLowerCase();
+          if (["", "undefined", "text", "plain", "plaintext", "nohighlight"].includes(lang)) {
+            continue;
+          }
+          return lang;
+        }
+      }
+      if (classes.includes("mermaid")) return "mermaid";
+      return "";
+    };
+
+    const getMermaidFontFamily = () => {
+      if (typeof window.getComputedStyle !== "function") return "";
+      const target = document.body || document.documentElement;
+      if (!target) return "";
+      const fontFamily = window.getComputedStyle(target).fontFamily;
+      return fontFamily ? fontFamily.trim() : "";
+    };
+
+    const waitForMermaidFonts = (callback) => {
+      if (!document.fonts || !document.fonts.ready || typeof document.fonts.ready.then !== "function") {
+        callback();
+        return;
+      }
+      if (!mermaidFontPromise) {
+        mermaidFontPromise = document.fonts.ready.catch(() => null);
+      }
+      mermaidFontPromise.then(callback);
+    };
+
+    const getFirstMermaidLine = (text) => {
+      const lines = String(text || "").split(/\r?\n/);
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (trimmed.startsWith("%%")) continue;
+        return trimmed;
+      }
+      return "";
+    };
+
+    const looksLikeMermaid = (text) => {
+      const first = getFirstMermaidLine(text);
+      return /^(graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|erDiagram|journey|gantt|gitGraph|mindmap|timeline|pie|quadrantChart|requirementDiagram|c4Context|c4Container|c4Component|c4Dynamic|zenuml|xychart)\b/i.test(
+        first,
+      );
+    };
+
+    const isMermaidFlowchart = (text) => {
+      const first = getFirstMermaidLine(text);
+      return /^(graph|flowchart)\b/i.test(first);
+    };
+
+    const isMermaidMindmap = (text) => {
+      const first = getFirstMermaidLine(text);
+      return /^mindmap\b/i.test(first);
+    };
+
+    const replaceCodeBlock = (code, replacement) => {
+      const wrapper = code.closest(".code-block");
+      if (wrapper) {
+        wrapper.replaceWith(replacement);
+        return;
+      }
+      const pre = code.closest("pre");
+      if (pre) {
+        pre.replaceWith(replacement);
+      } else {
+        code.replaceWith(replacement);
+      }
+    };
+
+    const buildMindmapSource = (source) => {
+      const lines = String(source || "").split(/\r?\n/);
+      const items = [];
+      lines.forEach((line) => {
+        const match = /^(\s*)(?:[-*+]|\d+[.)])\s+(.*)$/.exec(line);
+        if (!match) return;
+        const indent = match[1].replace(/\t/g, "  ").length;
+        const level = Math.max(0, Math.floor(indent / 2));
+        let text = match[2].trim();
+        text = text.replace(/^\[(?: |x|X)\]\s*/, "");
+        if (text) items.push({level, text});
+      });
+      if (!items.length) return "";
+      const output = ["mindmap", "  root"];
+      items.forEach((item) => {
+        const pad = "  ".repeat(item.level + 2);
+        output.push(`${pad}${item.text}`);
+      });
+      return output.join("\n");
+    };
+
+    const renderMindmap = (container) => {
+      container.querySelectorAll("pre code").forEach((code) => {
+        const lang = getLanguage(code);
+        if (lang !== "mindmap" && lang !== "mermaid") return;
+        const source = code.textContent || "";
+        if (lang === "mindmap" && isMermaidMindmap(source)) return;
+        if (lang === "mermaid" && looksLikeMermaid(source)) return;
+        const mermaidSource = buildMindmapSource(source);
+        if (!mermaidSource) return;
+        const block = document.createElement("div");
+        block.className = "mermaid";
+        block.textContent = mermaidSource;
+        replaceCodeBlock(code, block);
+      });
+    };
+
+    const bindChartResize = () => {
+      if (chartResizeBound) return;
+      chartResizeBound = true;
+      window.addEventListener("resize", () => {
+        chartInstances.forEach((chart) => {
+          try {
+            chart.resize();
+          } catch {
+            // ignore resize failures
+          }
+        });
+      });
+    };
+
+    const renderEcharts = (container) => {
+      if (!window.echarts || typeof window.echarts.init !== "function") return;
+      container.querySelectorAll("pre code").forEach((code) => {
+        const lang = getLanguage(code);
+        if (lang !== "echarts") return;
+        const source = code.textContent || "";
+        let option = null;
         try {
-          window.mermaid.initialize({
-            startOnLoad: false,
-            theme: "default",
-            securityLevel: "loose",
+          option = JSON.parse(source);
+        } catch {
+          return;
+        }
+        const wrapper = document.createElement("div");
+        wrapper.className = "md-diagram md-diagram--echarts";
+        const chartEl = document.createElement("div");
+        chartEl.className = "md-echarts";
+        wrapper.appendChild(chartEl);
+        replaceCodeBlock(code, wrapper);
+        try {
+          const chart = window.echarts.init(chartEl);
+          chart.setOption(option, true);
+          chartInstances.push(chart);
+          bindChartResize();
+        } catch {
+          wrapper.textContent = "ECharts render failed.";
+        }
+      });
+    };
+
+    const renderAbc = (container) => {
+      if (!window.ABCJS || typeof window.ABCJS.renderAbc !== "function") return;
+      container.querySelectorAll("pre code").forEach((code) => {
+        const lang = getLanguage(code);
+        if (lang !== "abc") return;
+        let source = code.textContent || "";
+        let options = {};
+        const lines = source.split(/\r?\n/);
+        if (lines.length && lines[0].trim().startsWith("%%params")) {
+          const raw = lines[0].trim().replace(/^%%params\s+/, "");
+          try {
+            options = JSON.parse(raw);
+            source = lines.slice(1).join("\n");
+          } catch {
+            options = {};
+          }
+        }
+        const wrapper = document.createElement("div");
+        wrapper.className = "md-diagram md-diagram--abc";
+        const target = document.createElement("div");
+        const targetId = nextDiagramId("abc");
+        target.id = targetId;
+        wrapper.appendChild(target);
+        replaceCodeBlock(code, wrapper);
+        try {
+          window.ABCJS.renderAbc(targetId, source, options);
+        } catch {
+          wrapper.textContent = "ABC render failed.";
+        }
+      });
+    };
+
+    const createVizInstance = () => {
+      if (!window.Viz) return null;
+      if (window.Module && window.render) {
+        return new window.Viz({Module: window.Module, render: window.render});
+      }
+      return new window.Viz();
+    };
+
+    const renderGraphviz = (container) => {
+      if (!window.Viz) return;
+      container.querySelectorAll("pre code").forEach((code) => {
+        const lang = getLanguage(code);
+        if (lang !== "graphviz" && lang !== "dot") return;
+        const source = code.textContent || "";
+        const wrapper = document.createElement("div");
+        wrapper.className = "md-diagram md-diagram--graphviz";
+        const target = document.createElement("div");
+        target.className = "md-graphviz";
+        wrapper.appendChild(target);
+        replaceCodeBlock(code, wrapper);
+        if (!vizInstance) vizInstance = createVizInstance();
+        if (!vizInstance || typeof vizInstance.renderSVGElement !== "function") {
+          wrapper.textContent = "Graphviz render unavailable.";
+          return;
+        }
+        vizInstance
+          .renderSVGElement(source)
+          .then((svg) => {
+            target.innerHTML = "";
+            target.appendChild(svg);
+          })
+          .catch(() => {
+            vizInstance = createVizInstance();
+            wrapper.textContent = "Graphviz render failed.";
+          });
+      });
+    };
+
+    const renderFlowchart = (container) => {
+      if (!window.flowchart || typeof window.flowchart.parse !== "function") return;
+      if (!window.Raphael) return;
+      container.querySelectorAll("pre code").forEach((code) => {
+        const lang = getLanguage(code);
+        if (lang !== "flowchart") return;
+        const source = code.textContent || "";
+        if (isMermaidFlowchart(source)) return;
+        let chart = null;
+        try {
+          chart = window.flowchart.parse(source);
+        } catch {
+          return;
+        }
+        const wrapper = document.createElement("div");
+        wrapper.className = "md-diagram md-diagram--flowchart";
+        const target = document.createElement("div");
+        const targetId = nextDiagramId("flowchart");
+        target.id = targetId;
+        wrapper.appendChild(target);
+        replaceCodeBlock(code, wrapper);
+        try {
+          chart.drawSVG(targetId, {
+            "line-width": 2,
+            "font-size": 14,
+            "font-family": "inherit",
+            "text-margin": 8,
+            "yes-text": "yes",
+            "no-text": "no",
+            "arrow-end": "block",
           });
         } catch {
-          // ignore init errors
+          wrapper.textContent = "Flowchart render failed.";
         }
-        mermaidReady = true;
+      });
+    };
+
+    const encodePlantUmlData = (deflated) => {
+      if (!deflated || !deflated.length) return "";
+      const encode6bit = (b) => {
+        if (b < 10) return String.fromCharCode(48 + b);
+        b -= 10;
+        if (b < 26) return String.fromCharCode(65 + b);
+        b -= 26;
+        if (b < 26) return String.fromCharCode(97 + b);
+        b -= 26;
+        if (b === 0) return "-";
+        if (b === 1) return "_";
+        return "?";
+      };
+      const append3bytes = (b1, b2, b3) => {
+        const c1 = b1 >> 2;
+        const c2 = ((b1 & 0x3) << 4) | (b2 >> 4);
+        const c3 = ((b2 & 0xf) << 2) | (b3 >> 6);
+        const c4 = b3 & 0x3f;
+        return (
+          encode6bit(c1 & 0x3f) +
+          encode6bit(c2 & 0x3f) +
+          encode6bit(c3 & 0x3f) +
+          encode6bit(c4 & 0x3f)
+        );
+      };
+      let result = "";
+      for (let i = 0; i < deflated.length; i += 3) {
+        if (i + 2 === deflated.length) {
+          result += append3bytes(deflated[i], deflated[i + 1], 0);
+        } else if (i + 1 === deflated.length) {
+          result += append3bytes(deflated[i], 0, 0);
+        } else {
+          result += append3bytes(deflated[i], deflated[i + 1], deflated[i + 2]);
+        }
       }
-      const blocks = [];
-      container
-        .querySelectorAll(
-          "pre code.language-mermaid, pre code.lang-mermaid, pre code.mermaid",
-        )
-        .forEach((code) => {
+      return result;
+    };
+
+    const toUtf8Bytes = (input) => {
+      if (typeof TextEncoder !== "undefined") {
+        return new TextEncoder().encode(input);
+      }
+      const encoded = unescape(encodeURIComponent(input));
+      const bytes = new Uint8Array(encoded.length);
+      for (let i = 0; i < encoded.length; i += 1) {
+        bytes[i] = encoded.charCodeAt(i);
+      }
+      return bytes;
+    };
+
+    const deflateWithPako = (bytes) => {
+      if (!window.pako || typeof window.pako.deflate !== "function") return null;
+      try {
+        return window.pako.deflate(bytes, {level: 9});
+      } catch {
+        return null;
+      }
+    };
+
+    const encodePlantUmlHex = (source) => {
+      const input = String(source || "");
+      if (!input.trim()) return "";
+      const bytes = toUtf8Bytes(input);
+      let hex = "";
+      bytes.forEach((b) => {
+        hex += b.toString(16).padStart(2, "0");
+      });
+      return `~h${hex}`;
+    };
+
+    const deflateWithStream = async (bytes) => {
+      if (typeof CompressionStream !== "function") return null;
+      try {
+        const stream = new CompressionStream("deflate");
+        const writer = stream.writable.getWriter();
+        await writer.write(bytes);
+        await writer.close();
+        const buffer = await new Response(stream.readable).arrayBuffer();
+        return new Uint8Array(buffer);
+      } catch {
+        return null;
+      }
+    };
+
+    const encodePlantUmlSync = (source) => {
+      const input = String(source || "");
+      if (!input.trim()) return "";
+      const bytes = toUtf8Bytes(input);
+      const deflated = deflateWithPako(bytes);
+      if (!deflated) return "";
+      return encodePlantUmlData(deflated);
+    };
+
+    const encodePlantUmlAsync = async (source) => {
+      const input = String(source || "");
+      if (!input.trim()) return "";
+      const bytes = toUtf8Bytes(input);
+      let deflated = deflateWithPako(bytes);
+      if (!deflated) {
+        deflated = await deflateWithStream(bytes);
+      }
+      if (!deflated) return "";
+      return encodePlantUmlData(deflated);
+    };
+
+    const renderPlantUml = (container) => {
+      container.querySelectorAll("pre code").forEach((code) => {
+        const lang = getLanguage(code);
+        if (!["plantuml", "puml", "uml"].includes(lang)) return;
+        const source = code.textContent || "";
+        const hexFallback = encodePlantUmlHex(source);
+        if (!hexFallback) return;
+        if (!code.isConnected) return;
+        const wrapper = document.createElement("div");
+        wrapper.className = "md-diagram md-diagram--plantuml";
+        const img = document.createElement("img");
+        img.loading = "lazy";
+        img.alt = "PlantUML diagram";
+        img.src = `${PLANTUML_SERVER}/svg/${hexFallback}`;
+        wrapper.appendChild(img);
+        replaceCodeBlock(code, wrapper);
+
+        const encodedSync = encodePlantUmlSync(source);
+        if (encodedSync) {
+          img.src = `${PLANTUML_SERVER}/svg/${encodedSync}`;
+          return;
+        }
+        encodePlantUmlAsync(source).then((encodedAsync) => {
+          if (encodedAsync) {
+            img.src = `${PLANTUML_SERVER}/svg/${encodedAsync}`;
+          }
+        });
+      });
+    };
+
+    const renderMermaid = (container) => {
+      const isMermaidCodeBlock = (lang, source) => {
+        if (lang === "mermaid") return true;
+        if (lang === "mindmap") return isMermaidMindmap(source);
+        if (lang === "flowchart") return isMermaidFlowchart(source);
+        if (lang === "" && looksLikeMermaid(source)) return true;
+        return false;
+      };
+
+      const fallbackMermaidImage = (block) => {
+        const source = block.dataset.mermaidSource || block.textContent || "";
+        if (!source.trim()) return;
+        let encoded = "";
+        try {
+          encoded = btoa(unescape(encodeURIComponent(source)));
+        } catch {
+          return;
+        }
+        const wrapper = document.createElement("div");
+        wrapper.className = "md-diagram md-diagram--mermaid";
+        const img = document.createElement("img");
+        img.loading = "lazy";
+        img.alt = "Mermaid diagram";
+        img.src = `https://mermaid.ink/svg/${encoded}`;
+        wrapper.appendChild(img);
+        block.replaceWith(wrapper);
+      };
+
+      const isMermaidErrorSvg = (svg) => {
+        const text = String(svg || "");
+        return /syntax error|parse error|error in text/i.test(text);
+      };
+
+      const renderMermaidBlock = (block) => {
+        const source = block.dataset.mermaidSource || block.textContent || "";
+        if (!source.trim()) return;
+        const targetId = nextDiagramId("mermaid");
+        const applySvg = (svg, bindFunctions) => {
+          if (isMermaidErrorSvg(svg)) {
+            fallbackMermaidImage(block);
+            return;
+          }
+          block.innerHTML = svg;
+          if (typeof bindFunctions === "function") {
+            try {
+              bindFunctions(block);
+            } catch {
+              // ignore bind errors
+            }
+          }
+        };
+        try {
+          const result = window.mermaid.render(targetId, source);
+          if (result && typeof result.then === "function") {
+            result
+              .then((res) => {
+                if (!res || !res.svg) {
+                  fallbackMermaidImage(block);
+                  return;
+                }
+                applySvg(res.svg, res.bindFunctions);
+              })
+              .catch(() => fallbackMermaidImage(block));
+            return;
+          }
+          if (typeof result === "string") {
+            applySvg(result);
+            return;
+          }
+          if (result && result.svg) {
+            applySvg(result.svg, result.bindFunctions);
+            return;
+          }
+          fallbackMermaidImage(block);
+        } catch {
+          fallbackMermaidImage(block);
+        }
+      };
+
+      if (!window.mermaid) {
+        const blocks = [];
+        container.querySelectorAll("pre code").forEach((code) => {
+          const lang = getLanguage(code);
+          const source = code.textContent || "";
+          if (!isMermaidCodeBlock(lang, source)) return;
           const pre = code.closest("pre");
           const block = document.createElement("div");
           block.className = "mermaid";
-          block.textContent = code.textContent || "";
+          block.dataset.mermaidSource = source;
+          block.textContent = source;
           if (pre) {
             pre.replaceWith(block);
           } else {
@@ -1703,15 +2249,188 @@
           }
           blocks.push(block);
         });
-      container.querySelectorAll("div.mermaid").forEach((block) => {
+        container.querySelectorAll("div.mermaid").forEach((block) => blocks.push(block));
+        const uniqueBlocks = Array.from(new Set(blocks));
+        uniqueBlocks.forEach((block) => fallbackMermaidImage(block));
+        return;
+      }
+      if (!mermaidReady) {
+        try {
+          const mermaidFontFamily = getMermaidFontFamily();
+          const ganttWidth = Math.max(
+            1200,
+            document.documentElement ? document.documentElement.clientWidth : 1200,
+          );
+          window.mermaid.initialize({
+            startOnLoad: false,
+            theme: "default",
+            securityLevel: "loose",
+            htmlLabels: false,
+            flowchart: {
+              htmlLabels: false,
+              useMaxWidth: true,
+            },
+            sequence: {
+              useMaxWidth: true,
+            },
+            mindmap: {
+              useMaxWidth: true,
+            },
+            gantt: {
+              useMaxWidth: false,
+              useWidth: ganttWidth,
+              barHeight: 24,
+              barGap: 8,
+              topPadding: 50,
+              leftPadding: 80,
+              rightPadding: 40,
+              fontSize: 16,
+              sectionFontSize: 16,
+            },
+            themeVariables: {
+              fontFamily: mermaidFontFamily || "Arial, sans-serif",
+              fontSize: "16px",
+            },
+          });
+        } catch {
+          // ignore init errors
+        }
+        mermaidReady = true;
+      }
+      const blocks = [];
+      container.querySelectorAll("pre code").forEach((code) => {
+        const lang = getLanguage(code);
+        const source = code.textContent || "";
+        if (!isMermaidCodeBlock(lang, source)) return;
+        const pre = code.closest("pre");
+        const block = document.createElement("div");
+        block.className = "mermaid";
+        block.dataset.mermaidSource = source;
+        block.textContent = source;
+        if (pre) {
+          pre.replaceWith(block);
+        } else {
+          code.replaceWith(block);
+        }
         blocks.push(block);
       });
-      if (!blocks.length) return;
-      try {
-        window.mermaid.init(undefined, blocks);
-      } catch (err) {
-        console.error(err);
+      container.querySelectorAll("div.mermaid").forEach((block) => blocks.push(block));
+      const uniqueBlocks = Array.from(new Set(blocks)).filter(
+        (block) => !block.hasAttribute("data-processed"),
+      );
+      if (!uniqueBlocks.length) return;
+      uniqueBlocks.forEach((block) => {
+        block.setAttribute("data-processed", "true");
+        renderMermaidBlock(block);
+      });
+    };
+
+    const renderMermaidWithFonts = (container) => {
+      waitForMermaidFonts(() => renderMermaid(container));
+    };
+
+    const writeClipboardText = async (text) => {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
       }
+      const helper = document.createElement("textarea");
+      helper.value = text;
+      helper.setAttribute("readonly", "true");
+      helper.style.position = "fixed";
+      helper.style.top = "-9999px";
+      helper.style.left = "-9999px";
+      document.body.appendChild(helper);
+      helper.select();
+      let ok = false;
+      try {
+        ok = document.execCommand("copy");
+      } catch {
+        ok = false;
+      }
+      helper.remove();
+      return ok;
+    };
+
+    const buildLineNumbers = (raw) => {
+      const trimmed = raw.replace(/\r?\n$/, "");
+      const lines = trimmed ? trimmed.split("\n") : [""];
+      return lines.map((_, idx) => String(idx + 1)).join("\n");
+    };
+
+    const decorateCodeBlocks = (container) => {
+      container.querySelectorAll("pre > code").forEach((code) => {
+        if (code.closest(".md-diagram")) return;
+        const lang = getLanguage(code);
+        if (["mermaid", "mindmap", "echarts", "abc", "graphviz", "dot", "flowchart"].includes(lang)) {
+          return;
+        }
+        const pre = code.parentElement;
+        if (!pre || pre.closest(".code-block")) return;
+        const raw = code.textContent || "";
+        const wrapper = document.createElement("div");
+        wrapper.className = "code-block";
+        const header = document.createElement("div");
+        header.className = "code-header";
+        const langLabel = document.createElement("span");
+        langLabel.className = "code-lang";
+        langLabel.textContent = lang || "text";
+        const copyBtn = document.createElement("button");
+        copyBtn.type = "button";
+        copyBtn.className = "code-copy";
+        copyBtn.setAttribute("aria-label", "复制");
+        copyBtn.setAttribute("data-tooltip", "复制");
+        copyBtn.innerHTML =
+          "<svg class=\"code-copy-icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\" focusable=\"false\">" +
+          "<rect x=\"9\" y=\"9\" width=\"10\" height=\"12\" rx=\"2\" ry=\"2\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"></rect>" +
+          "<path d=\"M5 15V5a2 2 0 0 1 2-2h10\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"></path>" +
+          "</svg>";
+        copyBtn.addEventListener("click", async () => {
+          const success = await writeClipboardText(raw);
+          if (success) {
+            copyBtn.setAttribute("data-tooltip", "已复制");
+            copyBtn.classList.add("is-copied");
+            setTimeout(() => {
+              copyBtn.setAttribute("data-tooltip", "复制");
+              copyBtn.classList.remove("is-copied");
+            }, 1500);
+          }
+        });
+        if (lang || langLabel.textContent) {
+          header.appendChild(langLabel);
+        } else {
+          header.classList.add("is-no-lang");
+        }
+        header.appendChild(copyBtn);
+        const body = document.createElement("div");
+        body.className = "code-body";
+        const linesPre = document.createElement("pre");
+        linesPre.className = "code-lines";
+        const linesCode = document.createElement("code");
+        linesCode.textContent = buildLineNumbers(raw);
+        linesPre.appendChild(linesCode);
+        wrapper.appendChild(header);
+        wrapper.appendChild(body);
+        body.appendChild(linesPre);
+        pre.replaceWith(wrapper);
+        body.appendChild(pre);
+      });
+    };
+
+    const wrapScrollableMedia = (container) => {
+      const selector = "img, svg, canvas, iframe, embed, object, video";
+      container.querySelectorAll(selector).forEach((el) => {
+        if (el.closest(".md-diagram, .mermaid, .code-block, .media-scroll")) {
+          return;
+        }
+        if (el.tagName.toLowerCase() === "svg" && el.ownerSVGElement) return;
+        const wrapper = document.createElement("div");
+        wrapper.className = "media-scroll";
+        const parent = el.parentNode;
+        if (!parent) return;
+        parent.insertBefore(wrapper, el);
+        wrapper.appendChild(el);
+      });
     };
 
     document
@@ -1724,8 +2443,16 @@
         if (!target) return;
         const raw = source.value || "";
         target.innerHTML = md.render(raw);
+        renderMindmap(target);
+        renderEcharts(target);
+        renderAbc(target);
+        renderGraphviz(target);
+        renderFlowchart(target);
+        renderPlantUml(target);
+        renderMermaidWithFonts(target);
         if (window.hljs) {
           target.querySelectorAll("pre code").forEach((block) => {
+            if (block.closest(".md-diagram")) return;
             if (
               block.classList.contains("language-mermaid") ||
               block.classList.contains("lang-mermaid") ||
@@ -1739,7 +2466,8 @@
             window.hljs.highlightElement(block);
           });
         }
-        renderMermaid(target);
+        decorateCodeBlocks(target);
+        wrapScrollableMedia(target);
       });
   };
 
