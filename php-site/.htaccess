@@ -24,6 +24,13 @@
     </IfModule>
 </FilesMatch>
 
+# 禁止访问所有 .db 结尾的数据库文件
+<FilesMatch "\.db$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+</FilesMatch>
+
 # 禁止访问隐藏文件
 <FilesMatch "^\.">
     <IfModule mod_authz_core.c>
