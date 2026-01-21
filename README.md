@@ -1,6 +1,6 @@
 # 🔗 Siyuan Share
 
-**Siyuan Share** is a **free and open-source** plugin for **Siyuan Note** that allows you to generate **publicly accessible share links** for **entire notebooks or individual documents**.  
+**Siyuan Share** is a **free and open-source** SiYuan Notes plugin that allows you to generate **accessible sharing links for notebooks, individual documents, and documents with their sub-documents**. 
 It supports **access passwords, expiration time, visitor limits**, and provides **access statistics**, making it ideal for knowledge sharing, collaboration, and temporary public publishing.
 
 🌍 Documentation Languages:  
