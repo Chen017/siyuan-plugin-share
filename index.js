@@ -33,9 +33,10 @@ const UPLOAD_TARGET_CHUNK_MS = 1800;
 const UPLOAD_DEFAULT_SPEED_BPS = 2 * MB;
 const DEFAULT_UPLOAD_ASSET_CONCURRENCY = 8;
 const DEFAULT_UPLOAD_CHUNK_CONCURRENCY = 4;
-const UPLOAD_RETRY_LIMIT = 2;
+const UPLOAD_RETRY_LIMIT = 5;
 const UPLOAD_RETRY_BASE_DELAY = 400;
 const UPLOAD_RETRY_MAX_DELAY = 2000;
+const UPLOAD_MISSING_CHUNK_RETRY_LIMIT = 3;
 
 const REMOTE_API = {
   verify: "/api/v1/auth/verify",
@@ -119,6 +120,16 @@ function isAbortError(err) {
   return err?.name === "AbortError" || /cancelled/i.test(String(err?.message || ""));
 }
 
+function getMissingChunksFromError(err) {
+  const data = err?.data;
+  if (!data || !Array.isArray(data.missingChunks)) return null;
+  const missing = data.missingChunks
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value >= 0)
+    .map((value) => Math.floor(value));
+  return missing.length ? missing : null;
+}
+
 async function withRetry(task, {retries = 0, baseDelay = 0, maxDelay = 0, controller = null, onRetry = null} = {}) {
   let attempt = 0;
   while (true) {
@@ -128,7 +139,7 @@ async function withRetry(task, {retries = 0, baseDelay = 0, maxDelay = 0, contro
     try {
       return await task();
     } catch (err) {
-      if (isAbortError(err) || attempt >= retries) {
+      if (err?.noRetry || isAbortError(err) || attempt >= retries) {
         throw err;
       }
       attempt += 1;
@@ -3333,7 +3344,7 @@ class SiYuanSharePlugin extends Plugin {
     const chunkSize = this.getAdaptiveChunkSize(size);
     const totalChunks = Math.max(1, Math.ceil(size / chunkSize));
     const concurrency = this.getAdaptiveChunkConcurrency(size, chunkSize, chunkMaxConcurrency);
-    const uploadChunk = async (index) => {
+    const uploadChunkOnce = async (index, {countBytes = true} = {}) => {
       throwIfAborted(controller, t("siyuanShare.message.cancelled"));
       const start = index * chunkSize;
       const end = Math.min(size, start + chunkSize);
@@ -3356,6 +3367,11 @@ class SiYuanSharePlugin extends Plugin {
               isForm: true,
               controller,
               progress,
+            }).catch((err) => {
+              if (getMissingChunksFromError(err)) {
+                err.noRetry = true;
+              }
+              throw err;
             }),
           {
             retries: UPLOAD_RETRY_LIMIT,
@@ -3369,7 +3385,7 @@ class SiYuanSharePlugin extends Plugin {
       }
       const elapsed = nowTs() - startedAt;
       this.updateUploadSpeed(end - start, elapsed);
-      if (tracker && tracker.totalBytes > 0) {
+      if (countBytes && tracker && tracker.totalBytes > 0) {
         tracker.uploadedBytes += end - start;
         const percent = this.getUploadPercent(tracker);
         progress?.update?.({
@@ -3385,16 +3401,41 @@ class SiYuanSharePlugin extends Plugin {
       }
     };
     if (totalChunks === 1) {
-      await uploadChunk(0);
+      await uploadChunkOnce(0);
       return;
     }
     const lastChunkIndex = totalChunks - 1;
     const tasks = [];
     for (let index = 0; index < lastChunkIndex; index += 1) {
-      tasks.push(() => uploadChunk(index));
+      tasks.push(() => uploadChunkOnce(index));
     }
     await runTasksWithConcurrency(tasks, concurrency);
-    await uploadChunk(lastChunkIndex);
+    let missingAttempt = 0;
+    while (true) {
+      try {
+        await uploadChunkOnce(lastChunkIndex);
+        break;
+      } catch (err) {
+        const missing = getMissingChunksFromError(err);
+        if (!missing || missingAttempt >= UPLOAD_MISSING_CHUNK_RETRY_LIMIT) {
+          throw err;
+        }
+        missingAttempt += 1;
+        const normalizedMissing = Array.from(new Set(missing)).filter(
+          (idx) => idx >= 0 && idx < totalChunks && idx !== lastChunkIndex,
+        );
+        if (normalizedMissing.length === 0) {
+          throw err;
+        }
+        console.warn("Missing chunks detected, retrying upload.", {
+          assetPath,
+          missing: normalizedMissing,
+          attempt: missingAttempt,
+        });
+        const retryTasks = normalizedMissing.map((idx) => () => uploadChunkOnce(idx, {countBytes: false}));
+        await runTasksWithConcurrency(retryTasks, Math.min(concurrency, retryTasks.length));
+      }
+    }
   }
 
 
@@ -4388,7 +4429,13 @@ class SiYuanSharePlugin extends Plugin {
       const resp = await fetch(`${base}${path}`, options);
       const json = await resp.json().catch(() => null);
       if (!resp.ok || !json || json.code !== 0) {
-        throw new Error(json?.msg || t("siyuanShare.error.remoteRequestFailed", {status: resp.status}));
+        const message = json?.msg || t("siyuanShare.error.remoteRequestFailed", {status: resp.status});
+        const error = new Error(message);
+        error.status = resp.status;
+        error.code = typeof json?.code !== "undefined" ? json.code : resp.status;
+        error.data = json?.data;
+        error.response = json;
+        throw error;
       }
       return json.data;
     } catch (err) {

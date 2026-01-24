@@ -5077,11 +5077,20 @@ function handle_api(string $path): void {
 
         $complete = false;
         if ($chunkIndex === $totalChunks - 1) {
+            $missing = [];
             for ($i = 0; $i < $totalChunks; $i++) {
                 $part = $chunkDir . '/' . $assetPath . '.part' . $i;
                 if (!is_file($part)) {
-                    api_response(400, null, 'Missing chunk');
+                    $missing[] = $i;
                 }
+            }
+            if (!empty($missing)) {
+                api_response(409, [
+                    'missingChunks' => $missing,
+                    'uploadId' => $uploadId,
+                    'assetPath' => $assetPath,
+                    'totalChunks' => $totalChunks,
+                ], 'Missing chunk');
             }
             $targetFile = upload_staging_dir($uploadId) . '/' . $assetPath;
             ensure_dir(dirname($targetFile));

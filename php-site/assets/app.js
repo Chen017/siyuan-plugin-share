@@ -2840,6 +2840,7 @@
         }
         const tag = el.tagName.toLowerCase();
         if (tag === "img") return;
+        if (tag === "video") return;
         if (tag === "svg" && el.ownerSVGElement) return;
         const wrapper = document.createElement("div");
         wrapper.className = "media-scroll";
