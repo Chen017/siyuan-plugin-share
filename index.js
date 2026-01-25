@@ -946,6 +946,57 @@ function getDocTreeNodeParentId(node) {
   return "";
 }
 
+function getDocTreeNodePath(node) {
+  if (!node) return "";
+  const candidates = [node?.path, node?.data?.path, node?.data?.filePath];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const value = String(candidate || "").trim();
+    if (value && value.includes(".sy")) {
+      return value.startsWith("/") ? value : `/${value}`;
+    }
+  }
+  return "";
+}
+
+function normalizeDocTitle(rawTitle) {
+  const text = String(rawTitle || "").trim();
+  if (!text) return "";
+  return text.endsWith(".sy") ? text.slice(0, -3) : text;
+}
+
+function buildDocPath(parentPath, docId) {
+  const safeId = extractDocIdFromValue(docId);
+  if (!safeId) {
+    return String(parentPath || "").trim();
+  }
+  const base = String(parentPath || "").trim();
+  const segment = `${safeId}.sy`;
+  if (!base || base === "/") {
+    return `/${segment}`;
+  }
+  return `${base.replace(/\/$/, "")}/${segment}`;
+}
+
+function getShareSignature(shares) {
+  if (!Array.isArray(shares) || shares.length === 0) return "";
+  const rows = shares
+    .map((share) => ({
+      id: String(share?.id || ""),
+      type: String(share?.type || ""),
+      slug: String(share?.slug || ""),
+      docId: String(share?.docId || ""),
+      notebookId: String(share?.notebookId || ""),
+      updatedAt: String(share?.updatedAt || ""),
+      expiresAt: String(share?.expiresAt || ""),
+      visitorLimit: String(share?.visitorLimit || ""),
+      title: String(share?.title || ""),
+    }))
+    .filter((row) => row.id);
+  rows.sort((a, b) => a.id.localeCompare(b.id));
+  return rows.map((row) => Object.values(row).join("|")).join(";");
+}
+
 function findDocTreeNode(nodes, docId) {
   if (!Array.isArray(nodes) || !isValidDocId(docId)) return null;
   const stack = [...nodes];
@@ -1046,6 +1097,13 @@ class SiYuanSharePlugin extends Plugin {
     this.docTreeObserver = null;
     this.docTreeBindTimer = null;
     this.docTreeRefreshTimer = null;
+    this.backgroundSyncTimer = null;
+    this.backgroundSyncing = false;
+    this.backgroundSyncDelayMs = 3 * 60 * 1000;
+    this.backgroundSyncMinDelayMs = 3 * 60 * 1000;
+    this.backgroundSyncMaxDelayMs = 3 * 60 * 60 * 1000;
+    this.backgroundSyncHiddenMinDelayMs = 10 * 60 * 1000;
+    this.backgroundSyncHiddenMaxDelayMs = 3 * 60 * 60 * 1000;
     this.progressDialog = null;
     this.settingVisible = false;
     this.settingEls = {
@@ -1147,6 +1205,7 @@ class SiYuanSharePlugin extends Plugin {
       }
       this.progressDialog = null;
     }
+    this.stopBackgroundSync();
   }
 
   async uninstall() {
@@ -2300,6 +2359,7 @@ class SiYuanSharePlugin extends Plugin {
     this.shares = Array.isArray(activeShares) ? activeShares.filter((s) => s && s.id && s.type) : [];
     this.hasNodeFs = !!(fs && path);
     this.workspaceDir = "";
+    this.syncRemoteStatusFromSite(activeSite);
     this.syncSettingInputs();
     this.renderSettingShares();
     this.renderDock();
@@ -2311,6 +2371,7 @@ class SiYuanSharePlugin extends Plugin {
     if (persistShares) {
       await this.saveData(STORAGE_SITE_SHARES, this.siteShares);
     }
+    this.startBackgroundSync({immediate: true});
   }
 
   initSettingPanel() {
@@ -2454,6 +2515,51 @@ class SiYuanSharePlugin extends Plugin {
     return `${this.t("siyuanShare.label.site")} ${fallbackIndex + 1}`;
   }
 
+  normalizeRemoteUser(raw) {
+    if (!raw) return null;
+    if (typeof raw === "string") {
+      const username = raw.trim();
+      return username ? {username} : null;
+    }
+    if (typeof raw !== "object") return null;
+    const username = String(raw.username || raw.name || "").trim();
+    const id = String(raw.id || raw.userId || "").trim();
+    const user = {};
+    if (username) user.username = username;
+    if (id) user.id = id;
+    return Object.keys(user).length ? user : null;
+  }
+
+  normalizeRemoteVerifiedAt(value) {
+    const ts = Number(value);
+    if (!Number.isFinite(ts) || ts <= 0) return 0;
+    return Math.floor(ts);
+  }
+
+  syncRemoteStatusFromSite(site) {
+    this.remoteUser = this.normalizeRemoteUser(site?.remoteUser);
+    this.remoteVerifiedAt = this.normalizeRemoteVerifiedAt(site?.remoteVerifiedAt);
+  }
+
+  async persistActiveRemoteStatus({clear = false} = {}) {
+    const sites = this.normalizeSiteList(this.settings.sites);
+    const activeId = String(this.settings.activeSiteId || "");
+    const activeSite = sites.find((site) => String(site.id) === activeId);
+    if (!activeSite) return;
+    if (clear) {
+      activeSite.remoteUser = null;
+      activeSite.remoteVerifiedAt = 0;
+    } else {
+      activeSite.remoteUser = this.normalizeRemoteUser(this.remoteUser);
+      activeSite.remoteVerifiedAt = this.normalizeRemoteVerifiedAt(this.remoteVerifiedAt);
+    }
+    this.settings = {
+      ...this.settings,
+      sites,
+    };
+    await this.saveData(STORAGE_SETTINGS, this.settings);
+  }
+
   normalizeSiteList(rawSites) {
     const sites = [];
     const seen = new Set();
@@ -2467,7 +2573,9 @@ class SiYuanSharePlugin extends Plugin {
       const siteUrl = String(raw.siteUrl || "").trim();
       const apiKey = String(raw.apiKey || "").trim();
       const name = this.resolveSiteName(raw.name, siteUrl, sites.length);
-      sites.push({id, name, siteUrl, apiKey});
+      const remoteUser = this.normalizeRemoteUser(raw.remoteUser);
+      const remoteVerifiedAt = this.normalizeRemoteVerifiedAt(raw.remoteVerifiedAt);
+      sites.push({id, name, siteUrl, apiKey, remoteUser, remoteVerifiedAt});
       seen.add(id);
     });
     return sites;
@@ -2519,9 +2627,10 @@ class SiYuanSharePlugin extends Plugin {
         envHint.textContent = t("siyuanShare.hint.needSiteAndKey");
         return;
       }
-      const userLabel = this.remoteUser?.username
+      const displayName = this.remoteUser?.username || this.remoteUser?.name || "";
+      const userLabel = displayName
         ? t("siyuanShare.hint.statusConnectedUser", {
-            user: escapeHtml(this.remoteUser.username),
+            user: escapeHtml(displayName),
           })
         : t("siyuanShare.hint.statusConnectedNoUser");
       const timeLabel = this.remoteVerifiedAt
@@ -2541,6 +2650,8 @@ class SiYuanSharePlugin extends Plugin {
     let sites = this.normalizeSiteList(this.settings.sites);
     let activeSiteId = String(this.settings.activeSiteId || "");
     let activeSite = sites.find((site) => String(site.id) === activeSiteId);
+    const prevSiteUrl = activeSite?.siteUrl || "";
+    const prevApiKey = activeSite?.apiKey || "";
     if (!activeSite && (siteUrl || apiKey || siteName)) {
       activeSiteId = activeSiteId || randomSlug(10);
       activeSite = {
@@ -2548,12 +2659,19 @@ class SiYuanSharePlugin extends Plugin {
         name: this.resolveSiteName(siteName, siteUrl, sites.length),
         siteUrl,
         apiKey,
+        remoteUser: null,
+        remoteVerifiedAt: 0,
       };
       sites.push(activeSite);
     } else if (activeSite) {
       activeSite.siteUrl = siteUrl;
       activeSite.apiKey = apiKey;
       activeSite.name = this.resolveSiteName(siteName || activeSite.name, siteUrl, sites.indexOf(activeSite));
+      if (prevSiteUrl !== siteUrl || prevApiKey !== apiKey) {
+        activeSite.remoteUser = null;
+        activeSite.remoteVerifiedAt = 0;
+        this.remoteUploadLimits = null;
+      }
     }
     this.settings = {
       ...this.settings,
@@ -2562,6 +2680,7 @@ class SiYuanSharePlugin extends Plugin {
       sites,
       activeSiteId,
     };
+    this.syncRemoteStatusFromSite(activeSite);
     return {siteUrl, apiKey, siteName, sites, activeSiteId};
   }
 
@@ -2576,8 +2695,7 @@ class SiYuanSharePlugin extends Plugin {
       siteUrl: next?.siteUrl || "",
       apiKey: next?.apiKey || "",
     };
-    this.remoteUser = null;
-    this.remoteVerifiedAt = 0;
+    this.syncRemoteStatusFromSite(next);
     this.remoteUploadLimits = null;
     this.shares = Array.isArray(this.siteShares?.[activeSiteId]) ? this.siteShares[activeSiteId] : [];
     if (persist) {
@@ -2604,9 +2722,6 @@ class SiYuanSharePlugin extends Plugin {
         await this.saveData(STORAGE_SITE_SHARES, this.siteShares);
       }
     }
-    this.remoteUser = null;
-    this.remoteVerifiedAt = 0;
-    this.remoteUploadLimits = null;
     this.renderDock();
     this.renderSettingShares();
     this.syncSettingInputs();
@@ -2639,6 +2754,8 @@ class SiYuanSharePlugin extends Plugin {
         let sites = this.normalizeSiteList(this.settings.sites);
         let activeSiteId = String(this.settings.activeSiteId || "");
         let activeSite = sites.find((site) => String(site.id) === activeSiteId);
+        const prevSiteUrl = activeSite?.siteUrl || "";
+        const prevApiKey = activeSite?.apiKey || "";
         if (!activeSite && (siteUrl || apiKey)) {
           activeSiteId = activeSiteId || randomSlug(10);
           activeSite = {
@@ -2646,12 +2763,19 @@ class SiYuanSharePlugin extends Plugin {
             name: this.resolveSiteName("", siteUrl, sites.length),
             siteUrl,
             apiKey,
+            remoteUser: null,
+            remoteVerifiedAt: 0,
           };
           sites.push(activeSite);
         } else if (activeSite) {
           activeSite.siteUrl = siteUrl;
           activeSite.apiKey = apiKey;
           activeSite.name = this.resolveSiteName(activeSite.name, siteUrl, sites.indexOf(activeSite));
+          if (prevSiteUrl !== siteUrl || prevApiKey !== apiKey) {
+            activeSite.remoteUser = null;
+            activeSite.remoteVerifiedAt = 0;
+            this.remoteUploadLimits = null;
+          }
         }
         this.settings = {
           ...this.settings,
@@ -2660,6 +2784,7 @@ class SiYuanSharePlugin extends Plugin {
           apiKey,
           activeSiteId,
         };
+        this.syncRemoteStatusFromSite(activeSite);
         await this.applyActiveSite(nextId, {persist: true});
       } catch (err) {
         this.showErr(err);
@@ -2683,6 +2808,8 @@ class SiYuanSharePlugin extends Plugin {
             name: this.resolveSiteName("", "", sites.length),
             siteUrl: "",
             apiKey: "",
+            remoteUser: null,
+            remoteVerifiedAt: 0,
           };
           sites.push(newSite);
           this.settings = {
@@ -2724,8 +2851,7 @@ class SiYuanSharePlugin extends Plugin {
             apiKey: nextSite?.apiKey || "",
           };
           this.shares = nextSite?.id && this.siteShares?.[nextSite.id] ? this.siteShares[nextSite.id] : [];
-          this.remoteUser = null;
-          this.remoteVerifiedAt = 0;
+          this.syncRemoteStatusFromSite(nextSite);
           this.remoteUploadLimits = null;
           await this.saveData(STORAGE_SETTINGS, this.settings);
           await this.saveData(STORAGE_SITE_SHARES, this.siteShares);
@@ -2975,6 +3101,8 @@ class SiYuanSharePlugin extends Plugin {
     let sites = this.normalizeSiteList(this.settings.sites);
     let activeSiteId = siteSelectId || String(this.settings.activeSiteId || "");
     let activeSite = sites.find((site) => String(site.id) === activeSiteId);
+    const prevSiteUrl = activeSite?.siteUrl || "";
+    const prevApiKey = activeSite?.apiKey || "";
     if (!activeSite && (siteUrl || apiKey)) {
       activeSiteId = activeSiteId || randomSlug(10);
       activeSite = {
@@ -2982,12 +3110,19 @@ class SiYuanSharePlugin extends Plugin {
         name: this.resolveSiteName("", siteUrl, sites.length),
         siteUrl,
         apiKey,
+        remoteUser: null,
+        remoteVerifiedAt: 0,
       };
       sites.push(activeSite);
     } else if (activeSite) {
       activeSite.siteUrl = siteUrl;
       activeSite.apiKey = apiKey;
       activeSite.name = this.resolveSiteName(activeSite.name, siteUrl, sites.indexOf(activeSite));
+      if (prevSiteUrl !== siteUrl || prevApiKey !== apiKey) {
+        activeSite.remoteUser = null;
+        activeSite.remoteVerifiedAt = 0;
+        this.remoteUploadLimits = null;
+      }
     }
     this.settings = {
       ...this.settings,
@@ -3004,10 +3139,11 @@ class SiYuanSharePlugin extends Plugin {
         this.siteShares[activeSiteId] = [];
         await this.saveData(STORAGE_SITE_SHARES, this.siteShares);
       }
+      this.remoteUser = null;
+      this.remoteVerifiedAt = 0;
+      this.remoteUploadLimits = null;
     }
-    this.remoteUser = null;
-    this.remoteVerifiedAt = 0;
-    this.remoteUploadLimits = null;
+    this.syncRemoteStatusFromSite(activeSite);
     this.syncSettingInputs();
     this.renderDock();
     this.renderSettingShares();
@@ -3464,6 +3600,7 @@ class SiYuanSharePlugin extends Plugin {
       progress.update(t("siyuanShare.progress.fetchingDocInfo"));
       const info = await this.resolveDocInfoFromAnyId(docId);
       const title = info?.title || t("siyuanShare.label.untitled");
+      const notebookId = await this.resolveNotebookIdFromDoc(docId);
       throwIfAborted(controller, t("siyuanShare.message.cancelled"));
       let payload = null;
       let assetEntries = [];
@@ -3473,6 +3610,9 @@ class SiYuanSharePlugin extends Plugin {
       if (includeChildren) {
         progress.update(t("siyuanShare.progress.fetchingNotebookList"));
         subtreeDocs = await this.listDocSubtree(docId);
+        if (!Array.isArray(subtreeDocs) || subtreeDocs.length === 0) {
+          throw new Error("Doc tree fetch failed: listDocsByPath returned empty.");
+        }
       }
       const useChildren = includeChildren && subtreeDocs.length > 1;
       if (!useChildren) {
@@ -3483,6 +3623,7 @@ class SiYuanSharePlugin extends Plugin {
         const {markdown, assets, failures} = await this.prepareMarkdownAssets(
           exportRes.content || "",
           controller,
+          notebookId,
         );
         resourceFailures += failures.length;
         payload = {
@@ -3523,6 +3664,7 @@ class SiYuanSharePlugin extends Plugin {
           const {markdown, assets, failures} = await this.prepareMarkdownAssets(
             exportRes.content || "",
             controller,
+            notebookId,
           );
           resourceFailures += failures.length;
           const docTitle =
@@ -3555,7 +3697,7 @@ class SiYuanSharePlugin extends Plugin {
         }));
       }
       if (resourceFailures > 0) {
-        this.notify(t("siyuanShare.message.resourcesSkipped", {count: resourceFailures}));
+        console.warn("Some assets failed to download.", resourceFailures);
       }
       const slug = sanitizeSlug(slugOverride);
       if (slug) payload.slug = slug;
@@ -3693,6 +3835,7 @@ class SiYuanSharePlugin extends Plugin {
         const {markdown, assets, failures} = await this.prepareMarkdownAssets(
           exportRes.content || "",
           controller,
+          notebookId,
         );
         failureCount += failures.length;
         docPayloads.push({
@@ -3711,7 +3854,7 @@ class SiYuanSharePlugin extends Plugin {
         }
       }
       if (failureCount > 0) {
-        this.notify(t("siyuanShare.message.docsExportSkipped", {count: failureCount}));
+        console.warn("Some assets failed to download.", failureCount);
       }
       const payload = {
         notebookId,
@@ -3810,104 +3953,122 @@ class SiYuanSharePlugin extends Plugin {
     }
   }
 
-  async listDocsInNotebook(notebookId) {
-    if (!isValidNotebookId(notebookId)) return {docs: [], title: ""};
-    const t = this.t.bind(this);
+  async fetchDocsByPath(notebookId, pathValue = "") {
+    if (!isValidNotebookId(notebookId)) return {ok: false, nodes: []};
     try {
-      const treeResp = await fetchSyncPost("/api/filetree/getDocTree", {id: notebookId});
-      if (treeResp && treeResp.code === 0) {
-        const treeTitle =
-          treeResp?.data?.name ||
-          treeResp?.data?.root?.name ||
-          treeResp?.data?.box?.name ||
-          "";
-        const nodes = extractDocTreeNodes(treeResp.data);
-        const flat = flattenDocTree(nodes);
-        if (flat.length) {
-          return {
-            title: String(treeTitle || "").trim(),
-            docs: flat.map((doc, index) => ({
-              docId: String(doc.docId || "").trim(),
-              title: doc.title || t("siyuanShare.label.untitled"),
-              parentId: String(doc.parentId || "").trim(),
-              sortIndex: Number.isFinite(doc.sortIndex) ? doc.sortIndex : index,
-              sortOrder: index,
-            })),
-          };
-        }
-      }
-    } catch (err) {
-      console.warn("Doc tree API failed", err);
-    }
-
-    try {
-      const resp = await fetchSyncPost("/api/query/sql", {
-        stmt: `SELECT id, parent_id, content, sort FROM blocks WHERE type='d' AND box='${notebookId}' ORDER BY sort`,
+      const resp = await fetchSyncPost("/api/filetree/listDocsByPath", {
+        notebook: notebookId,
+        path: pathValue,
+        app: "share",
       });
       if (resp && resp.code === 0) {
-        const rows = Array.isArray(resp?.data) ? resp.data : [];
-        const nodes = new Map();
-        rows.forEach((row, index) => {
-          const docId = String(row.id || "").trim();
-          if (!isValidDocId(docId)) return;
-          const parentId = String(row.parent_id || row.parentId || "").trim();
-          const sortRaw = Number(row.sort);
-          const sortIndex = Number.isFinite(sortRaw) ? sortRaw : index;
-          nodes.set(docId, {
-            docId,
-            title: typeof row.content === "string" ? row.content : "",
-            parentId,
-            sortIndex,
-          });
-        });
-        if (nodes.size) {
-          const children = new Map();
-          const pushChild = (parentId, node) => {
-            const key = parentId || "";
-            if (!children.has(key)) children.set(key, []);
-            children.get(key).push(node);
-          };
-          nodes.forEach((node) => {
-            const parentKey = node.parentId || "";
-            pushChild(parentKey, node);
-          });
-          const orderChildren = (list) => {
-            list.sort((a, b) => {
-              if (a.sortIndex === b.sortIndex) return a.docId.localeCompare(b.docId);
-              return a.sortIndex - b.sortIndex;
-            });
-          };
-          const roots = [];
-          nodes.forEach((node) => {
-            if (!node.parentId || !nodes.has(node.parentId) || node.parentId === notebookId) {
-              roots.push(node);
-            }
-          });
-          orderChildren(roots);
-          const flat = [];
-          const walk = (node) => {
-            flat.push(node);
-            const kids = children.get(node.docId) || [];
-            orderChildren(kids);
-            kids.forEach(walk);
-          };
-          roots.forEach(walk);
-          return {
-            title: "",
-            docs: flat.map((node, index) => ({
-              docId: node.docId,
-              title: node.title,
-              parentId: node.parentId,
-              sortIndex: node.sortIndex,
-              sortOrder: index,
-            })),
-          };
+        const nodes = extractDocTreeNodes(resp.data);
+        if (nodes.length) {
+          const hasValid = nodes.some((node) => isValidDocId(getDocTreeNodeId(node)));
+          if (!hasValid) {
+            return {ok: false, nodes: []};
+          }
         }
+        return {ok: true, nodes};
       }
     } catch (err) {
-      console.warn("SQL query failed", err);
+      console.warn("listDocsByPath failed", err);
     }
+    return {ok: false, nodes: []};
+  }
 
+  async collectDocsByPath(notebookId, pathValue, parentId, out, seen) {
+    const {ok, nodes} = await this.fetchDocsByPath(notebookId, pathValue);
+    if (!ok) return false;
+    if (!Array.isArray(nodes) || nodes.length === 0) return true;
+    for (const [index, node] of nodes.entries()) {
+      const docId = getDocTreeNodeId(node);
+      if (!isValidDocId(docId)) continue;
+      if (seen.has(docId)) continue;
+      seen.add(docId);
+      const rawTitle = node?.name || node?.title || node?.content || node?.label || "";
+      out.push({
+        docId: String(docId || "").trim(),
+        title: normalizeDocTitle(rawTitle),
+        parentId: String(parentId || "").trim(),
+        sortIndex: index,
+        sortOrder: out.length,
+      });
+      const nodePath = getDocTreeNodePath(node) || buildDocPath(pathValue, docId);
+      const okChild = await this.collectDocsByPath(notebookId, nodePath, docId, out, seen);
+      if (!okChild) return false;
+    }
+    return true;
+  }
+
+  async listDocsInNotebookByPath(notebookId) {
+    if (!isValidNotebookId(notebookId)) return null;
+    const rootCandidates = ["/", ""];
+    let rootNodes = null;
+    let rootPath = "";
+    let ok = false;
+    for (const candidate of rootCandidates) {
+      const resp = await this.fetchDocsByPath(notebookId, candidate);
+      if (resp.ok) {
+        ok = true;
+        rootNodes = resp.nodes;
+        rootPath = candidate;
+        break;
+      }
+    }
+    if (!ok) return null;
+    const out = [];
+    const seen = new Set();
+    if (Array.isArray(rootNodes)) {
+      for (const [index, node] of rootNodes.entries()) {
+        const docId = getDocTreeNodeId(node);
+        if (!isValidDocId(docId)) continue;
+        seen.add(docId);
+        const rawTitle = node?.name || node?.title || node?.content || node?.label || "";
+        out.push({
+          docId: String(docId || "").trim(),
+          title: normalizeDocTitle(rawTitle),
+          parentId: "",
+          sortIndex: index,
+          sortOrder: out.length,
+        });
+        const nodePath = getDocTreeNodePath(node) || buildDocPath(rootPath, docId);
+        const okChild = await this.collectDocsByPath(notebookId, nodePath, docId, out, seen);
+        if (!okChild) return null;
+      }
+    }
+    return {title: "", docs: out};
+  }
+
+  async listDocSubtreeByPath(docId) {
+    if (!isValidDocId(docId)) return null;
+    const notebookId = await this.resolveNotebookIdFromDoc(docId);
+    if (!isValidNotebookId(notebookId)) return null;
+    const row = await this.fetchBlockRow(docId);
+    const rootPath = row?.path ? String(row.path || "").trim() : "";
+    if (!rootPath) return null;
+    const out = [];
+    const seen = new Set();
+    const rootTitle = normalizeDocTitle(
+      typeof row?.content === "string" ? row.content : "",
+    );
+    out.push({
+      docId: String(docId || "").trim(),
+      title: rootTitle,
+      parentId: "",
+      sortIndex: 0,
+      sortOrder: 0,
+    });
+    seen.add(docId);
+    const ok = await this.collectDocsByPath(notebookId, rootPath, docId, out, seen);
+    if (!ok) return null;
+    return out;
+  }
+
+  async listDocsInNotebook(notebookId) {
+    if (!isValidNotebookId(notebookId)) return {docs: [], title: ""};
+    const byPath = await this.listDocsInNotebookByPath(notebookId);
+    if (byPath) return byPath;
     return {docs: [], title: ""};
   }
 
@@ -3959,27 +4120,9 @@ class SiYuanSharePlugin extends Plugin {
   }
 
   async listDocSubtree(docId) {
-    const notebookId = await this.resolveNotebookIdFromDoc(docId);
-    if (isValidNotebookId(notebookId)) {
-      try {
-        const treeResp = await fetchSyncPost("/api/filetree/getDocTree", {id: notebookId});
-        if (treeResp && treeResp.code === 0) {
-          const nodes = extractDocTreeNodes(treeResp.data);
-          const target = findDocTreeNode(nodes, docId);
-          if (target) {
-            return flattenDocTree([target], []);
-          }
-        }
-      } catch (err) {
-        console.warn("Doc tree lookup failed", err);
-      }
-      const tree = await this.listDocsInNotebook(notebookId);
-      const docs = Array.isArray(tree?.docs) ? tree.docs : Array.isArray(tree) ? tree : [];
-      const subtree = this.collectDocSubtree(docs, docId);
-      if (subtree.length > 1) return subtree;
-    }
-    const sqlSubtree = await this.listDocSubtreeBySQL(docId, notebookId);
-    return sqlSubtree.length ? sqlSubtree : [];
+    const byPath = await this.listDocSubtreeByPath(docId);
+    if (byPath && byPath.length) return byPath;
+    return [];
   }
 
   async listDocSubtreeBySQL(docId, notebookId) {
@@ -4400,7 +4543,15 @@ class SiYuanSharePlugin extends Plugin {
 
   async remoteRequest(
     path,
-    {method = "POST", body, isForm = false, progressText = "", controller = null, progress = null} = {},
+    {
+      method = "POST",
+      body,
+      isForm = false,
+      progressText = "",
+      controller = null,
+      progress = null,
+      silent = false,
+    } = {},
   ) {
     const t = this.t.bind(this);
     const base = normalizeUrlBase(this.settings.siteUrl);
@@ -4419,10 +4570,11 @@ class SiYuanSharePlugin extends Plugin {
     }
     const requestController = controller || new AbortController();
     options.signal = requestController.signal;
-    const ownsProgress = !progress;
-    const handle =
-      progress || this.openProgressDialog(progressText || t("siyuanShare.progress.requesting"), requestController);
-    if (progressText && handle?.update) {
+    const ownsProgress = !progress && !silent;
+    const handle = progress || (ownsProgress
+      ? this.openProgressDialog(progressText || t("siyuanShare.progress.requesting"), requestController)
+      : null);
+    if (!silent && progressText && handle?.update) {
       handle.update(progressText);
     }
     try {
@@ -4450,7 +4602,7 @@ class SiYuanSharePlugin extends Plugin {
     }
   }
 
-  async verifyRemote({silent = false, controller = null, progress = null} = {}) {
+  async verifyRemote({silent = false, controller = null, progress = null, background = false} = {}) {
     const t = this.t.bind(this);
     if (!this.settings.siteUrl || !this.settings.apiKey) {
       if (!silent) throw new Error(t("siyuanShare.error.siteAndKeyRequired"));
@@ -4462,24 +4614,27 @@ class SiYuanSharePlugin extends Plugin {
     const data = await this.remoteRequest(REMOTE_API.verify, {
       method: "POST",
       body: {},
-      progressText: t("siyuanShare.progress.verifyingSite"),
+      progressText: background ? "" : t("siyuanShare.progress.verifyingSite"),
       controller,
       progress,
+      silent: background,
     });
-    this.remoteUser = data?.user || null;
+    this.remoteUser = this.normalizeRemoteUser(data?.user);
     this.remoteUploadLimits = this.normalizeUploadLimits(data?.limits);
     this.remoteVerifiedAt = nowTs();
+    await this.persistActiveRemoteStatus();
     this.syncSettingInputs();
     return data;
   }
 
-  async syncRemoteShares({silent = false, controller = null, progress = null} = {}) {
+  async syncRemoteShares({silent = false, controller = null, progress = null, background = false} = {}) {
     const t = this.t.bind(this);
     const data = await this.remoteRequest(REMOTE_API.shares, {
       method: "GET",
-      progressText: t("siyuanShare.progress.syncingShareList"),
+      progressText: background ? "" : t("siyuanShare.progress.syncingShareList"),
       controller,
       progress,
+      silent: background,
     });
     const activeSiteId = String(this.settings.activeSiteId || "");
     const rawShares = Array.isArray(data?.shares) ? data.shares : [];
@@ -4519,6 +4674,7 @@ class SiYuanSharePlugin extends Plugin {
     this.remoteUser = null;
     this.remoteVerifiedAt = 0;
     this.remoteUploadLimits = null;
+    await this.persistActiveRemoteStatus({clear: true});
     this.shares = [];
     if (activeSiteId) {
       this.siteShares[activeSiteId] = [];
@@ -4557,28 +4713,37 @@ class SiYuanSharePlugin extends Plugin {
     };
   }
 
-  async fetchAssetBlob(assetPath, controller) {
+  async fetchAssetBlob(assetPath, controller, notebookId = "") {
     const t = this.t.bind(this);
     const normalized = normalizeAssetPath(assetPath);
     if (!normalized) throw new Error(t("siyuanShare.error.resourcePathInvalid"));
-    const candidates = [normalized];
+    const candidates = new Set();
+    const appendCandidates = (value) => {
+      const cleaned = normalizeAssetPath(value);
+      if (!cleaned) return;
+      if (cleaned.startsWith("data/")) {
+        candidates.add(cleaned);
+        return;
+      }
+      if (cleaned.startsWith("assets/")) {
+        candidates.add(`data/${cleaned}`);
+        if (isValidNotebookId(notebookId)) {
+          candidates.add(`data/${notebookId}/${cleaned}`);
+        }
+        return;
+      }
+      candidates.add(`data/${cleaned}`);
+    };
+    appendCandidates(normalized);
     const decoded = tryDecodeAssetPath(normalized);
     if (decoded) {
       const decodedNormalized = normalizeAssetPath(decoded);
       if (decodedNormalized && decodedNormalized !== normalized) {
-        candidates.push(decodedNormalized);
+        appendCandidates(decodedNormalized);
       }
     }
     let lastErr = null;
-    for (const candidate of candidates) {
-      let workspacePath = candidate;
-      if (!workspacePath.startsWith("data/")) {
-        if (workspacePath.startsWith("assets/")) {
-          workspacePath = `data/${workspacePath}`;
-        } else {
-          workspacePath = `data/${workspacePath}`;
-        }
-      }
+    for (const workspacePath of candidates) {
       let resp;
       try {
         resp = await fetch("/api/file/getFile", {
@@ -4616,7 +4781,7 @@ class SiYuanSharePlugin extends Plugin {
     throw lastErr || new Error(t("siyuanShare.error.resourceDownloadFailed", {status: 500}));
   }
 
-  async prepareMarkdownAssets(markdown, controller) {
+  async prepareMarkdownAssets(markdown, controller, notebookId = "") {
     const t = this.t.bind(this);
     const cancelledMsg = t("siyuanShare.error.resourceDownloadCanceled");
     let fixed = rewriteAssetLinks(markdown || "");
@@ -4632,7 +4797,7 @@ class SiYuanSharePlugin extends Plugin {
         if (uploadPath && uploadPath !== path) {
           renameMap.set(path, uploadPath);
         }
-        const asset = await this.fetchAssetBlob(path, controller);
+        const asset = await this.fetchAssetBlob(path, controller, notebookId);
         assets.push({path: uploadPath || asset.path, blob: asset.blob});
       } catch (err) {
         if (err?.message === cancelledMsg) {
@@ -4667,11 +4832,12 @@ class SiYuanSharePlugin extends Plugin {
         return `<option value="${escapeAttr(id)}"${selected}>${escapeHtml(label)}</option>`;
       })
       .join("");
+    const displayName = this.remoteUser?.username || this.remoteUser?.name || "";
     const statusLabel = !siteUrl || !apiKey
       ? t("siyuanShare.hint.needSiteAndKey")
-      : this.remoteUser?.username
+      : displayName
         ? t("siyuanShare.hint.statusConnectedUser", {
-            user: escapeHtml(this.remoteUser.username),
+            user: escapeHtml(displayName),
           })
         : t("siyuanShare.hint.statusConnectedNoUser");
     const rows = this.shares
@@ -4774,6 +4940,82 @@ class SiYuanSharePlugin extends Plugin {
     } catch {
       // ignore
     }
+  }
+
+  getBackgroundSyncDelayMs() {
+    const hidden = document?.hidden;
+    const min = hidden ? this.backgroundSyncHiddenMinDelayMs : this.backgroundSyncMinDelayMs;
+    const max = hidden ? this.backgroundSyncHiddenMaxDelayMs : this.backgroundSyncMaxDelayMs;
+    const base = Math.min(Math.max(this.backgroundSyncDelayMs || min, min), max);
+    const jitter = Math.floor(Math.random() * 60 * 1000);
+    return base + jitter;
+  }
+
+  updateBackgroundSyncDelay({success = false, changed = false} = {}) {
+    if (!success || changed) {
+      this.backgroundSyncDelayMs = this.backgroundSyncMinDelayMs;
+      return;
+    }
+    const next = Math.ceil((this.backgroundSyncDelayMs || this.backgroundSyncMinDelayMs) * 1.6);
+    this.backgroundSyncDelayMs = Math.min(next, this.backgroundSyncMaxDelayMs);
+  }
+
+  startBackgroundSync({immediate = false} = {}) {
+    if (this.backgroundSyncTimer) return;
+    const loop = async () => {
+      if (this.backgroundSyncTimer) {
+        clearTimeout(this.backgroundSyncTimer);
+        this.backgroundSyncTimer = null;
+      }
+      const scheduleNext = () => {
+        const delay = this.getBackgroundSyncDelayMs();
+        this.backgroundSyncTimer = setTimeout(loop, delay);
+      };
+      if (!this.settings.siteUrl || !this.settings.apiKey) {
+        scheduleNext();
+        return;
+      }
+      if (typeof navigator !== "undefined" && navigator.onLine === false) {
+        scheduleNext();
+        return;
+      }
+      const result = await this.runBackgroundSyncOnce();
+      if (result) {
+        this.updateBackgroundSyncDelay(result);
+      }
+      scheduleNext();
+    };
+    this.backgroundSyncTimer = setTimeout(loop, immediate ? 0 : this.getBackgroundSyncDelayMs());
+  }
+
+  stopBackgroundSync() {
+    if (this.backgroundSyncTimer) {
+      clearTimeout(this.backgroundSyncTimer);
+      this.backgroundSyncTimer = null;
+    }
+    this.backgroundSyncing = false;
+  }
+
+  async runBackgroundSyncOnce() {
+    if (!this.settings.siteUrl || !this.settings.apiKey) return null;
+    if (this.backgroundSyncing) return null;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return null;
+    this.backgroundSyncing = true;
+    let success = false;
+    let changed = false;
+    const prevSignature = getShareSignature(this.shares);
+    try {
+      await this.verifyRemote({silent: true, background: true});
+      const shares = await this.syncRemoteShares({silent: true, background: true});
+      const nextSignature = getShareSignature(shares);
+      changed = nextSignature !== prevSignature;
+      success = true;
+    } catch {
+      // silent background sync: ignore
+    } finally {
+      this.backgroundSyncing = false;
+    }
+    return {success, changed};
   }
 }
 
