@@ -103,15 +103,16 @@ This plugin relies on a server-side service:
 
 ---
 
-### ③ Open the share link to view content
+### ② Share a Document / Notebook
+Using sharing a notebook as an example. You can also share a single document, or a document together with its sub-documents.
 
-![Open shared document](https://github.com/user-attachments/assets/490f459c-caac-4859-860c-e00de4356706)
+![Share Notebook](https://github.com/user-attachments/assets/62faf774-16e7-4b48-9dff-d738749ee4d5)
 
 ---
 
-### ④ Access statistics overview
+### ③ Open the Shared Link to View the Content
 
-![Access statistics](https://github.com/user-attachments/assets/b2690a03-6e97-4845-87be-1ab3e5406847)
+![Open Shared Link](https://github.com/user-attachments/assets/155ee85c-1a73-49e4-b03e-69b9a31f2727)
 
 ---
 
@@ -164,3 +165,4 @@ Your support motivates me to **continue maintaining and improving** the plugin.
 
 - 💖 Sponsor List:  
   [Sponsor List](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/sponsor-list.md)
+
