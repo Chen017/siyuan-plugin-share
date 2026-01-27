@@ -141,18 +141,52 @@ docker-compose -f docker-compose.nas.yml restart
 ## 快速部署步骤
 
 ```bash
-# 1. 准备配置文件
+# 1. 从仓库拉取源码。如果不使用 Git，也可以直接下载仓库的压缩包，解压后放到当前目录，效果是一样的。
+git clone https://github.com/b8l8u8e8/siyuan-plugin-share.git
+
+# 2. 准备配置文件(必须复制)
+cd siyuan-plugin-share
 cp php-site/config.example.php php-site/config.php
 
-# 2. 使用 NAS 配置启动
+# 3. 使用 NAS 配置启动
 docker-compose -f docker-compose.nas.yml up -d
 
-# 3. 查看日志
+# 4. 可选：查看日志
 docker-compose -f docker-compose.nas.yml logs -f
 
-# 4. 访问应用
-open http://your-nas-ip:8080
+# 5. 打开浏览器并访问
+#http://your-nas-ip:8080
+
+# 6. 初始账号密码
+#管理员账号密码默认为admin/123456 登录后尽快修改密码
 ```
+
+## 更新应用
+
+更新前建议先备份（见“数据管理”里的备份脚本/命令），避免意外。
+
+### 更新仓库代码后重启容器
+
+```bash
+# 1. 使用 Git 拉取最新源码；
+# 如果不使用 Git，也可以直接下载仓库的最新压缩包，解压后覆盖当前目录中的源码。
+#
+# 如果拉取时提示冲突（conflict），说明：
+# 你本地修改过的文件，刚好也在云端被更新了。
+# 为了防止你的修改被直接覆盖，Git 会要求你先确认如何处理。
+#
+# 这是正常现象，不是报错。
+# 根据提示处理完成后，再次执行 git pull 即可。
+git pull
+
+# 2. 重新构建镜像并启动容器（named volumes 会保留数据）
+docker-compose -f docker-compose.nas.yml up -d --build
+
+# 3. 可选：查看日志
+docker-compose -f docker-compose.nas.yml logs -f
+```
+
+> 说明：使用 named volumes（storage-data / uploads-data）时，更新不会影响已有数据。
 
 ## 故障排查
 
