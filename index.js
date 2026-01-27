@@ -538,9 +538,9 @@ function extractAssetPaths(markdown) {
   if (typeof markdown !== "string" || !markdown) return [];
   const out = new Set();
   const patterns = [
-    /\((\/?assets\/[^)\s]+)(?:\s+[^)]*)?\)/g,
-    /src=["'](\/?assets\/[^"']+)["']/g,
-    /href=["'](\/?assets\/[^"']+)["']/g,
+    /\((\/?(?:assets|emojis)\/[^)\s]+)(?:\s+[^)]*)?\)/g,
+    /src=["'](\/?(?:assets|emojis)\/[^"']+)["']/g,
+    /href=["'](\/?(?:assets|emojis)\/[^"']+)["']/g,
   ];
   for (const re of patterns) {
     let match;
@@ -560,7 +560,13 @@ function rewriteAssetLinks(markdown) {
     .replace(/src="\/assets\//g, 'src="assets/')
     .replace(/src="\.\/assets\//g, 'src="assets/')
     .replace(/href="\/assets\//g, 'href="assets/')
-    .replace(/href="\.\/assets\//g, 'href="assets/');
+    .replace(/href="\.\/assets\//g, 'href="assets/')
+    .replace(/\]\(\/emojis\//g, "](emojis/")
+    .replace(/\]\(\.\/emojis\//g, "](emojis/")
+    .replace(/src="\/emojis\//g, 'src="emojis/')
+    .replace(/src="\.\/emojis\//g, 'src="emojis/')
+    .replace(/href="\/emojis\//g, 'href="emojis/')
+    .replace(/href="\.\/emojis\//g, 'href="emojis/');
 }
 
 function makeResourcePathsRelative(html) {
@@ -975,12 +981,185 @@ function extractDocIconFromAttrs(attrs) {
   return "";
 }
 
+const DOC_ICON_IMAGE_EXT_RE = /\.(svg|png|jpe?g|gif|webp|bmp)$/i;
+const EMOJI_IMAGE_EXTENSIONS = ["svg", "png", "jpg", "jpeg", "gif", "webp", "bmp"];
+
+function stripEmojiColons(value) {
+  if (!value) return "";
+  const trimmed = String(value || "").trim();
+  if (!trimmed.startsWith(":")) return "";
+  const withoutStart = trimmed.slice(1);
+  if (!withoutStart) return "";
+  const withoutEnd = withoutStart.endsWith(":") ? withoutStart.slice(0, -1) : withoutStart;
+  return withoutEnd.trim();
+}
+
+function normalizeEmojiAssetPath(pathValue, fromEmojiToken) {
+  if (!pathValue) return "";
+  const lower = pathValue.toLowerCase();
+  if (
+    lower.startsWith("emojis/") ||
+    lower.startsWith("assets/") ||
+    lower.startsWith("data/") ||
+    lower.startsWith("appearance/") ||
+    lower.startsWith("stage/")
+  ) {
+    return pathValue;
+  }
+  if (fromEmojiToken || /[\\/]/.test(pathValue) || DOC_ICON_IMAGE_EXT_RE.test(pathValue)) {
+    return `emojis/${pathValue}`;
+  }
+  return pathValue;
+}
+
+function isEmojiTokenName(name) {
+  const raw = String(name || "").trim();
+  if (!raw) return "";
+  if (raw.length > 200) return "";
+  if (/[\r\n]/.test(raw)) return "";
+  if (raw.includes(":")) return "";
+  return raw;
+}
+
+function getEmojiTokenNameAt(text, index) {
+  if (!text || index < 0 || index >= text.length) return "";
+  if (text[index] !== ":") return "";
+  const end = text.indexOf(":", index + 1);
+  if (end <= index + 1) return "";
+  const token = text.slice(index, end + 1);
+  return isEmojiTokenName(stripEmojiColons(token));
+}
+
+function getFenceMarkerAt(text, index) {
+  const ch = text[index];
+  if (ch !== "`" && ch !== "~") return "";
+  const marker = text.slice(index, index + 3);
+  if (marker !== "```" && marker !== "~~~") return "";
+  let i = index - 1;
+  while (i >= 0 && text[i] === " ") i -= 1;
+  if (i >= 0 && text[i] !== "\n") return "";
+  return marker;
+}
+
+function collectEmojiTokenNames(markdown) {
+  const out = new Set();
+  const source = String(markdown || "");
+  if (!source) return out;
+  let i = 0;
+  let inFence = false;
+  let fenceMarker = "";
+  let inInline = false;
+  while (i < source.length) {
+    const fence = getFenceMarkerAt(source, i);
+    if (!inFence && fence) {
+      inFence = true;
+      fenceMarker = fence;
+      i += fence.length;
+      continue;
+    }
+    if (inFence && fence && fence === fenceMarker) {
+      inFence = false;
+      fenceMarker = "";
+      i += fence.length;
+      continue;
+    }
+    const ch = source[i];
+    if (!inFence) {
+      if (ch === "`") {
+        inInline = !inInline;
+        i += 1;
+        continue;
+      }
+      if (!inInline && ch === ":") {
+        const end = source.indexOf(":", i + 1);
+        if (end > i + 1) {
+          const token = source.slice(i, end + 1);
+          const name = isEmojiTokenName(stripEmojiColons(token));
+          if (name) out.add(name);
+          i = end + 1;
+          continue;
+        }
+      }
+    }
+    i += 1;
+  }
+  return out;
+}
+
+function replaceCustomEmojiTokens(markdown, tokenMap) {
+  if (!markdown || !tokenMap || tokenMap.size === 0) return markdown;
+  const source = String(markdown || "");
+  let out = "";
+  let i = 0;
+  let inFence = false;
+  let fenceMarker = "";
+  let inInline = false;
+  while (i < source.length) {
+    const fence = getFenceMarkerAt(source, i);
+    if (!inFence && fence) {
+      inFence = true;
+      fenceMarker = fence;
+      out += fence;
+      i += fence.length;
+      continue;
+    }
+    if (inFence && fence && fence === fenceMarker) {
+      inFence = false;
+      fenceMarker = "";
+      out += fence;
+      i += fence.length;
+      continue;
+    }
+    const ch = source[i];
+    if (!inFence) {
+      if (ch === "`") {
+        inInline = !inInline;
+        out += ch;
+        i += 1;
+        continue;
+      }
+      if (!inInline && ch === ":") {
+        const end = source.indexOf(":", i + 1);
+        if (end > i + 1) {
+          const token = source.slice(i, end + 1);
+          const name = isEmojiTokenName(stripEmojiColons(token));
+          if (name && tokenMap.has(name)) {
+            out += tokenMap.get(name);
+            const nextName = getEmojiTokenNameAt(source, end + 1);
+            if (nextName && tokenMap.has(nextName)) {
+              out += " ";
+            }
+          } else {
+            out += token;
+          }
+          i = end + 1;
+          continue;
+        }
+      }
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+function insertAdjacentEmojiImageSpacing(markdown) {
+  const source = String(markdown || "");
+  if (!source) return source;
+  return source.replace(
+    /(!\[[^\]]*]\((?:<)?[^)\s]*emojis\/[^)\s>]+(?:>)?\))(?=!\[[^\]]*]\((?:<)?[^)\s]*emojis\/)/g,
+    "$1 ",
+  );
+}
+
 function getDocIconKind(iconValue) {
   const icon = normalizeDocIconValue(iconValue);
   if (!icon) return "empty";
   if (/^data:image\//i.test(icon)) return "data";
   if (/^https?:\/\//i.test(icon)) return "url";
-  if (/[\\/]/.test(icon) || /\.(svg|png|jpe?g|gif|webp|bmp)$/i.test(icon)) {
+  const emojiToken = stripEmojiColons(icon);
+  const candidate = emojiToken || icon;
+  if (/[\\/]/.test(candidate) || DOC_ICON_IMAGE_EXT_RE.test(candidate)) {
     return "asset";
   }
   return "emoji";
@@ -992,11 +1171,13 @@ function normalizeDocIconAssetPath(iconValue) {
   if (/^data:image\//i.test(icon) || /^https?:\/\//i.test(icon)) {
     return icon;
   }
-  let cleaned = icon.replace(/^file:\/+/i, "");
+  const emojiToken = stripEmojiColons(icon);
+  let cleaned = (emojiToken || icon).replace(/^file:\/+/i, "");
   cleaned = cleaned.replace(/^[\\/]+/, "");
   const decoded = tryDecodeAssetPath(cleaned) || "";
   const normalized = normalizeAssetPath(decoded || cleaned);
-  return normalized || "";
+  if (!normalized) return "";
+  return normalizeEmojiAssetPath(normalized, Boolean(emojiToken));
 }
 
 function normalizeApiIconUrl(iconValue) {
@@ -1709,29 +1890,51 @@ class SiYuanSharePlugin extends Plugin {
     const kind = getDocIconKind(icon);
     if (kind === "emoji" || kind === "url" || kind === "data") return icon;
     if (kind !== "asset") return icon;
-    const assetPath = normalizeDocIconAssetPath(icon);
-    if (!assetPath) return "";
-    if (iconUploadMap && iconUploadMap.has(assetPath)) {
-      return iconUploadMap.get(assetPath) || "";
-    }
-    if (usedUploadPaths && usedUploadPaths.has(assetPath)) {
-      if (iconUploadMap) iconUploadMap.set(assetPath, assetPath);
-      return assetPath;
-    }
-    const uploadPath = sanitizeAssetUploadPath(assetPath, usedUploadPaths) || normalizeAssetPath(assetPath);
-    if (!uploadPath) return "";
-    try {
-      const asset = await this.fetchAssetBlob(assetPath, controller, notebookId);
-      if (assetMap && !assetMap.has(uploadPath)) {
-        assetMap.set(uploadPath, {asset: {path: uploadPath, blob: asset.blob}, docId});
+      let assetPath = normalizeDocIconAssetPath(icon);
+      if (!assetPath) return "";
+      const cacheKey = assetPath;
+      if (iconUploadMap && iconUploadMap.has(cacheKey)) {
+        return iconUploadMap.get(cacheKey) || "";
       }
-      if (usedUploadPaths) usedUploadPaths.add(uploadPath);
-      if (iconUploadMap) iconUploadMap.set(assetPath, uploadPath);
-      return uploadPath;
-    } catch (err) {
-      if (isAbortError(err)) throw err;
-      console.warn("Icon asset download failed", {path: assetPath, error: err});
-      return "";
+      let resolvedAsset = null;
+      if (assetPath.toLowerCase().startsWith("emojis/") && !DOC_ICON_IMAGE_EXT_RE.test(assetPath)) {
+        try {
+          resolvedAsset = await this.fetchEmojiAssetBlob(assetPath, controller, notebookId);
+          if (resolvedAsset?.path) assetPath = resolvedAsset.path;
+        } catch (err) {
+          if (isAbortError(err)) throw err;
+          console.warn("Emoji icon lookup failed", {path: assetPath, error: err});
+          if (iconUploadMap) iconUploadMap.set(cacheKey, "");
+          return "";
+        }
+      }
+      if (iconUploadMap && iconUploadMap.has(assetPath)) {
+        return iconUploadMap.get(assetPath) || "";
+      }
+      if (usedUploadPaths && usedUploadPaths.has(assetPath)) {
+        if (iconUploadMap) {
+          iconUploadMap.set(cacheKey, assetPath);
+          iconUploadMap.set(assetPath, assetPath);
+        }
+        return assetPath;
+      }
+      const uploadPath = sanitizeAssetUploadPath(assetPath, usedUploadPaths) || normalizeAssetPath(assetPath);
+      if (!uploadPath) return "";
+      try {
+        const asset = resolvedAsset || (await this.fetchAssetBlob(assetPath, controller, notebookId));
+        if (assetMap && !assetMap.has(uploadPath)) {
+          assetMap.set(uploadPath, {asset: {path: uploadPath, blob: asset.blob}, docId});
+        }
+        if (usedUploadPaths) usedUploadPaths.add(uploadPath);
+        if (iconUploadMap) {
+          iconUploadMap.set(cacheKey, uploadPath);
+          iconUploadMap.set(assetPath, uploadPath);
+        }
+        return uploadPath;
+      } catch (err) {
+        if (isAbortError(err)) throw err;
+        console.warn("Icon asset download failed", {path: assetPath, error: err});
+        return "";
     }
   }
 
@@ -5109,6 +5312,29 @@ class SiYuanSharePlugin extends Plugin {
     };
   }
 
+  async fetchEmojiAssetBlob(assetPath, controller, notebookId = "") {
+    const t = this.t.bind(this);
+    const normalized = normalizeAssetPath(assetPath);
+    if (!normalized) throw new Error(t("siyuanShare.error.resourcePathInvalid"));
+    const candidates = [];
+    if (DOC_ICON_IMAGE_EXT_RE.test(normalized)) {
+      candidates.push(normalized);
+    } else {
+      candidates.push(normalized);
+      EMOJI_IMAGE_EXTENSIONS.forEach((ext) => candidates.push(`${normalized}.${ext}`));
+    }
+    let lastErr = null;
+    for (const candidate of candidates) {
+      try {
+        return await this.fetchAssetBlob(candidate, controller, notebookId);
+      } catch (err) {
+        if (isAbortError(err)) throw err;
+        lastErr = err;
+      }
+    }
+    throw lastErr || new Error(t("siyuanShare.error.resourceDownloadFailed", {status: 404}));
+  }
+
   async fetchAssetBlob(assetPath, controller, notebookId = "") {
     const t = this.t.bind(this);
     const normalized = normalizeAssetPath(assetPath);
@@ -5198,20 +5424,65 @@ class SiYuanSharePlugin extends Plugin {
     const t = this.t.bind(this);
     const cancelledMsg = t("siyuanShare.error.resourceDownloadCanceled");
     let fixed = rewriteAssetLinks(markdown || "");
-    const assetPaths = extractAssetPaths(fixed);
     const assets = [];
     const failures = [];
     const renameMap = new Map();
     const usedUploadPaths = new Set();
+    const seenPaths = new Set();
+    const preloadedAssets = new Map();
+
+    const emojiTokenNames = collectEmojiTokenNames(fixed);
+    if (emojiTokenNames.size > 0) {
+      const tokenMap = new Map();
+      const resolvedPathMap = new Map();
+      for (const name of emojiTokenNames) {
+        try {
+          throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+          const basePath = normalizeEmojiAssetPath(name, true);
+          if (!basePath) continue;
+          const asset = await this.fetchEmojiAssetBlob(basePath, controller, notebookId);
+          const resolvedPath = normalizeAssetPath(asset?.path || "") || normalizeAssetPath(basePath);
+          if (!resolvedPath) continue;
+          let uploadPath = resolvedPathMap.get(resolvedPath);
+          if (!uploadPath) {
+            uploadPath = sanitizeAssetUploadPath(resolvedPath, usedUploadPaths) || normalizeAssetPath(resolvedPath);
+            if (!uploadPath) continue;
+            resolvedPathMap.set(resolvedPath, uploadPath);
+          }
+          if (!seenPaths.has(uploadPath)) {
+            assets.push({path: uploadPath, blob: asset.blob});
+            seenPaths.add(uploadPath);
+            preloadedAssets.set(uploadPath, asset.blob);
+          }
+          tokenMap.set(name, `![](<${uploadPath}>)`);
+        } catch (err) {
+          if (err?.message === cancelledMsg) {
+            throw err;
+          }
+        }
+      }
+      if (tokenMap.size > 0) {
+        fixed = replaceCustomEmojiTokens(fixed, tokenMap);
+      }
+    }
+
+    fixed = insertAdjacentEmojiImageSpacing(fixed);
+    const assetPaths = extractAssetPaths(fixed);
     for (const path of assetPaths) {
+      if (seenPaths.has(path)) continue;
+      seenPaths.add(path);
       try {
         throwIfAborted(controller, t("siyuanShare.message.cancelled"));
-        const uploadPath = sanitizeAssetUploadPath(path, usedUploadPaths) || normalizeAssetPath(path);
+        const uploadPath = usedUploadPaths.has(path)
+          ? path
+          : sanitizeAssetUploadPath(path, usedUploadPaths) || normalizeAssetPath(path);
         if (uploadPath && uploadPath !== path) {
           renameMap.set(path, uploadPath);
         }
-        const asset = await this.fetchAssetBlob(path, controller, notebookId);
-        assets.push({path: uploadPath || asset.path, blob: asset.blob});
+        const blob = preloadedAssets.has(path)
+          ? preloadedAssets.get(path)
+          : (await this.fetchAssetBlob(path, controller, notebookId)).blob;
+        assets.push({path: uploadPath || normalizeAssetPath(path) || path, blob});
       } catch (err) {
         if (err?.message === cancelledMsg) {
           throw err;

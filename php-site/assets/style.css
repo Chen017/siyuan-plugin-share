@@ -1313,6 +1313,14 @@ body.app-side-open {
   text-align: center;
 }
 
+.kb-main > .share-empty {
+  min-height: 60vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
 .share-comments,
 .share-report {
   margin-top: 32px;
@@ -2357,6 +2365,21 @@ body.app-side-open {
   font-weight: 600;
 }
 
+.link-button {
+  appearance: none;
+  border: none;
+  padding: 0;
+  margin-left: 6px;
+  background: none;
+  color: var(--primary);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
 .kb-directory {
   display: grid;
   gap: 10px;
@@ -2505,6 +2528,21 @@ body.app-side-open {
 .markdown-body img,
 .comment-content img {
   cursor: zoom-in;
+}
+
+.markdown-body img.sps-emoji,
+.comment-content img.sps-emoji,
+.markdown-body img[src*="/emojis/"],
+.comment-content img[src*="/emojis/"],
+.markdown-body img[src*="emojis/"],
+.comment-content img[src*="emojis/"] {
+  width: 1.1em;
+  height: 1.1em;
+  max-width: none;
+  max-height: none;
+  border-radius: 0;
+  vertical-align: -0.15em;
+  cursor: default;
 }
 
 .markdown-body iframe {
@@ -2717,6 +2755,22 @@ body.layout-share .comment-content img {
 .markdown-body li > a > object {
   display: block;
   margin: 12px auto;
+}
+
+.markdown-body p > img.sps-emoji,
+.markdown-body li > img.sps-emoji,
+.markdown-body p > a > img.sps-emoji,
+.markdown-body li > a > img.sps-emoji,
+.markdown-body p > img[src*="/emojis/"],
+.markdown-body li > img[src*="/emojis/"],
+.markdown-body p > a > img[src*="/emojis/"],
+.markdown-body li > a > img[src*="/emojis/"],
+.markdown-body p > img[src*="emojis/"],
+.markdown-body li > img[src*="emojis/"],
+.markdown-body p > a > img[src*="emojis/"],
+.markdown-body li > a > img[src*="emojis/"] {
+  display: inline-block;
+  margin: 0;
 }
 
 .markdown-body figure {
@@ -3495,6 +3549,20 @@ body.image-viewer-open {
     padding: 24px 20px 40px;
   }
 
+  .kb-main > .share-empty {
+    min-height: 0;
+    margin: 0;
+    padding: 0 16px;
+    width: min(92vw, 520px);
+    text-align: center;
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    z-index: 1;
+  }
+
   .share-page {
     padding: 0 16px;
   }
@@ -3820,7 +3888,13 @@ body.image-viewer-open {
 .admin-chart-grid {
   display: grid;
   gap: 16px;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 900px) {
+  .admin-chart-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .admin-chart-card {
@@ -3874,11 +3948,36 @@ body.image-viewer-open {
 
 .admin-chart {
   width: 100%;
-  height: 120px;
+  height: 220px;
+  font-family: var(--font-body);
+}
+
+.admin-chart text {
+  font-family: var(--font-body);
+  font-weight: 500;
 }
 
 .admin-chart__grid line {
   stroke: #edf0fb;
+  stroke-width: 1;
+}
+
+.admin-chart__axis text {
+  fill: var(--muted);
+  font-size: 9px;
+  font-weight: 400;
+  font-family: var(--font-body);
+}
+
+.admin-chart__unit {
+  fill: var(--muted);
+  font-size: 9px;
+  font-weight: 400;
+  font-family: var(--font-body);
+}
+
+.admin-chart__axis-line {
+  stroke: #dfe6f6;
   stroke-width: 1;
 }
 
@@ -3950,6 +4049,23 @@ body.image-viewer-open {
   background: #ffffff;
   color: var(--primary);
   box-shadow: 0 6px 12px rgba(90, 123, 255, 0.2);
+}
+
+.range-slider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.range-slider input[type="range"] {
+  flex: 1;
+  min-width: 160px;
+}
+
+.range-slider__value {
+  font-size: 0.82rem;
+  color: var(--muted);
 }
 
 .admin-legend {

@@ -837,6 +837,338 @@
     });
   };
 
+  const parseChartPayload = (raw) => {
+    if (!raw) return null;
+    try {
+      const payload = JSON.parse(raw);
+      if (!payload || !Array.isArray(payload.labels) || !Array.isArray(payload.series)) {
+        return null;
+      }
+      return payload;
+    } catch (error) {
+      return null;
+    }
+  };
+
+  const formatBytes = (bytes) => {
+    const value = Number(bytes);
+    if (!Number.isFinite(value)) return "0 B";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let size = Math.max(0, value);
+    let unitIndex = 0;
+    while (size >= 1024 && unitIndex < units.length - 1) {
+      size /= 1024;
+      unitIndex += 1;
+    }
+    const fixed = size >= 100 ? 0 : size >= 10 ? 1 : 2;
+    return `${size.toFixed(fixed)} ${units[unitIndex]}`;
+  };
+
+  const formatNumber = (value) => {
+    const num = Math.round(Number(value) || 0);
+    return num.toLocaleString();
+  };
+
+  const computeNiceScale = (maxValue, tickCount = 4, minStep = 0) => {
+    const safeMax = maxValue > 0 ? maxValue : 1;
+    const roughStep = safeMax / Math.max(1, tickCount - 1);
+    const magnitude = Math.pow(10, Math.floor(Math.log10(roughStep)));
+    const candidates = [1, 2, 5, 10];
+    let step = magnitude;
+    for (const candidate of candidates) {
+      const next = candidate * magnitude;
+      if (roughStep <= next) {
+        step = next;
+        break;
+      }
+    }
+    if (minStep > 0 && step < minStep) {
+      step = minStep;
+    }
+    const maxTick = Math.ceil(safeMax / step) * step;
+    return { step, maxTick };
+  };
+
+  const buildTicks = (maxValue, unit) => {
+    const minStep = unit === "count" ? 1 : 0;
+    const { step, maxTick } = computeNiceScale(maxValue, 4, minStep);
+    const ticks = [];
+    for (let val = 0; val <= maxTick + step / 2; val += step) {
+      ticks.push(Number(val.toFixed(6)));
+    }
+    const deduped = [];
+    let lastLabel = null;
+    ticks.forEach((tick) => {
+      const label = formatAxisValue(tick, unit);
+      if (label !== lastLabel) {
+        deduped.push(tick);
+        lastLabel = label;
+      }
+    });
+    if (!deduped.length) {
+      deduped.push(0, maxTick);
+    }
+    return { ticks: deduped, maxTick };
+  };
+
+  const formatAxisValue = (value, unit) => {
+    if (unit === "MB") {
+      let fixed = 1;
+      if (value >= 10) fixed = 0;
+      else if (value >= 1) fixed = 1;
+      else if (value >= 0.1) fixed = 2;
+      else fixed = 3;
+      return Number(value).toFixed(fixed);
+    }
+    return formatNumber(value);
+  };
+
+  const buildChartPaths = (values, width, height, padding, maxValue) => {
+    const count = values.length;
+    if (!count) return { line: "", area: "" };
+    const step = count > 1 ? (width - padding.left - padding.right) / (count - 1) : 0;
+    const points = values.map((val, index) => {
+      const ratio = maxValue > 0 ? val / maxValue : 0;
+      const x = padding.left + step * index;
+      const y = padding.top + (1 - ratio) * (height - padding.top - padding.bottom);
+      return [x, y];
+    });
+    const line = `M ${points.map((pt) => `${pt[0].toFixed(2)} ${pt[1].toFixed(2)}`).join(" L ")}`;
+    const areaPoints = [
+      ...points,
+      [padding.left + step * (count - 1), height - padding.bottom],
+      [padding.left, height - padding.bottom],
+    ];
+    const area = `M ${areaPoints
+      .map((pt) => `${pt[0].toFixed(2)} ${pt[1].toFixed(2)}`)
+      .join(" L ")} Z`;
+    return { line, area };
+  };
+
+  const resolveCssVar = (name, fallback) => {
+    const value = getComputedStyle(document.documentElement)
+      .getPropertyValue(name)
+      .trim();
+    return value || fallback;
+  };
+
+  const getChartColorMap = () => {
+    const primary = resolveCssVar("--primary", "#5a7bff");
+    const accent = resolveCssVar("--accent", "#1aa7a1");
+    return {
+      line: {
+        "chart-line--primary": primary,
+        "chart-line--accent": accent,
+        "chart-line--secondary": "#f29b6e",
+        "chart-line--info": "#6c8bff",
+        "chart-line--storage": "#2ea7b0",
+      },
+      area: {
+        "chart-area--primary": "rgba(90, 123, 255, 0.25)",
+        "chart-area--secondary": "rgba(242, 155, 110, 0.24)",
+        "chart-area--info": "rgba(108, 139, 255, 0.2)",
+        "chart-area--storage": "rgba(46, 167, 176, 0.22)",
+      },
+    };
+  };
+
+  const resolveClassColor = (className, palette) => {
+    if (!className) return "";
+    const entry = Object.keys(palette).find((key) => className.includes(key));
+    return entry ? palette[entry] : "";
+  };
+
+  const renderAdminChartSvg = (payload) => {
+    const labels = payload.labels || [];
+    const seriesList = payload.series || [];
+    const unit = payload.unit || "count";
+    const width = 360;
+    const height = 220;
+    const padding = { top: 14, right: 6, bottom: 26, left: 12 };
+    const colors = getChartColorMap();
+    const safeFont = "'Noto Sans SC','Outfit','Microsoft YaHei',sans-serif";
+    const axisFontSize = 9;
+    const axisFontWeight = 400;
+    let maxValue = 0;
+    seriesList.forEach((series) => {
+      (series.values || []).forEach((value) => {
+        maxValue = Math.max(maxValue, Number(value) || 0);
+      });
+    });
+    const { ticks, maxTick } = buildTicks(maxValue, unit);
+    const previewLabels = ticks.map((tick) => formatAxisValue(tick, unit));
+    const maxLabelLen = previewLabels.reduce(
+      (max, label) => Math.max(max, String(label).length),
+      0,
+    );
+    const labelWidth = Math.max(20, maxLabelLen * 6 + 6);
+    const dynamicPadding = {
+      top: padding.top,
+      right: padding.right,
+      bottom: padding.bottom,
+      left: Math.max(padding.left, labelWidth),
+    };
+    const maxXTicks = labels.length <= 7 ? labels.length : 5;
+    const xStep = Math.max(1, Math.ceil((labels.length - 1) / Math.max(1, maxXTicks - 1)));
+    const tickIndexes = new Set([0, labels.length - 1]);
+    for (let i = 0; i < labels.length; i += xStep) {
+      tickIndexes.add(i);
+    }
+    const xTickList = Array.from(tickIndexes).filter((idx) => idx >= 0 && idx < labels.length);
+    xTickList.sort((a, b) => a - b);
+    const formatDateLabel = (label) => {
+      if (typeof label !== "string") return "";
+      return label.length >= 10 ? label.slice(5) : label;
+    };
+
+    const gridLines = ticks.slice(1).map((tick) => {
+      const y =
+        dynamicPadding.top +
+        (1 - tick / maxTick) *
+          (height - dynamicPadding.top - dynamicPadding.bottom);
+      return `<line x1="${dynamicPadding.left}" y1="${y.toFixed(
+        2,
+      )}" x2="${(width - dynamicPadding.right).toFixed(2)}" y2="${y.toFixed(
+        2,
+      )}"></line>`;
+    });
+
+    const axisLabels = [
+      ...ticks.map((tick) => {
+        const y =
+          dynamicPadding.top +
+          (1 - tick / maxTick) *
+            (height - dynamicPadding.top - dynamicPadding.bottom);
+        return `<text x="${Math.max(6, dynamicPadding.left - 6).toFixed(
+          2,
+        )}" y="${y.toFixed(
+          2,
+        )}" text-anchor="end" dominant-baseline="middle" font-family="${safeFont}" font-size="${axisFontSize}" font-weight="${axisFontWeight}">${formatAxisValue(
+          tick,
+          unit,
+        )}</text>`;
+      }),
+      ...xTickList.map((idx) => {
+        const x =
+          labels.length > 1
+            ? dynamicPadding.left +
+              (idx / (labels.length - 1)) *
+                (width - dynamicPadding.left - dynamicPadding.right)
+            : dynamicPadding.left;
+        const anchor =
+          idx === 0 ? "start" : idx === labels.length - 1 ? "end" : "middle";
+        return `<text x="${x.toFixed(
+          2,
+        )}" y="${(height - padding.bottom + 12).toFixed(
+          2,
+        )}" text-anchor="${anchor}" dominant-baseline="hanging" font-family="${safeFont}" font-size="${axisFontSize}" font-weight="${axisFontWeight}">${formatDateLabel(
+          labels[idx],
+        )}</text>`;
+      }),
+    ];
+
+    const paths = seriesList
+      .map((series) => {
+        const values = (series.values || []).map((val) => Number(val) || 0);
+        const { line, area } = buildChartPaths(values, width, height, dynamicPadding, maxTick);
+        const areaClass = series.areaClass ? ` class="${series.areaClass}"` : "";
+        const lineClass = series.lineClass ? ` class="${series.lineClass}"` : "";
+        const areaColor = resolveClassColor(series.areaClass, colors.area);
+        const lineColor = resolveClassColor(series.lineClass, colors.line);
+        const areaPath = series.areaClass
+          ? `<path${areaClass} d="${area}" fill="${areaColor}" />`
+          : "";
+        const linePath = `<path${lineClass} d="${line}" fill="none"${
+          lineColor ? ` stroke="${lineColor}"` : ""
+        } />`;
+        return `${areaPath}${linePath}`;
+      })
+      .join("");
+
+    const unitLabel =
+      unit && unit !== "count"
+        ? `<text class="admin-chart__unit" x="${dynamicPadding.left}" y="${(
+            dynamicPadding.top - 8
+          ).toFixed(2)}">${unit}</text>`
+        : "";
+
+    const axisLine = `<path class="admin-chart__axis-line" fill="none" d="M ${dynamicPadding.left} ${dynamicPadding.top} L ${dynamicPadding.left} ${
+      height - dynamicPadding.bottom
+    } L ${width - dynamicPadding.right} ${height - dynamicPadding.bottom}" />`;
+
+    return `<svg class="admin-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" style="font-family:${safeFont};">
+      <g class="admin-chart__grid">${gridLines.join("")}</g>
+      ${axisLine}
+      <g class="admin-chart__axis">${axisLabels.join("")}</g>
+      ${unitLabel}
+      ${paths}
+    </svg>`;
+  };
+
+  const renderAdminChart = (holder, payload) => {
+    if (!holder || !payload) return;
+    holder.innerHTML = renderAdminChartSvg(payload);
+  };
+
+  const updateCustomSummary = (panel, payload) => {
+    if (!panel || !payload) return;
+    const seriesList = payload.series || [];
+    panel.querySelectorAll("[data-range-metric]").forEach((node) => {
+      const key = node.dataset.rangeMetric;
+      const series = seriesList.find((item) => item.key === key);
+      if (!series) return;
+      const values = Array.isArray(series.sumValues) ? series.sumValues : series.values;
+      const sum = (values || []).reduce((acc, value) => acc + (Number(value) || 0), 0);
+      if (series.sumFormat === "bytes") {
+        node.textContent = formatBytes(sum);
+      } else {
+        node.textContent = formatNumber(sum);
+      }
+    });
+    const totalNode = panel.querySelector("[data-range-total]");
+    if (totalNode) {
+      const series = seriesList[0];
+      if (series) {
+        const values = Array.isArray(series.sumValues) ? series.sumValues : series.values;
+        const sum = (values || []).reduce((acc, value) => acc + (Number(value) || 0), 0);
+        totalNode.textContent = series.sumFormat === "bytes" ? formatBytes(sum) : formatNumber(sum);
+      }
+    }
+  };
+
+  const updateCustomRange = (card, days) => {
+    if (!card) return;
+    const sourceRaw = card.dataset.rangeSource || "";
+    const source = parseChartPayload(sourceRaw);
+    if (!source) return;
+    const totalDays = source.labels.length;
+    const safeDays = Math.max(1, Math.min(totalDays, days));
+    const labels = source.labels.slice(-safeDays);
+    const series = source.series.map((item) => {
+      const values = (item.values || []).slice(-safeDays);
+      const sumValues = Array.isArray(item.sumValues)
+        ? item.sumValues.slice(-safeDays)
+        : undefined;
+      return { ...item, values, sumValues };
+    });
+    const payload = { ...source, labels, series };
+    const panel = card.querySelector("[data-range-panel='custom']");
+    if (!panel) return;
+    const holder = panel.querySelector("[data-admin-chart]");
+    if (holder) {
+      renderAdminChart(holder, payload);
+    }
+    panel.querySelectorAll("[data-range-days]").forEach((node) => {
+      node.textContent = String(safeDays);
+    });
+    updateCustomSummary(panel, payload);
+    const label = card.querySelector("[data-range-label]");
+    const active = card.querySelector(".range-btn.is-active");
+    if (label && active && active.dataset.rangeValue === "custom") {
+      label.textContent = `最近${safeDays}天`;
+    }
+  };
+
   const initRangeSwitch = () => {
     const switches = document.querySelectorAll("[data-range-switch]");
     if (!switches.length) return;
@@ -845,6 +1177,15 @@
       const panels = Array.from(card.querySelectorAll("[data-range-panel]"));
       const label = card.querySelector("[data-range-label]");
       if (!buttons.length || !panels.length) return;
+      const slider = card.querySelector("[data-range-slider]");
+      const handleSlider = () => {
+        if (!slider) return;
+        const value = Number(slider.value || 1);
+        updateCustomRange(card, value);
+      };
+      if (slider) {
+        slider.addEventListener("input", handleSlider);
+      }
       const setRange = (value) => {
         const target = String(value || "");
         buttons.forEach((btn) => {
@@ -857,7 +1198,17 @@
           panel.hidden = panel.dataset.rangePanel !== target;
         });
         if (label) {
-          label.textContent = target === "30" ? "近30天" : "近7天";
+          if (target === "30") {
+            label.textContent = "近30天";
+          } else if (target === "custom") {
+            const value = Number(slider?.value || 7);
+            label.textContent = `最近${value}天`;
+          } else {
+            label.textContent = "近7天";
+          }
+        }
+        if (target === "custom") {
+          handleSlider();
         }
       };
       buttons.forEach((btn) => {
@@ -866,6 +1217,17 @@
         });
       });
       setRange(card.dataset.rangeDefault || "7");
+      if (slider) {
+        handleSlider();
+      }
+    });
+  };
+
+  const initAdminCharts = () => {
+    document.querySelectorAll("[data-admin-chart]").forEach((holder) => {
+      const payload = parseChartPayload(holder.dataset.adminChart || "");
+      if (!payload) return;
+      renderAdminChart(holder, payload);
     });
   };
 
@@ -1314,10 +1676,17 @@
     const getImageSrc = (img) =>
       img.getAttribute("data-src") || img.currentSrc || img.src || "";
 
+    const isEmojiImage = (img) => {
+      if (!img) return false;
+      if (img.classList.contains("sps-emoji")) return true;
+      const src = img.getAttribute("src") || "";
+      return src.includes("/emojis/") || src.includes("emojis/");
+    };
+
     const collectImages = () =>
       Array.from(
         document.querySelectorAll(".markdown-body img, .comment-content img"),
-      ).filter((img) => !img.closest(".image-viewer"));
+      ).filter((img) => !img.closest(".image-viewer") && !isEmojiImage(img));
 
     let viewer = document.querySelector(".image-viewer");
     if (!viewer) {
@@ -1649,6 +2018,7 @@
       if (!img) return;
       if (img.closest(".image-viewer")) return;
       if (!img.matches(".markdown-body img, .comment-content img")) return;
+      if (isEmojiImage(img)) return;
       const list = collectImages();
       const startIndex = list.indexOf(img);
       if (startIndex < 0) return;
@@ -2922,6 +3292,7 @@
   initAnnouncementModal();
   initNav();
   initRangeSwitch();
+  initAdminCharts();
   initKnowledgeTree();
   initDocTreeScroll();
   initBatchSelection();

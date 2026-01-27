@@ -81,6 +81,16 @@ function base_path(): string {
 }
 
 function base_url(): string {
+    static $customBaseUrl = null;
+    if ($customBaseUrl === null) {
+        $customBaseUrl = trim((string)get_setting('site_base_url', ''));
+        if ($customBaseUrl !== '') {
+            $customBaseUrl = rtrim($customBaseUrl, '/');
+        }
+    }
+    if ($customBaseUrl !== null && $customBaseUrl !== '') {
+        return $customBaseUrl;
+    }
     $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
     $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
     return $scheme . '://' . $host . base_path();
@@ -369,6 +379,7 @@ function migrate(PDO $pdo): void {
     ensure_column($pdo, 'users', 'storage_used_bytes', 'INTEGER NOT NULL DEFAULT 0');
     ensure_column($pdo, 'users', 'must_change_password', 'INTEGER NOT NULL DEFAULT 0');
     ensure_column($pdo, 'users', 'email_verified', 'INTEGER NOT NULL DEFAULT 0');
+    ensure_column($pdo, 'users', 'last_active_at', 'TEXT');
     ensure_column($pdo, 'shares', 'password_hash', 'TEXT');
     ensure_column($pdo, 'shares', 'expires_at', 'INTEGER');
     ensure_column($pdo, 'shares', 'access_count', 'INTEGER NOT NULL DEFAULT 0');
@@ -446,6 +457,7 @@ function seed_default_settings(PDO $pdo): void {
     ensure_setting($pdo, 'banned_words', '');
     ensure_setting($pdo, 'site_icp', '');
     ensure_setting($pdo, 'site_contact_email', '');
+    ensure_setting($pdo, 'site_base_url', '');
     ensure_setting($pdo, 'access_stats_default_enabled', '1');
     ensure_setting($pdo, 'access_stats_default_retention_days', '7');
 }
@@ -1556,7 +1568,7 @@ function maybe_send_instance_heartbeat(): void {
     if ($base === '') {
         return;
     }
-    $interval = 3600;
+    $interval = 10800;
     $lastAttempt = (int)get_setting('instance_heartbeat_attempt', '0');
     if ($lastAttempt > 0 && (time() - $lastAttempt) < $interval) {
         return;
@@ -1754,7 +1766,7 @@ function build_chart_paths(array $values, int $width, int $height, int $padding,
     return ['line' => $line, 'area' => $area];
 }
 
-function render_chart_svg(array $seriesList, int $width = 360, int $height = 120): string {
+function render_chart_svg(array $seriesList, int $width = 360, int $height = 220): string {
     $maxValue = 0;
     foreach ($seriesList as $series) {
         foreach ($series['values'] as $value) {
@@ -1787,6 +1799,19 @@ function render_chart_svg(array $seriesList, int $width = 360, int $height = 120
         . '<g class="admin-chart__grid">' . implode('', $gridLines) . '</g>'
         . $paths
         . '</svg>';
+}
+
+function render_admin_chart_holder(array $labels, array $series, string $unit, string $fallbackSvg = ''): string {
+    $payload = [
+        'labels' => $labels,
+        'series' => $series,
+        'unit' => $unit,
+    ];
+    $data = htmlspecialchars(
+        json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ENT_QUOTES
+    );
+    return '<div class="admin-chart-holder" data-admin-chart="' . $data . '">' . $fallbackSvg . '</div>';
 }
 
 function render_kpi_card(string $label, string $value, string $meta, string $iconSvg, string $extraHtml = ''): string {
@@ -3593,6 +3618,33 @@ function current_user(): ?array {
     return $row;
 }
 
+function touch_user_activity(array $user): void {
+    $userId = (int)($user['id'] ?? 0);
+    if ($userId <= 0) {
+        return;
+    }
+    $last = trim((string)($user['last_active_at'] ?? ''));
+    if ($last !== '') {
+        $lastTs = strtotime($last);
+        if ($lastTs && (time() - $lastTs) < 600) {
+            return;
+        }
+    }
+    if (!empty($_SESSION['last_active_touch'])) {
+        $sessionTs = (int)$_SESSION['last_active_touch'];
+        if ($sessionTs > 0 && (time() - $sessionTs) < 600) {
+            return;
+        }
+    }
+    $pdo = db();
+    $stmt = $pdo->prepare('UPDATE users SET last_active_at = :ts WHERE id = :id');
+    $stmt->execute([
+        ':ts' => now(),
+        ':id' => $userId,
+    ]);
+    $_SESSION['last_active_touch'] = time();
+}
+
 function require_login(): array {
     $user = current_user();
     if (!$user) {
@@ -3602,6 +3654,7 @@ function require_login(): array {
         session_destroy();
         redirect('/login');
     }
+    touch_user_activity($user);
     return $user;
 }
 
@@ -3644,6 +3697,7 @@ function require_api_user(): array {
     if (!$user) {
         api_response(401, null, 'API Key 无效或已失效，请前往控制台重新生成');
     }
+    touch_user_activity($user);
     return $user;
 }
 
@@ -5903,13 +5957,224 @@ function rewrite_asset_links(string $markdown, string $assetBase = ''): string {
     $markdown = str_replace('](/assets/', '](' . $prefix . 'assets/', $markdown);
     $markdown = str_replace('](./assets/', '](' . $prefix . 'assets/', $markdown);
     $markdown = str_replace('](assets/', '](' . $prefix . 'assets/', $markdown);
+    $markdown = str_replace('](<assets/', '](<' . $prefix . 'assets/', $markdown);
+    $markdown = str_replace('](</assets/', '](<' . $prefix . 'assets/', $markdown);
     $markdown = str_replace('src="/assets/', 'src="' . $prefix . 'assets/', $markdown);
     $markdown = str_replace('src="./assets/', 'src="' . $prefix . 'assets/', $markdown);
     $markdown = str_replace('src="assets/', 'src="' . $prefix . 'assets/', $markdown);
     $markdown = str_replace('href="/assets/', 'href="' . $prefix . 'assets/', $markdown);
     $markdown = str_replace('href="./assets/', 'href="' . $prefix . 'assets/', $markdown);
     $markdown = str_replace('href="assets/', 'href="' . $prefix . 'assets/', $markdown);
+    $markdown = str_replace('](/emojis/', '](' . $prefix . 'emojis/', $markdown);
+    $markdown = str_replace('](./emojis/', '](' . $prefix . 'emojis/', $markdown);
+    $markdown = str_replace('](emojis/', '](' . $prefix . 'emojis/', $markdown);
+    $markdown = str_replace('](<emojis/', '](<' . $prefix . 'emojis/', $markdown);
+    $markdown = str_replace('](</emojis/', '](<' . $prefix . 'emojis/', $markdown);
+    $markdown = str_replace('src="/emojis/', 'src="' . $prefix . 'emojis/', $markdown);
+    $markdown = str_replace('src="./emojis/', 'src="' . $prefix . 'emojis/', $markdown);
+    $markdown = str_replace('src="emojis/', 'src="' . $prefix . 'emojis/', $markdown);
+    $markdown = str_replace('href="/emojis/', 'href="' . $prefix . 'emojis/', $markdown);
+    $markdown = str_replace('href="./emojis/', 'href="' . $prefix . 'emojis/', $markdown);
+    $markdown = str_replace('href="emojis/', 'href="' . $prefix . 'emojis/', $markdown);
+    $markdown = str_replace('](/emojis/', '](' . $prefix . 'emojis/', $markdown);
+    $markdown = str_replace('](./emojis/', '](' . $prefix . 'emojis/', $markdown);
+    $markdown = str_replace('](emojis/', '](' . $prefix . 'emojis/', $markdown);
+    $markdown = str_replace('src="/emojis/', 'src="' . $prefix . 'emojis/', $markdown);
+    $markdown = str_replace('src="./emojis/', 'src="' . $prefix . 'emojis/', $markdown);
+    $markdown = str_replace('src="emojis/', 'src="' . $prefix . 'emojis/', $markdown);
+    $markdown = str_replace('href="/emojis/', 'href="' . $prefix . 'emojis/', $markdown);
+    $markdown = str_replace('href="./emojis/', 'href="' . $prefix . 'emojis/', $markdown);
+    $markdown = str_replace('href="emojis/', 'href="' . $prefix . 'emojis/', $markdown);
     return $markdown;
+}
+
+function encode_path_segments(string $path): string {
+    $parts = explode('/', $path);
+    $encoded = array_map(static fn($part) => rawurlencode($part), $parts);
+    return implode('/', $encoded);
+}
+
+function sanitize_emoji_token_name(string $token): string {
+    $token = trim($token);
+    if ($token === '' || $token[0] !== ':' || substr($token, -1) !== ':') {
+        return '';
+    }
+    $name = trim(substr($token, 1, -1));
+    if ($name === '' || strpos($name, "\n") !== false || strpos($name, "\r") !== false) {
+        return '';
+    }
+    if (strpos($name, ':') !== false) {
+        return '';
+    }
+    return $name;
+}
+
+function resolve_custom_emoji_src(string $name, int $shareId, string $assetBasePath): string {
+    static $cache = [];
+    $key = $shareId . '|' . $name;
+    if (isset($cache[$key])) {
+        return $cache[$key];
+    }
+    $clean = str_replace('\\', '/', $name);
+    $clean = ltrim($clean, '/');
+    if ($clean === '' || strpos($clean, '..') !== false) {
+        $cache[$key] = '';
+        return '';
+    }
+    $candidates = [$clean];
+    $compact = preg_replace('/\s+/', '', $clean);
+    if ($compact !== $clean && $compact !== '') {
+        $candidates[] = $compact;
+    }
+    $extensions = ['svg', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'];
+    $fsBase = __DIR__ . '/uploads/shares/' . $shareId . '/emojis/';
+    foreach ($candidates as $candidate) {
+        $hasExt = (bool)preg_match('/\.(svg|png|jpe?g|gif|webp|bmp)$/i', $candidate);
+        $names = $hasExt ? [$candidate] : array_merge([$candidate], array_map(
+            static fn($ext) => $candidate . '.' . $ext,
+            $extensions
+        ));
+        foreach ($names as $file) {
+            $fsPath = $fsBase . $file;
+            if (is_file($fsPath)) {
+                $rel = 'emojis/' . $file;
+                $cache[$key] = $assetBasePath . encode_path_segments($rel);
+                return $cache[$key];
+            }
+        }
+    }
+    $cache[$key] = '';
+    return '';
+}
+
+function get_fence_marker(string $text, int $index): string {
+    $ch = $text[$index] ?? '';
+    if ($ch !== '`' && $ch !== '~') {
+        return '';
+    }
+    $marker = substr($text, $index, 3);
+    if ($marker !== '```' && $marker !== '~~~') {
+        return '';
+    }
+    $i = $index - 1;
+    while ($i >= 0 && $text[$i] === ' ') {
+        $i--;
+    }
+    if ($i >= 0 && $text[$i] !== "\n") {
+        return '';
+    }
+    return $marker;
+}
+
+function get_emoji_token_name_at(string $text, int $index): string {
+    $len = strlen($text);
+    if ($index < 0 || $index >= $len) {
+        return '';
+    }
+    if ($text[$index] !== ':') {
+        return '';
+    }
+    $end = strpos($text, ':', $index + 1);
+    if ($end === false || $end <= $index + 1) {
+        return '';
+    }
+    return sanitize_emoji_token_name(substr($text, $index, $end - $index + 1));
+}
+
+function replace_custom_emoji_tokens(string $markdown, int $shareId, string $assetBasePath): string {
+    $source = (string)$markdown;
+    if ($source === '') {
+        return $source;
+    }
+    $len = strlen($source);
+    $out = '';
+    $inFence = false;
+    $fenceMarker = '';
+    $inInline = false;
+    $inTag = false;
+    $i = 0;
+    while ($i < $len) {
+        $fence = $inTag ? '' : get_fence_marker($source, $i);
+        if (!$inFence && $fence !== '') {
+            $inFence = true;
+            $fenceMarker = $fence;
+            $out .= $fence;
+            $i += 3;
+            continue;
+        }
+        if ($inFence && $fence !== '' && $fence === $fenceMarker) {
+            $inFence = false;
+            $fenceMarker = '';
+            $out .= $fence;
+            $i += 3;
+            continue;
+        }
+        $ch = $source[$i];
+        if (!$inFence) {
+            if ($ch === '<') {
+                $inTag = true;
+                $out .= $ch;
+                $i++;
+                continue;
+            }
+            if ($inTag) {
+                $out .= $ch;
+                if ($ch === '>') {
+                    $inTag = false;
+                }
+                $i++;
+                continue;
+            }
+            if ($ch === '`') {
+                $inInline = !$inInline;
+                $out .= $ch;
+                $i++;
+                continue;
+            }
+            if (!$inInline && $ch === ':') {
+                $end = strpos($source, ':', $i + 1);
+                if ($end !== false && $end > $i + 1) {
+                    $token = substr($source, $i, $end - $i + 1);
+                    $name = sanitize_emoji_token_name($token);
+                    if ($name !== '') {
+                        $src = resolve_custom_emoji_src($name, $shareId, $assetBasePath);
+                        if ($src !== '') {
+                            $out .= '![](<';
+                            $out .= $src;
+                            $out .= '>)';
+                            $nextName = get_emoji_token_name_at($source, $end + 1);
+                            if ($nextName !== '') {
+                                $nextSrc = resolve_custom_emoji_src($nextName, $shareId, $assetBasePath);
+                                if ($nextSrc !== '') {
+                                    $out .= ' ';
+                                }
+                            }
+                            $i = $end + 1;
+                            continue;
+                        }
+                    }
+                    $out .= $token;
+                    $i = $end + 1;
+                    continue;
+                }
+            }
+        }
+        $out .= $ch;
+        $i++;
+    }
+    return $out;
+}
+
+function insert_adjacent_emoji_image_spacing(string $markdown): string {
+    $source = (string)$markdown;
+    if ($source === '') {
+        return $source;
+    }
+    return preg_replace(
+        '/(!\[[^\]]*]\((?:<)?[^)\s]*emojis\/[^)\s>]+(?:>)?\))(?=!\[[^\]]*]\((?:<)?[^)\s]*emojis\/)/',
+        '$1 ',
+        $source,
+    ) ?? $source;
 }
 
 function strip_duplicate_title_heading(string $markdown, string $title): string {
@@ -6456,6 +6721,8 @@ function route_share(string $slug, ?string $docId = null): void {
             $front = extract_front_matter((string)$doc['markdown']);
             $markdown = rewrite_asset_links((string)$front['body'], $assetBasePath);
             $markdown = strip_duplicate_title_heading($markdown, $docTitleRaw);
+            $markdown = replace_custom_emoji_tokens($markdown, (int)$shareId, $assetBasePath);
+            $markdown = insert_adjacent_emoji_image_spacing($markdown);
             $reportTrigger = render_share_report_trigger($share);
             $shareMetaHtml = render_share_stats($share, $reportTrigger);
             record_share_access($share, (string)($doc['doc_id'] ?? ''), $docTitleRaw);
@@ -6483,6 +6750,21 @@ function route_share(string $slug, ?string $docId = null): void {
             if (!empty($crumbs)) {
                 array_pop($crumbs);
             }
+            if ($shareTitleRaw !== '' && !empty($crumbs)) {
+                while (!empty($crumbs) && $crumbs[0] === $shareTitleRaw) {
+                    array_shift($crumbs);
+                }
+            }
+            $filteredCrumbs = [];
+            $prevCrumb = null;
+            foreach ($crumbs as $crumb) {
+                if ($crumb === $prevCrumb) {
+                    continue;
+                }
+                $filteredCrumbs[] = $crumb;
+                $prevCrumb = $crumb;
+            }
+            $crumbs = $filteredCrumbs;
             $breadcrumbsHtml = '<div class="kb-breadcrumbs"><a class="kb-back" href="' . $base . '/s/' . $slug . '">' . htmlspecialchars($shareTitleRaw) . '</a>';
             foreach ($crumbs as $crumb) {
                 $breadcrumbsHtml .= '<span>' . htmlspecialchars($crumb) . '</span>';
@@ -6514,6 +6796,8 @@ function route_share(string $slug, ?string $docId = null): void {
         $front = extract_front_matter((string)$doc['markdown']);
         $markdown = rewrite_asset_links((string)$front['body'], $assetBasePath);
         $markdown = strip_duplicate_title_heading($markdown, $docTitleRaw);
+        $markdown = replace_custom_emoji_tokens($markdown, (int)$shareId, $assetBasePath);
+        $markdown = insert_adjacent_emoji_image_spacing($markdown);
         $reportTrigger = render_share_report_trigger($share);
         $shareMetaHtml = render_share_stats($share, $reportTrigger);
         record_share_access($share, (string)($doc['doc_id'] ?? ''), $docTitleRaw);
@@ -6584,6 +6868,8 @@ function route_share(string $slug, ?string $docId = null): void {
             $front = extract_front_matter((string)$doc['markdown']);
             $markdown = rewrite_asset_links((string)$front['body'], $assetBasePath);
             $markdown = strip_duplicate_title_heading($markdown, $docTitleRaw);
+            $markdown = replace_custom_emoji_tokens($markdown, (int)$shareId, $assetBasePath);
+            $markdown = insert_adjacent_emoji_image_spacing($markdown);
             $reportTrigger = render_share_report_trigger($share);
             $shareMetaHtml = render_share_stats($share, $reportTrigger);
             record_share_access($share, (string)($doc['doc_id'] ?? ''), $docTitleRaw);
@@ -8020,7 +8306,7 @@ if ($path === '/admin-home') {
     $todayUv = (int)($todayRow['uv'] ?? 0);
     $activeStart30 = date('Y-m-d H:i:s', strtotime('-30 days'));
     $activeStart7 = date('Y-m-d H:i:s', strtotime('-7 days'));
-    $activeStmt = $pdo->prepare('SELECT COUNT(DISTINCT user_id) FROM shares WHERE updated_at >= :start AND deleted_at IS NULL');
+    $activeStmt = $pdo->prepare('SELECT COUNT(*) FROM users WHERE last_active_at >= :start');
     $activeStmt->execute([':start' => $activeStart30]);
     $activeUsers30 = (int)$activeStmt->fetchColumn();
     $activeStmt->execute([':start' => $activeStart7]);
@@ -8120,6 +8406,47 @@ if ($path === '/admin-home') {
     $storageTotal7 = array_sum($storageBytesSeries7);
     $storageTotal30 = array_sum($storageBytesSeries30);
 
+    $pvUvSeries7Chart = [
+        ['key' => 'pv', 'values' => $pvSeries7, 'lineClass' => 'chart-line chart-line--primary', 'areaClass' => 'chart-area chart-area--primary'],
+        ['key' => 'uv', 'values' => $uvSeries7, 'lineClass' => 'chart-line chart-line--accent'],
+    ];
+    $pvUvSeries30Chart = [
+        ['key' => 'pv', 'values' => $pvSeries30, 'lineClass' => 'chart-line chart-line--primary', 'areaClass' => 'chart-area chart-area--primary'],
+        ['key' => 'uv', 'values' => $uvSeries30, 'lineClass' => 'chart-line chart-line--accent'],
+    ];
+    $shareSeries7Chart = [
+        ['key' => 'share', 'values' => $shareSeries7, 'lineClass' => 'chart-line chart-line--secondary', 'areaClass' => 'chart-area chart-area--secondary'],
+    ];
+    $shareSeries30Chart = [
+        ['key' => 'share', 'values' => $shareSeries30, 'lineClass' => 'chart-line chart-line--secondary', 'areaClass' => 'chart-area chart-area--secondary'],
+    ];
+    $userSeries7Chart = [
+        ['key' => 'user', 'values' => $userSeries7, 'lineClass' => 'chart-line chart-line--info', 'areaClass' => 'chart-area chart-area--info'],
+    ];
+    $userSeries30Chart = [
+        ['key' => 'user', 'values' => $userSeries30, 'lineClass' => 'chart-line chart-line--info', 'areaClass' => 'chart-area chart-area--info'],
+    ];
+    $storageSeries7Chart = [
+        [
+            'key' => 'storage',
+            'values' => $storageSeries7,
+            'lineClass' => 'chart-line chart-line--storage',
+            'areaClass' => 'chart-area chart-area--storage',
+            'sumValues' => $storageBytesSeries7,
+            'sumFormat' => 'bytes',
+        ],
+    ];
+    $storageSeries30Chart = [
+        [
+            'key' => 'storage',
+            'values' => $storageSeries30,
+            'lineClass' => 'chart-line chart-line--storage',
+            'areaClass' => 'chart-area chart-area--storage',
+            'sumValues' => $storageBytesSeries30,
+            'sumFormat' => 'bytes',
+        ],
+    ];
+
     $pvUvChart7 = render_chart_svg([
         ['values' => $pvSeries7, 'line_class' => 'chart-line chart-line--primary', 'area_class' => 'chart-area chart-area--primary'],
         ['values' => $uvSeries7, 'line_class' => 'chart-line chart-line--accent'],
@@ -8146,6 +8473,15 @@ if ($path === '/admin-home') {
     $storageChart30 = render_chart_svg([
         ['values' => $storageSeries30, 'line_class' => 'chart-line chart-line--storage', 'area_class' => 'chart-area chart-area--storage'],
     ]);
+
+    $pvUvHolder7 = render_admin_chart_holder($range7, $pvUvSeries7Chart, 'count', $pvUvChart7);
+    $pvUvHolder30 = render_admin_chart_holder($range30, $pvUvSeries30Chart, 'count', $pvUvChart30);
+    $shareHolder7 = render_admin_chart_holder($range7, $shareSeries7Chart, 'count', $shareChart7);
+    $shareHolder30 = render_admin_chart_holder($range30, $shareSeries30Chart, 'count', $shareChart30);
+    $userHolder7 = render_admin_chart_holder($range7, $userSeries7Chart, 'count', $userChart7);
+    $userHolder30 = render_admin_chart_holder($range30, $userSeries30Chart, 'count', $userChart30);
+    $storageHolder7 = render_admin_chart_holder($range7, $storageSeries7Chart, 'MB', $storageChart7);
+    $storageHolder30 = render_admin_chart_holder($range30, $storageSeries30Chart, 'MB', $storageChart30);
 
     $instanceStats = fetch_central_instance_stats();
     $instanceTotal = $instanceStats ? (int)($instanceStats['total'] ?? 0) : null;
@@ -8208,74 +8544,120 @@ if ($path === '/admin-home') {
     $content .= render_kpi_card('存储占用/剩余', htmlspecialchars($storageValue), htmlspecialchars($storageMeta), $iconStorage, $storageProgress);
     $content .= '</div>';
 
+    $pvUvRangeSource = htmlspecialchars(json_encode([
+        'labels' => $range30,
+        'series' => $pvUvSeries30Chart,
+        'unit' => 'count',
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), ENT_QUOTES);
+    $shareRangeSource = htmlspecialchars(json_encode([
+        'labels' => $range30,
+        'series' => $shareSeries30Chart,
+        'unit' => 'count',
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), ENT_QUOTES);
+    $userRangeSource = htmlspecialchars(json_encode([
+        'labels' => $range30,
+        'series' => $userSeries30Chart,
+        'unit' => 'count',
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), ENT_QUOTES);
+    $storageRangeSource = htmlspecialchars(json_encode([
+        'labels' => $range30,
+        'series' => $storageSeries30Chart,
+        'unit' => 'MB',
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), ENT_QUOTES);
+
     $content .= '<div class="admin-chart-grid">';
-    $content .= '<div class="admin-chart-card" data-range-switch data-range-default="7">';
+    $content .= '<div class="admin-chart-card" data-range-switch data-range-default="7" data-range-source="' . $pvUvRangeSource . '">';
     $content .= '<div class="admin-chart-card__head">';
     $content .= '<div><div class="admin-chart-card__title">PV/UV 走势</div><div class="admin-chart-card__meta" data-range-label>近7天</div></div>';
     $content .= '<div class="range-toggle">';
     $content .= '<button class="range-btn is-active" type="button" data-range-value="7">7天</button>';
     $content .= '<button class="range-btn" type="button" data-range-value="30">30天</button>';
+    $content .= '<button class="range-btn" type="button" data-range-value="custom">自定义</button>';
     $content .= '</div></div>';
     $content .= '<div class="admin-chart-card__body">';
     $content .= '<div class="admin-chart-panel" data-range-panel="7">';
     $content .= '<div class="admin-chart-summary"><div class="admin-legend"><span class="legend-dot is-primary"></span>浏览量(PV) ' . number_format($pvTotal7) . '</div>';
     $content .= '<div class="admin-legend"><span class="legend-dot is-accent"></span>访客数(UV) ' . number_format($uvTotal7) . '</div></div>';
-    $content .= $pvUvChart7 . '</div>';
+    $content .= $pvUvHolder7 . '</div>';
     $content .= '<div class="admin-chart-panel" data-range-panel="30" hidden>';
     $content .= '<div class="admin-chart-summary"><div class="admin-legend"><span class="legend-dot is-primary"></span>浏览量(PV) ' . number_format($pvTotal30) . '</div>';
     $content .= '<div class="admin-legend"><span class="legend-dot is-accent"></span>访客数(UV) ' . number_format($uvTotal30) . '</div></div>';
-    $content .= $pvUvChart30 . '</div>';
+    $content .= $pvUvHolder30 . '</div>';
+    $content .= '<div class="admin-chart-panel" data-range-panel="custom" hidden>';
+    $content .= '<div class="admin-chart-summary"><div class="admin-legend"><span class="legend-dot is-primary"></span>浏览量(PV) <span data-range-metric="pv">0</span></div>';
+    $content .= '<div class="admin-legend"><span class="legend-dot is-accent"></span>访客数(UV) <span data-range-metric="uv">0</span></div></div>';
+    $content .= $pvUvHolder30;
+    $content .= '<div class="range-slider"><input type="range" min="1" max="30" value="7" data-range-slider><div class="range-slider__value">最近 <span data-range-days>7</span> 天</div></div>';
+    $content .= '</div>';
     $content .= '</div>';
     $content .= '</div>';
 
-    $content .= '<div class="admin-chart-card" data-range-switch data-range-default="7">';
+    $content .= '<div class="admin-chart-card" data-range-switch data-range-default="7" data-range-source="' . $shareRangeSource . '">';
     $content .= '<div class="admin-chart-card__head">';
     $content .= '<div><div class="admin-chart-card__title">分享新增量</div><div class="admin-chart-card__meta" data-range-label>近7天</div></div>';
     $content .= '<div class="range-toggle">';
     $content .= '<button class="range-btn is-active" type="button" data-range-value="7">7天</button>';
     $content .= '<button class="range-btn" type="button" data-range-value="30">30天</button>';
+    $content .= '<button class="range-btn" type="button" data-range-value="custom">自定义</button>';
     $content .= '</div></div>';
     $content .= '<div class="admin-chart-card__body">';
     $content .= '<div class="admin-chart-panel" data-range-panel="7">';
     $content .= '<div class="admin-chart-summary muted">期间新增 ' . number_format($shareTotal7) . ' 条</div>';
-    $content .= $shareChart7 . '</div>';
+    $content .= $shareHolder7 . '</div>';
     $content .= '<div class="admin-chart-panel" data-range-panel="30" hidden>';
     $content .= '<div class="admin-chart-summary muted">期间新增 ' . number_format($shareTotal30) . ' 条</div>';
-    $content .= $shareChart30 . '</div>';
+    $content .= $shareHolder30 . '</div>';
+    $content .= '<div class="admin-chart-panel" data-range-panel="custom" hidden>';
+    $content .= '<div class="admin-chart-summary muted">期间新增 <span data-range-total>0</span> 条</div>';
+    $content .= $shareHolder30;
+    $content .= '<div class="range-slider"><input type="range" min="1" max="30" value="7" data-range-slider><div class="range-slider__value">最近 <span data-range-days>7</span> 天</div></div>';
+    $content .= '</div>';
     $content .= '</div>';
     $content .= '</div>';
 
-    $content .= '<div class="admin-chart-card" data-range-switch data-range-default="7">';
+    $content .= '<div class="admin-chart-card" data-range-switch data-range-default="7" data-range-source="' . $userRangeSource . '">';
     $content .= '<div class="admin-chart-card__head">';
     $content .= '<div><div class="admin-chart-card__title">用户新增量</div><div class="admin-chart-card__meta" data-range-label>近7天</div></div>';
     $content .= '<div class="range-toggle">';
     $content .= '<button class="range-btn is-active" type="button" data-range-value="7">7天</button>';
     $content .= '<button class="range-btn" type="button" data-range-value="30">30天</button>';
+    $content .= '<button class="range-btn" type="button" data-range-value="custom">自定义</button>';
     $content .= '</div></div>';
     $content .= '<div class="admin-chart-card__body">';
     $content .= '<div class="admin-chart-panel" data-range-panel="7">';
     $content .= '<div class="admin-chart-summary muted">期间新增 ' . number_format($userTotal7) . ' 人</div>';
-    $content .= $userChart7 . '</div>';
+    $content .= $userHolder7 . '</div>';
     $content .= '<div class="admin-chart-panel" data-range-panel="30" hidden>';
     $content .= '<div class="admin-chart-summary muted">期间新增 ' . number_format($userTotal30) . ' 人</div>';
-    $content .= $userChart30 . '</div>';
+    $content .= $userHolder30 . '</div>';
+    $content .= '<div class="admin-chart-panel" data-range-panel="custom" hidden>';
+    $content .= '<div class="admin-chart-summary muted">期间新增 <span data-range-total>0</span> 人</div>';
+    $content .= $userHolder30;
+    $content .= '<div class="range-slider"><input type="range" min="1" max="30" value="7" data-range-slider><div class="range-slider__value">最近 <span data-range-days>7</span> 天</div></div>';
+    $content .= '</div>';
     $content .= '</div>';
     $content .= '</div>';
 
-    $content .= '<div class="admin-chart-card" data-range-switch data-range-default="7">';
+    $content .= '<div class="admin-chart-card" data-range-switch data-range-default="7" data-range-source="' . $storageRangeSource . '">';
     $content .= '<div class="admin-chart-card__head">';
     $content .= '<div><div class="admin-chart-card__title">存储增长</div><div class="admin-chart-card__meta" data-range-label>近7天</div></div>';
     $content .= '<div class="range-toggle">';
     $content .= '<button class="range-btn is-active" type="button" data-range-value="7">7天</button>';
     $content .= '<button class="range-btn" type="button" data-range-value="30">30天</button>';
+    $content .= '<button class="range-btn" type="button" data-range-value="custom">自定义</button>';
     $content .= '</div></div>';
     $content .= '<div class="admin-chart-card__body">';
     $content .= '<div class="admin-chart-panel" data-range-panel="7">';
     $content .= '<div class="admin-chart-summary muted">期间增长 ' . htmlspecialchars(format_bytes($storageTotal7)) . '</div>';
-    $content .= $storageChart7 . '</div>';
+    $content .= $storageHolder7 . '</div>';
     $content .= '<div class="admin-chart-panel" data-range-panel="30" hidden>';
     $content .= '<div class="admin-chart-summary muted">期间增长 ' . htmlspecialchars(format_bytes($storageTotal30)) . '</div>';
-    $content .= $storageChart30 . '</div>';
+    $content .= $storageHolder30 . '</div>';
+    $content .= '<div class="admin-chart-panel" data-range-panel="custom" hidden>';
+    $content .= '<div class="admin-chart-summary muted">期间增长 <span data-range-total>0</span></div>';
+    $content .= $storageHolder30;
+    $content .= '<div class="range-slider"><input type="range" min="1" max="30" value="7" data-range-slider><div class="range-slider__value">最近 <span data-range-days>7</span> 天</div></div>';
+    $content .= '</div>';
     $content .= '</div>';
     $content .= '</div>';
     $content .= '</div>';
@@ -8437,6 +8819,7 @@ if ($path === '/admin') {
     $smtpPass = get_setting('smtp_pass', '');
     $siteIcp = get_setting('site_icp', '');
     $siteContactEmail = get_setting('site_contact_email', '');
+    $siteBaseUrl = get_setting('site_base_url', '');
     $bannedWordsRaw = get_banned_words_raw();
     $scanKeep = ((string)($_GET['scan_keep'] ?? '')) === '1';
     if (!$scanKeep) {
@@ -8620,6 +9003,7 @@ if ($path === '/admin') {
     $content .= '<div><label>重置密码主题</label><input class="input" name="email_reset_subject" value="' . htmlspecialchars((string)$emailResetSubject) . '"></div>';
     $content .= '<div><label>ICP备案号</label><input class="input" name="site_icp" value="' . htmlspecialchars((string)$siteIcp) . '"></div>';
     $content .= '<div><label>联系邮箱</label><input class="input" name="site_contact_email" value="' . htmlspecialchars((string)$siteContactEmail) . '"></div>';
+    $content .= '<div><label>网站地址（分享链接前缀）<button class="link-button" type="button" data-report-open data-report-target="site-base-url-help">说明</button></label><input class="input" name="site_base_url" placeholder="https://share.example.com" value="' . htmlspecialchars((string)$siteBaseUrl) . '"></div>';
     $content .= '</div>';
     $content .= '<div style="margin-top:12px">';
     $content .= '<label>违禁词（用 | 分隔）</label>';
@@ -8645,6 +9029,19 @@ if ($path === '/admin') {
     $content .= '</div>';
     $content .= '<div style="margin-top:12px"><button class="button primary" type="submit">保存设置</button></div>';
     $content .= '</form></div>';
+    $content .= '<div class="modal" id="site-base-url-help" data-report-modal hidden>';
+    $content .= '<div class="modal-backdrop" data-modal-close></div>';
+    $content .= '<div class="modal-card">';
+    $content .= '<div class="modal-header">网站地址说明</div>';
+    $content .= '<div class="modal-body">';
+    $content .= '<p><strong>留空：</strong>自动识别当前访问地址（协议/域名/端口）。</p>';
+    $content .= '<p><strong>填写：</strong>分享链接统一使用该前缀，适合反代/HTTPS 终止/端口丢失等场景。</p>';
+    $content .= '<p><strong>示例：</strong><code>https://share.example.com</code> 或 <code>https://IP:端口</code></p>';
+    $content .= '<p><strong>说明：</strong>仅影响分享链接前缀，不会限制其他访问方式。</p>';
+    $content .= '</div>';
+    $content .= '<div class="modal-actions"><button class="button" type="button" data-modal-close>关闭</button></div>';
+    $content .= '</div>';
+    $content .= '</div>';
 
     $content .= '<div class="card"><h2>SMTP 测试</h2>';
     $content .= '<form method="post" action="' . base_path() . '/admin/smtp-test">';
@@ -9327,6 +9724,7 @@ if ($path === '/admin/settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $emailResetSubject = trim((string)($_POST['email_reset_subject'] ?? ''));
     $siteIcp = trim((string)($_POST['site_icp'] ?? ''));
     $siteContactEmail = trim((string)($_POST['site_contact_email'] ?? ''));
+    $siteBaseUrl = trim((string)($_POST['site_base_url'] ?? ''));
     $smtpHost = trim((string)($_POST['smtp_host'] ?? ''));
     $smtpPort = trim((string)($_POST['smtp_port'] ?? ''));
     $smtpSecure = trim((string)($_POST['smtp_secure'] ?? ''));
@@ -9347,6 +9745,7 @@ if ($path === '/admin/settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     set_setting('email_reset_subject', $emailResetSubject);
     set_setting('site_icp', $siteIcp);
     set_setting('site_contact_email', $siteContactEmail);
+    set_setting('site_base_url', $siteBaseUrl);
     set_setting('smtp_host', $smtpHost);
     set_setting('smtp_port', $smtpPort !== '' ? $smtpPort : '587');
     set_setting('smtp_secure', $smtpSecure !== '' ? $smtpSecure : 'tls');
