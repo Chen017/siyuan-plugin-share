@@ -58,6 +58,12 @@ const SHARE_TYPES = {
 };
 const DEFAULT_DOC_ICON_LEAF = "📄";
 const DEFAULT_DOC_ICON_PARENT = "📑";
+const BLOCK_REF_ID_PATTERN = "[0-9]{14}-[0-9a-z]{7,}";
+const BLOCK_REF_RE = new RegExp(
+  `\\(\\(${BLOCK_REF_ID_PATTERN}(?:\\s+\\"[^\\"]*\\")?\\)\\)`,
+  "i",
+);
+const BLOCK_REF_LINK_RE = new RegExp(`siyuan://blocks/${BLOCK_REF_ID_PATTERN}`, "i");
 
 const TREE_SHARE_CLASS = "sps-tree-share";
 const TREE_SHARED_CLASS = "sps-tree-item--shared";
@@ -1428,6 +1434,7 @@ class SiYuanSharePlugin extends Plugin {
       uploadChunkConcurrency: DEFAULT_UPLOAD_CHUNK_CONCURRENCY,
       sites: [],
       activeSiteId: "",
+      refWarningDisabled: false,
     };
     this.remoteUploadLimits = null;
     this.uploadTuner = {avgSpeed: 0, samples: 0};
@@ -2737,6 +2744,188 @@ class SiYuanSharePlugin extends Plugin {
     this.notify(message);
   };
 
+  hasReferenceInMarkdown(markdown) {
+    if (!markdown) return false;
+    return BLOCK_REF_RE.test(markdown) || BLOCK_REF_LINK_RE.test(markdown);
+  }
+
+  async hasDocReferencesBySQL(docIds) {
+    if (!Array.isArray(docIds) || docIds.length === 0) return false;
+    const unique = Array.from(
+      new Set(docIds.map((id) => String(id || "").trim()).filter((id) => isValidDocId(id))),
+    );
+    if (!unique.length) return false;
+    const quoted = unique.map((id) => `'${id.replace(/'/g, "''")}'`).join(",");
+    const statements = [
+      `SELECT 1 AS hit FROM refs WHERE root_id IN (${quoted}) LIMIT 1`,
+      `SELECT 1 AS hit FROM refs WHERE rootId IN (${quoted}) LIMIT 1`,
+      `SELECT 1 AS hit FROM refs WHERE doc_id IN (${quoted}) LIMIT 1`,
+      `SELECT 1 AS hit FROM refs WHERE docId IN (${quoted}) LIMIT 1`,
+      `SELECT 1 AS hit FROM refs WHERE def_block_root_id IN (${quoted}) LIMIT 1`,
+      `SELECT 1 AS hit FROM refs WHERE block_id IN (SELECT id FROM blocks WHERE root_id IN (${quoted})) LIMIT 1`,
+      `SELECT 1 AS hit FROM refs WHERE blockId IN (SELECT id FROM blocks WHERE root_id IN (${quoted})) LIMIT 1`,
+      `SELECT 1 AS hit FROM ref WHERE root_id IN (${quoted}) LIMIT 1`,
+      `SELECT 1 AS hit FROM ref WHERE rootId IN (${quoted}) LIMIT 1`,
+      `SELECT 1 AS hit FROM ref WHERE doc_id IN (${quoted}) LIMIT 1`,
+      `SELECT 1 AS hit FROM ref WHERE docId IN (${quoted}) LIMIT 1`,
+    ];
+    for (const stmt of statements) {
+      let resp = null;
+      try {
+        resp = await fetchSyncPost("/api/query/sql", {stmt});
+      } catch (err) {
+        resp = null;
+      }
+      if (!resp || resp.code !== 0 || !Array.isArray(resp.data)) {
+        continue;
+      }
+      return resp.data.length > 0;
+    }
+    return false;
+  }
+
+  resolveExportReferenceMode() {
+    const exportCfg = globalThis?.siyuan?.config?.export;
+    if (!exportCfg || typeof exportCfg !== "object") {
+      return {found: false, correct: false};
+    }
+
+    const visited = new WeakSet();
+    const evalValue = (value, depth = 0) => {
+      if (depth > 3 || value == null) return {found: false, correct: false};
+      if (typeof value === "number") {
+        return {found: true, correct: value === 4};
+      }
+      if (typeof value === "string") {
+        const raw = value.trim();
+        if (!raw) return {found: false, correct: false};
+        if (/^\d+$/.test(raw)) {
+          const num = Number(raw);
+          return {found: true, correct: num === 4};
+        }
+        const lower = raw.toLowerCase();
+        const hasFootnote = lower.includes("footnote") || raw.includes("脚注");
+        const hasAnchor =
+          lower.includes("anchor") ||
+          lower.includes("hash") ||
+          raw.includes("锚点") ||
+          raw.includes("哈希");
+        if (hasFootnote && hasAnchor) return {found: true, correct: true};
+        return {found: true, correct: false};
+      }
+      if (Array.isArray(value)) {
+        for (const entry of value) {
+          const res = evalValue(entry, depth + 1);
+          if (res.found) return res;
+        }
+        return {found: false, correct: false};
+      }
+      if (typeof value === "object") {
+        if (visited.has(value)) return {found: false, correct: false};
+        visited.add(value);
+        const fields = [
+          value.mode,
+          value.type,
+          value.value,
+          value.format,
+          value.label,
+          value.name,
+          value.text,
+          value.ref,
+          value.blockRef,
+        ];
+        for (const entry of fields) {
+          const res = evalValue(entry, depth + 1);
+          if (res.found) return res;
+        }
+        return {found: false, correct: false};
+      }
+      return {found: false, correct: false};
+    };
+
+    const pickInOrder = [
+      "blockRef",
+      "blockRefMode",
+      "blockRefType",
+      "blockRefFormat",
+      "blockRefRule",
+      "ref",
+      "refMode",
+      "refType",
+      "reference",
+      "referenceMode",
+      "referenceType",
+    ];
+
+    for (const key of pickInOrder) {
+      if (!Object.prototype.hasOwnProperty.call(exportCfg, key)) continue;
+      const res = evalValue(exportCfg[key]);
+      if (res.found) return res;
+      return {found: true, correct: false};
+    }
+
+    return {found: false, correct: false};
+  }
+
+  openExportReferenceWarningDialog() {
+    const t = this.t.bind(this);
+    return new Promise((resolve) => {
+      let done = false;
+      let dialog = null;
+      const onClick = (event) => {
+        const btn = event.target?.closest?.("[data-action]");
+        if (!btn) return;
+        if (btn.getAttribute("data-action") !== "confirm") return;
+        const checkbox = dialog?.element?.querySelector?.("[data-ref-warning-disable]");
+        if (checkbox?.checked) {
+          this.settings.refWarningDisabled = true;
+          void this.saveData(STORAGE_SETTINGS, this.settings);
+        }
+        dialog?.destroy();
+      };
+      const finish = () => {
+        if (done) return;
+        done = true;
+        dialog?.element?.removeEventListener?.("click", onClick);
+        resolve();
+      };
+      const content = `<div class="b3-dialog__content sps-warning-dialog">
+  <div class="sps-warning">
+    <div class="sps-warning__icon">!</div>
+    <div class="sps-warning__body">
+      <div class="sps-warning__desc">${escapeHtml(t("siyuanShare.warning.refSettingMessage"))}</div>
+    </div>
+  </div>
+  <label class="b3-checkbox sps-warning__checkbox">
+    <input class="b3-checkbox__input" type="checkbox" data-ref-warning-disable>
+    <span class="b3-checkbox__label">${escapeHtml(t("siyuanShare.warning.refSettingDontRemind"))}</span>
+  </label>
+</div>
+<div class="b3-dialog__action">
+  <div class="fn__space"></div>
+  <button class="b3-button b3-button--text" data-action="confirm">${escapeHtml(
+    t("siyuanShare.warning.refSettingOk"),
+  )}</button>
+</div>`;
+      dialog = new Dialog({
+        title: t("siyuanShare.warning.refSettingTitle"),
+        content,
+        width: "460px",
+        destroyCallback: finish,
+      });
+      dialog.element?.addEventListener?.("click", onClick);
+    });
+  }
+
+  async maybeWarnExportReference(markdownList, docIds = []) {
+    if (this.settings.refWarningDisabled) return;
+    const setting = this.resolveExportReferenceMode();
+    if (setting.found && setting.correct) return;
+    const hasDocRefs = await this.hasDocReferencesBySQL(docIds);
+    if (!hasDocRefs) return;
+    await this.openExportReferenceWarningDialog();
+  }
+
   openProgressDialog(message, controller) {
     const t = this.t.bind(this);
     try {
@@ -2904,6 +3093,7 @@ class SiYuanSharePlugin extends Plugin {
       ),
       sites,
       activeSiteId,
+      refWarningDisabled: !!settings.refWarningDisabled,
     };
     const activeShares = activeSiteId ? this.siteShares[activeSiteId] : null;
     this.shares = Array.isArray(activeShares) ? activeShares.filter((s) => s && s.id && s.type) : [];
@@ -4161,6 +4351,7 @@ class SiYuanSharePlugin extends Plugin {
       let assetManifest = [];
       let resourceFailures = 0;
       let subtreeDocs = [];
+      const exportedMarkdowns = [];
       const iconUploadMap = new Map();
       if (includeChildren) {
         progress.update(t("siyuanShare.progress.fetchingNotebookList"));
@@ -4182,6 +4373,7 @@ class SiYuanSharePlugin extends Plugin {
           controller,
           notebookId,
         );
+        if (markdown) exportedMarkdowns.push(markdown);
         resourceFailures += failures.length;
         const assetMap = new Map();
         const usedUploadPaths = new Set();
@@ -4235,6 +4427,7 @@ class SiYuanSharePlugin extends Plugin {
             controller,
             notebookId,
           );
+          if (markdown) exportedMarkdowns.push(markdown);
           resourceFailures += failures.length;
           const docTitle =
             doc.title || (doc.docId === docId ? title : t("siyuanShare.label.untitled"));
@@ -4277,6 +4470,11 @@ class SiYuanSharePlugin extends Plugin {
       if (resourceFailures > 0) {
         console.warn("Some assets failed to download.", resourceFailures);
       }
+      const refDocIds = useChildren
+        ? subtreeDocs.map((doc) => String(doc?.docId || ""))
+        : [docId];
+      await this.maybeWarnExportReference(exportedMarkdowns, refDocIds);
+      throwIfAborted(controller, t("siyuanShare.message.cancelled"));
       const slug = sanitizeSlug(slugOverride);
       if (slug) payload.slug = slug;
       if (clearPassword) {
@@ -4403,6 +4601,7 @@ class SiYuanSharePlugin extends Plugin {
       const assetMap = new Map();
       const usedUploadPaths = new Set();
       const iconUploadMap = new Map();
+      const exportedMarkdowns = [];
       let failureCount = 0;
       for (const [index, doc] of docs.entries()) {
         throwIfAborted(controller, t("siyuanShare.message.cancelled"));
@@ -4419,6 +4618,7 @@ class SiYuanSharePlugin extends Plugin {
           controller,
           notebookId,
         );
+        if (markdown) exportedMarkdowns.push(markdown);
         failureCount += failures.length;
         const iconValue = await this.resolveIconUpload(doc?.icon, {
           docId: doc.docId,
@@ -4447,6 +4647,9 @@ class SiYuanSharePlugin extends Plugin {
       if (failureCount > 0) {
         console.warn("Some assets failed to download.", failureCount);
       }
+      const refDocIds = docs.map((doc) => String(doc?.docId || ""));
+      await this.maybeWarnExportReference(exportedMarkdowns, refDocIds);
+      throwIfAborted(controller, t("siyuanShare.message.cancelled"));
       const payload = {
         notebookId,
         title,

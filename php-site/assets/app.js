@@ -12,6 +12,19 @@
     img.addEventListener("click", () => refreshCaptcha(img));
   });
 
+  const scheduleIdle = (task, {timeout = 1200} = {}) => {
+    if (typeof window.requestIdleCallback === "function") {
+      return window.requestIdleCallback(task, {timeout});
+    }
+    return window.setTimeout(task, 0);
+  };
+
+  const tocCleanupMap = new WeakMap();
+  let imageViewerReady = false;
+  let shareNavReady = false;
+  let commentEditorsGlobalBound = false;
+  let shareDynamicToken = 0;
+
   const initAnnouncementModal = () => {
     const modal = document.querySelector("[data-announcement-modal]");
     if (!modal) return;
@@ -267,7 +280,15 @@
       return nextId;
     };
 
-    const buildTree = (headings) => {
+    const isFootnoteHeading = (heading, separator) => {
+      if (!heading) return false;
+      if (heading.closest(".footnotes")) return true;
+      if (heading.closest(".markdown-footnotes")) return true;
+      if (!separator) return false;
+      return Boolean(separator.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING);
+    };
+
+    const buildTree = (headings, section) => {
       const root = {level: 0, children: []};
       const stack = [root];
       headings.forEach((heading, index) => {
@@ -276,6 +297,7 @@
           heading,
           level,
           id: ensureHeadingId(heading, index),
+          section,
           children: [],
         };
         while (stack.length > 1 && level <= stack[stack.length - 1].level) {
@@ -287,21 +309,39 @@
       return root.children;
     };
 
-    const renderTree = (nodes, level = 0) => {
+    const renderTree = (
+      nodes,
+      level = 0,
+      section = "main",
+      baseLevel = 1,
+      footnoteMeta = null,
+    ) => {
       const list = document.createElement("ul");
       list.className = "share-toc-list";
+      if (section === "footnotes") {
+        list.classList.add("share-toc-list--footnotes");
+      }
       list.dataset.level = String(level);
       if (level > 0) list.classList.add("share-toc-children");
       nodes.forEach((node) => {
         const item = document.createElement("li");
         item.className = "share-toc-node";
+        if (section === "footnotes") {
+          item.classList.add("is-footnote");
+        }
         const hasChildren = node.children.length > 0;
 
         const row = document.createElement("div");
         row.className = "share-toc-row";
+        row.dataset.section = section;
+        const indent = Math.max(0, node.level - baseLevel);
+        row.style.setProperty("--toc-abs-indent", `${indent * 20}px`);
 
         const link = document.createElement("a");
         link.className = "share-toc-link";
+        if (section === "footnotes") {
+          link.classList.add("share-toc-link--footnote");
+        }
         link.href = `#${node.id}`;
         link.setAttribute("draggable", "false");
 
@@ -317,12 +357,31 @@
         const linkText = document.createElement("span");
         linkText.className = "share-toc-text";
         linkText.textContent = node.heading.textContent || "未命名";
+
+        if (section === "footnotes" && footnoteMeta) {
+          const meta = footnoteMeta.get(node.heading);
+          if (meta && meta.index) {
+            link.dataset.footnoteIndex = String(meta.index);
+            const backref = meta.backref || `#fnref${meta.index}`;
+            link.dataset.footnoteBackref = backref;
+            const sup = document.createElement("sup");
+            sup.className = "share-toc-footnote-index";
+            sup.textContent = `[${meta.index}]`;
+            sup.setAttribute("role", "link");
+            sup.tabIndex = 0;
+            sup.dataset.footnoteIndex = String(meta.index);
+            sup.dataset.footnoteBackref = backref;
+            linkText.appendChild(sup);
+          }
+        }
         link.appendChild(linkText);
         row.appendChild(link);
         item.appendChild(row);
 
         if (hasChildren) {
-          item.appendChild(renderTree(node.children, level + 1));
+          item.appendChild(
+            renderTree(node.children, level + 1, section, baseLevel, footnoteMeta),
+          );
         }
         list.appendChild(item);
       });
@@ -330,6 +389,11 @@
     };
 
     containers.forEach((container) => {
+      const prevCleanup = tocCleanupMap.get(container);
+      if (typeof prevCleanup === "function") {
+        prevCleanup();
+        tocCleanupMap.delete(container);
+      }
       const targetId = container.getAttribute("data-share-toc") || "";
       const target = document.querySelector(
         `.markdown-body[data-md-id="${targetId}"]`,
@@ -353,9 +417,52 @@
       body.innerHTML = "";
       if (!target) return;
 
-      const headings = Array.from(
+      const separator = target.querySelector("hr.footnotes-sep");
+      const allHeadings = Array.from(
         target.querySelectorAll("h1, h2, h3, h4, h5, h6"),
       );
+      if (!allHeadings.length) {
+        const empty = document.createElement("div");
+        empty.className = "share-toc-empty";
+        empty.textContent = "暂无目录";
+        body.appendChild(empty);
+        return;
+      }
+
+      const headingLevels = allHeadings
+        .map((heading) => Number(String(heading.tagName || "H2").slice(1)) || 2)
+        .filter((level) => Number.isFinite(level));
+      const baseLevel = headingLevels.length ? Math.min(...headingLevels) : 1;
+      const footnoteMeta = new Map();
+      container.classList.add("share-toc--abs");
+
+      const mainHeadings = [];
+      const footnoteHeadings = [];
+      allHeadings.forEach((heading) => {
+        if (isFootnoteHeading(heading, separator)) {
+          footnoteHeadings.push(heading);
+          const item = heading.closest(
+            ".footnotes li[id], .markdown-footnotes li[id]",
+          );
+          const list = item?.closest?.("ol");
+          let index = 0;
+          if (item && list) {
+            const siblings = Array.from(list.children || []);
+            index = siblings.indexOf(item) + 1;
+          }
+          let backref = "";
+          const backrefEl = item?.querySelector?.(
+            ".footnote-backref, [data-footnote-backref], a[href^=\"#fnref\"]",
+          );
+          if (backrefEl) backref = backrefEl.getAttribute("href") || "";
+          if (index > 0) {
+            footnoteMeta.set(heading, {index, backref});
+          }
+        } else {
+          mainHeadings.push(heading);
+        }
+      });
+      const headings = [...mainHeadings, ...footnoteHeadings];
       if (!headings.length) {
         const empty = document.createElement("div");
         empty.className = "share-toc-empty";
@@ -364,9 +471,138 @@
         return;
       }
 
-      const nodes = buildTree(headings);
-      const list = renderTree(nodes, 0);
-      body.appendChild(list);
+      if (mainHeadings.length) {
+        const nodes = buildTree(mainHeadings, "main");
+        const list = renderTree(nodes, 0, "main", baseLevel, footnoteMeta);
+        body.appendChild(list);
+      }
+
+      if (footnoteHeadings.length) {
+        if (mainHeadings.length) {
+          const divider = document.createElement("div");
+          divider.className = "share-toc-divider";
+          divider.setAttribute("aria-hidden", "true");
+          body.appendChild(divider);
+        }
+        const nodes = buildTree(footnoteHeadings, "footnotes");
+        const list = renderTree(nodes, 0, "footnotes", baseLevel, footnoteMeta);
+        body.appendChild(list);
+      }
+
+
+      const scrollToElementWithOffset = (element) => {
+        if (!element) return;
+        const raw = window.getComputedStyle(element).scrollMarginTop;
+        const marginTop = Number.parseFloat(raw || "0");
+        const baseOffset = document.body.classList.contains("layout-share") ? 120 : 0;
+        const offset = Math.max(baseOffset, Number.isFinite(marginTop) ? marginTop : 0);
+        const top = element.getBoundingClientRect().top + window.scrollY - offset;
+        window.scrollTo({top, behavior: "smooth"});
+      };
+
+      const jumpToBackref = (href) => {
+        if (!href) return null;
+        if (href.startsWith("#")) {
+          const id = href.slice(1);
+          const targetEl = document.getElementById(id);
+          if (targetEl) {
+            scrollToElementWithOffset(targetEl);
+            history.replaceState(null, "", href);
+            return targetEl;
+          }
+        }
+        window.location.href = href;
+        return null;
+      };
+
+      const onFootnoteJump = (event) => {
+        const sup = event.target?.closest?.(".share-toc-footnote-index");
+        if (!sup) return;
+        const href = sup.dataset.footnoteBackref || "";
+        if (!href) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const targetEl = jumpToBackref(href);
+        if (targetEl) {
+          activeLock.id = "";
+          activeLock.target = targetEl;
+          activeLock.until = Date.now() + 2000;
+          scheduleActiveByElement(targetEl);
+        }
+      };
+
+      const onFootnoteKey = (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        const sup = event.target?.closest?.(".share-toc-footnote-index");
+        if (!sup) return;
+        const href = sup.dataset.footnoteBackref || "";
+        if (!href) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const targetEl = jumpToBackref(href);
+        if (targetEl) {
+          activeLock.id = "";
+          activeLock.target = targetEl;
+          activeLock.until = Date.now() + 2000;
+          scheduleActiveByElement(targetEl);
+        }
+      };
+
+
+      const onContentLinkClick = (event) => {
+        const anchor = event.target?.closest?.("a");
+        if (!anchor) return;
+        const href = anchor.getAttribute("href") || "";
+        if (!href.startsWith("#fn")) return;
+        if (href.startsWith("#fnref")) return;
+        const id = href.slice(1);
+        const targetEl = document.getElementById(id);
+        if (!targetEl) return;
+        event.preventDefault();
+        scrollToElementWithOffset(targetEl);
+        history.replaceState(null, "", href);
+        const index =
+          parseFootnoteIndex(href) || findFootnoteIndexForElement(targetEl);
+        if (setActiveByFootnoteIndex(index)) {
+          activeLock.target = targetEl;
+          activeLock.until = Date.now() + 2400;
+        }
+        scheduleActiveByElement(targetEl);
+      };
+
+      const onContentBackrefClick = (event) => {
+        const anchor = event.target?.closest?.("a");
+        if (!anchor) return;
+        const href = anchor.getAttribute("href") || "";
+        if (!href.startsWith("#fnref")) return;
+        const id = href.slice(1);
+        const targetEl = document.getElementById(id);
+        if (!targetEl) return;
+        event.preventDefault();
+        scrollToElementWithOffset(targetEl);
+        history.replaceState(null, "", href);
+        activeLock.id = "";
+        activeLock.target = targetEl;
+        activeLock.until = Date.now() + 2000;
+        scheduleActiveByElement(targetEl);
+      };
+
+      const onHashChange = () => {
+        const id = window.location.hash.replace(/^#/, "");
+        if (!id) return;
+        const targetEl = document.getElementById(id);
+        if (!targetEl) return;
+        scheduleActiveByElement(targetEl);
+      };
+
+      if (target) {
+        target.addEventListener("click", onContentLinkClick);
+        target.addEventListener("click", onContentBackrefClick);
+      }
+      window.addEventListener("hashchange", onHashChange);
+
+      body.addEventListener("click", onFootnoteJump);
+      body.addEventListener("keydown", onFootnoteKey);
 
       const dragState = {
         isDown: false,
@@ -405,23 +641,22 @@
         dragState.isDragging = false;
       };
 
+      const onDragStart = (event) => {
+        event.preventDefault();
+      };
+      const onClickCapture = (event) => {
+        if (Date.now() < dragState.suppressUntil) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      };
+
       scrollBox.addEventListener("mousedown", onMouseDown);
       scrollBox.addEventListener("mousemove", onMouseMove);
       scrollBox.addEventListener("mouseup", stopDrag);
       scrollBox.addEventListener("mouseleave", stopDrag);
-      scrollBox.addEventListener("dragstart", (event) => {
-        event.preventDefault();
-      });
-      scrollBox.addEventListener(
-        "click",
-        (event) => {
-          if (Date.now() < dragState.suppressUntil) {
-            event.preventDefault();
-            event.stopPropagation();
-          }
-        },
-        true,
-      );
+      scrollBox.addEventListener("dragstart", onDragStart);
+      scrollBox.addEventListener("click", onClickCapture, true);
 
       const linkMap = new Map();
       const activeLock = {
@@ -430,6 +665,7 @@
         scrollEndTimer: 0,
         scrollTicking: false,
         scrollOffset: 0,
+        target: null,
       };
       const setActiveLink = (link) => {
         body.querySelectorAll(".share-toc-link").forEach((item) => {
@@ -450,6 +686,150 @@
           linkMap.set(href.slice(1), link);
         }
       });
+
+      const parseFootnoteIndex = (value) => {
+        const raw = String(value || "").trim();
+        if (!raw) return 0;
+        const match = raw.match(/^#?fn(?:ref)?[:\-_]?(\d+)/i);
+        if (match) return Number(match[1]) || 0;
+        const num = Number(raw);
+        return Number.isFinite(num) ? num : 0;
+      };
+
+      const isFnRefId = (value) => /^fnref[:\-_]?\d+/i.test(String(value || ""));
+
+      const footnoteIndexToLink = new Map();
+      body.querySelectorAll(".share-toc-link--footnote").forEach((link) => {
+        const idx = parseFootnoteIndex(link.dataset.footnoteIndex || "");
+        if (idx > 0 && !footnoteIndexToLink.has(idx)) {
+          footnoteIndexToLink.set(idx, link);
+        }
+      });
+
+      const footnoteItems = [];
+      if (target) {
+        const candidates = Array.from(
+          target.querySelectorAll(".footnotes li[id], .markdown-footnotes li[id]"),
+        );
+        candidates.forEach((item, idx) => {
+          let index = parseFootnoteIndex(item.dataset.footnoteIndex || item.id);
+          if (!index) index = idx + 1;
+          item.dataset.footnoteIndex = String(index);
+          footnoteItems.push(item);
+        });
+      }
+
+      const activeTargets = [];
+      headings.forEach((heading) => {
+        if (!heading?.id) return;
+        activeTargets.push({type: "heading", element: heading, id: heading.id});
+      });
+      footnoteItems.forEach((item) => {
+        const index = parseFootnoteIndex(item.dataset.footnoteIndex || item.id);
+        if (!index) return;
+        activeTargets.push({type: "footnote", element: item, index});
+      });
+      activeTargets.sort((a, b) => {
+        if (a.element === b.element) return 0;
+        const pos = a.element.compareDocumentPosition(b.element);
+        if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+        if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+        return 0;
+      });
+
+      const findFootnoteIndexForElement = (element) => {
+        if (!element) return 0;
+        const item = element.closest?.(
+          ".footnotes li[id], .markdown-footnotes li[id]",
+        );
+        if (item) {
+          return parseFootnoteIndex(item.dataset.footnoteIndex || item.id);
+        }
+        const id = element.id || "";
+        if (id && isFnRefId(id)) {
+          return 0;
+        }
+        if (id) {
+          return parseFootnoteIndex(id);
+        }
+        return 0;
+      };
+
+      const findHeadingForElement = (element) => {
+        if (!element || !headings.length) return null;
+        let chosen = null;
+        headings.forEach((heading) => {
+          if (!heading) return;
+          if (heading === element) {
+            chosen = heading;
+            return;
+          }
+          const pos = heading.compareDocumentPosition(element);
+          if (
+            pos & Node.DOCUMENT_POSITION_FOLLOWING ||
+            pos & Node.DOCUMENT_POSITION_CONTAINED_BY
+          ) {
+            chosen = heading;
+          }
+        });
+        return chosen;
+      };
+
+      const setActiveByElement = (element) => {
+        const footnoteIndex = findFootnoteIndexForElement(element);
+        if (footnoteIndex && setActiveByFootnoteIndex(footnoteIndex)) {
+          return;
+        }
+        const targetHeading = findHeadingForElement(element);
+        if (!targetHeading) return;
+        const link = linkMap.get(targetHeading.id);
+        if (!link) return;
+        activeLock.id = targetHeading.id;
+        activeLock.until = Date.now() + 900;
+        setActiveLink(link);
+        ensureVisible(link);
+      };
+
+      const highlightByElement = (element) => {
+        const footnoteIndex = findFootnoteIndexForElement(element);
+        if (footnoteIndex) {
+          const link = footnoteIndexToLink.get(footnoteIndex);
+          if (link) {
+            setActiveLink(link);
+            ensureVisible(link);
+            return true;
+          }
+        }
+        const targetHeading = findHeadingForElement(element);
+        if (!targetHeading) return false;
+        const link = linkMap.get(targetHeading.id);
+        if (!link) return false;
+        setActiveLink(link);
+        ensureVisible(link);
+        return true;
+      };
+
+      const scheduleActiveByElement = (element) => {
+        if (!element) return;
+        requestAnimationFrame(() => {
+          setTimeout(() => setActiveByElement(element), 40);
+        });
+      };
+
+      const setActiveByFootnoteIndex = (index) => {
+        if (!index) return false;
+        const link = footnoteIndexToLink.get(index);
+        if (!link) return false;
+        const href = link.getAttribute("href") || "";
+        if (href.startsWith("#")) {
+          activeLock.id = href.slice(1);
+          activeLock.until = Date.now() + 900;
+        }
+        setActiveLink(link);
+        ensureVisible(link);
+        return true;
+      };
+
       body.querySelectorAll(".share-toc-link").forEach((link) => {
         link.addEventListener("click", (event) => {
           if (Date.now() < dragState.suppressUntil) {
@@ -481,14 +861,14 @@
       activeLock.scrollOffset = getScrollOffset();
       const activeThreshold = 8;
 
-      const pickActiveHeading = () => {
-        if (!headings.length) return null;
+      const pickActiveTarget = () => {
+        if (!activeTargets.length) return null;
         const offset = activeLock.scrollOffset || 0;
-        let current = headings[0];
-        for (const heading of headings) {
-          const top = heading.getBoundingClientRect().top;
+        let current = null;
+        for (const target of activeTargets) {
+          const top = target.element.getBoundingClientRect().top;
           if (top - offset <= activeThreshold) {
-            current = heading;
+            current = target;
           } else {
             break;
           }
@@ -497,38 +877,52 @@
       };
 
       const updateActiveByScroll = () => {
-        if (activeLock.id && Date.now() < activeLock.until) {
-          const locked = linkMap.get(activeLock.id);
-          if (locked) {
-            setActiveLink(locked);
-            ensureVisible(locked);
-            return;
+        if (activeLock.target) {
+          const now = Date.now();
+          const offset = activeLock.scrollOffset || 0;
+          const distance = Math.abs(
+            activeLock.target.getBoundingClientRect().top - offset,
+          );
+          const shouldUnlock =
+            now >= activeLock.until ||
+            (Number.isFinite(distance) && distance <= activeThreshold);
+          if (shouldUnlock) {
+            activeLock.target = null;
+          } else {
+            if (highlightByElement(activeLock.target)) {
+              return;
+            }
           }
         }
         if (activeLock.id) {
-          const target = document.getElementById(activeLock.id);
-          if (target) {
-            const offset = activeLock.scrollOffset || 0;
-            const distance = Math.abs(target.getBoundingClientRect().top - offset);
-            if (distance <= activeThreshold) {
-              activeLock.id = "";
-              activeLock.until = 0;
-            } else {
-              const locked = linkMap.get(activeLock.id);
-              if (locked) {
-                setActiveLink(locked);
-                ensureVisible(locked);
-                return;
-              }
+          if (Date.now() < activeLock.until) {
+            const locked = linkMap.get(activeLock.id);
+            if (locked) {
+              setActiveLink(locked);
+              ensureVisible(locked);
+              return;
             }
-          } else {
-            activeLock.id = "";
-            activeLock.until = 0;
           }
+          activeLock.id = "";
+          activeLock.until = 0;
         }
-        const active = pickActiveHeading();
-        if (!active) return;
-        const link = linkMap.get(active.id);
+
+        const activeTarget = pickActiveTarget();
+        if (!activeTarget) return;
+        if (activeTarget.type === "footnote") {
+          if (setActiveByFootnoteIndex(activeTarget.index)) {
+            return;
+          }
+          const fallback = findHeadingForElement(activeTarget.element);
+          if (!fallback) return;
+          const fallbackLink = linkMap.get(fallback.id);
+          if (!fallbackLink) return;
+          setActiveLink(fallbackLink);
+          ensureVisible(fallbackLink);
+          return;
+        }
+
+        const link = linkMap.get(activeTarget.id);
         if (!link) return;
         setActiveLink(link);
         ensureVisible(link);
@@ -548,12 +942,33 @@
         }, 160);
       };
 
-      window.addEventListener("scroll", onScroll, {passive: true});
-      window.addEventListener("resize", () => {
+      const scrollOpts = {passive: true};
+      const onResize = () => {
         activeLock.scrollOffset = getScrollOffset();
         updateActiveByScroll();
-      });
+      };
+      window.addEventListener("scroll", onScroll, scrollOpts);
+      window.addEventListener("resize", onResize);
       updateActiveByScroll();
+
+      tocCleanupMap.set(container, () => {
+        scrollBox.removeEventListener("mousedown", onMouseDown);
+        scrollBox.removeEventListener("mousemove", onMouseMove);
+        scrollBox.removeEventListener("mouseup", stopDrag);
+        scrollBox.removeEventListener("mouseleave", stopDrag);
+        scrollBox.removeEventListener("dragstart", onDragStart);
+        scrollBox.removeEventListener("click", onClickCapture, true);
+        window.removeEventListener("scroll", onScroll, scrollOpts);
+        window.removeEventListener("resize", onResize);
+        body.removeEventListener("click", onFootnoteJump);
+        body.removeEventListener("keydown", onFootnoteKey);
+        if (target) {
+          target.removeEventListener("click", onContentLinkClick);
+          target.removeEventListener("click", onContentBackrefClick);
+        }
+        window.removeEventListener("hashchange", onHashChange);
+
+      });
     });
   };
 
@@ -641,9 +1056,135 @@
     }
   };
 
+  const initShareDocNavigation = () => {
+    if (shareNavReady) return;
+    if (!document.body.classList.contains("layout-share")) return;
+    const container = document.querySelector(".share-shell");
+    if (!container) return;
+    shareNavReady = true;
+
+    let requestId = 0;
+    let controller = null;
+
+    const cssEscape =
+      (window.CSS && typeof window.CSS.escape === "function" && window.CSS.escape) ||
+      ((value) => String(value || "").replace(/[^a-zA-Z0-9_-]/g, "\\$&"));
+
+    const setActiveDoc = (docId) => {
+      document.querySelectorAll(".kb-tree-item.is-active").forEach((item) => {
+        item.classList.remove("is-active");
+      });
+      if (!docId) return;
+      const selector = `.kb-tree-item[data-doc-id="${cssEscape(docId)}"]`;
+      const active = document.querySelector(selector);
+      if (active) active.classList.add("is-active");
+    };
+
+    const replaceMain = (html) => {
+      const shell = document.querySelector(".share-shell");
+      const main = shell?.querySelector(".kb-main");
+      if (!shell || !main || !html) return null;
+      const wrapper = document.createElement("div");
+      wrapper.innerHTML = html;
+      const nextMain = wrapper.firstElementChild;
+      if (!nextMain) return null;
+      main.replaceWith(nextMain);
+      return nextMain;
+    };
+
+    const updateAfterLoad = (payload, url, pushState) => {
+      if (payload?.html) {
+        replaceMain(payload.html);
+      }
+      if (container) {
+        container.dataset.shareDocId = payload?.docId || "";
+      }
+      if (payload?.title) {
+        document.title = payload.title;
+      }
+      if (pushState) {
+        history.pushState({spsDocId: payload?.docId || ""}, "", url);
+      } else {
+        history.replaceState({spsDocId: payload?.docId || ""}, "", url);
+      }
+      setActiveDoc(payload?.docId || "");
+      const hash = url.includes("#") ? url.slice(url.indexOf("#")) : "";
+      if (hash) {
+        const target = document.getElementById(hash.slice(1));
+        if (target) {
+          target.scrollIntoView({behavior: "auto", block: "start"});
+        }
+      } else {
+        window.scrollTo({top: 0, behavior: "auto"});
+      }
+      refreshShareDynamicContent();
+    };
+
+    const loadDoc = async (url, {pushState = true} = {}) => {
+      const currentId = ++requestId;
+      if (controller) controller.abort();
+      controller = new AbortController();
+      const main = document.querySelector(".kb-main");
+      if (main) main.classList.add("is-loading");
+      try {
+        const targetUrl = new URL(url, window.location.href);
+        targetUrl.searchParams.set("partial", "1");
+        const resp = await fetch(targetUrl.toString(), {
+          method: "GET",
+          headers: {"X-SPS-Partial": "1"},
+          credentials: "same-origin",
+          signal: controller.signal,
+        });
+        const payload = await resp.json().catch(() => null);
+        if (!resp.ok || !payload || payload.code !== 0 || !payload.data?.html) {
+          throw new Error(payload?.msg || "Failed to load doc.");
+        }
+        if (currentId !== requestId) return;
+        updateAfterLoad(payload.data, url, pushState);
+      } catch (err) {
+        if (err?.name === "AbortError") return;
+        window.location.href = url;
+      } finally {
+        const latestMain = document.querySelector(".kb-main");
+        if (latestMain) latestMain.classList.remove("is-loading");
+      }
+    };
+
+    document.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!target) return;
+      const link = target.closest("a[data-share-nav='doc']");
+      if (!link) return;
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      ) {
+        return;
+      }
+      const href = link.getAttribute("href");
+      if (!href) return;
+      if (link.getAttribute("target") === "_blank") return;
+      const url = new URL(href, window.location.href);
+      if (url.origin !== window.location.origin) return;
+      event.preventDefault();
+      loadDoc(url.toString(), {pushState: true});
+    });
+
+    window.addEventListener("popstate", () => {
+      if (!document.body.classList.contains("layout-share")) return;
+      loadDoc(window.location.href, {pushState: false});
+    });
+  };
+
   const initShareMarkdownToggle = () => {
     if (!document.body.classList.contains("layout-share")) return;
     document.querySelectorAll("[data-share-toggle]").forEach((btn) => {
+      if (btn.dataset.shareToggleBound === "1") return;
+      btn.dataset.shareToggleBound = "1";
       btn.addEventListener("click", () => {
         const container = btn.closest(".share-article");
         if (!container) return;
@@ -1285,6 +1826,8 @@
       if (modal) modal.hidden = true;
     };
     openButtons.forEach((btn) => {
+      if (btn.dataset.reportOpenBound === "1") return;
+      btn.dataset.reportOpenBound = "1";
       btn.addEventListener("click", () => {
         const targetId = btn.dataset.reportTarget || "";
         const modal = targetId
@@ -1294,6 +1837,8 @@
       });
     });
     document.querySelectorAll("[data-report-modal]").forEach((modal) => {
+      if (modal.dataset.reportModalBound === "1") return;
+      modal.dataset.reportModalBound = "1";
       modal.addEventListener("click", (event) => {
         const target = event.target;
         if (
@@ -1351,7 +1896,7 @@
 
   const initCommentEditors = () => {
     const editors = Array.from(document.querySelectorAll("[data-comment-editor]"));
-    if (!editors.length) return;
+    if (!editors.length && commentEditorsGlobalBound) return;
     const insertAtCursor = (textarea, text) => {
       if (!textarea) return;
       const start = textarea.selectionStart || 0;
@@ -1363,17 +1908,21 @@
       textarea.focus();
     };
     const closePanels = (except) => {
-      editors.forEach((editor) => {
-        const panel = editor.querySelector("[data-emoji-panel]");
+      document.querySelectorAll("[data-comment-editor] [data-emoji-panel]").forEach((panel) => {
         if (panel && panel !== except) panel.hidden = true;
       });
     };
-    document.addEventListener("click", (event) => {
-      const target = event.target;
-      if (target && target.closest("[data-comment-editor]")) return;
-      closePanels();
-    });
+    if (!commentEditorsGlobalBound) {
+      document.addEventListener("click", (event) => {
+        const target = event.target;
+        if (target && target.closest("[data-comment-editor]")) return;
+        closePanels();
+      });
+      commentEditorsGlobalBound = true;
+    }
     editors.forEach((editor) => {
+      if (editor.dataset.commentEditorBound === "1") return;
+      editor.dataset.commentEditorBound = "1";
       const textarea = editor.querySelector("textarea");
       const emojiToggle = editor.querySelector("[data-emoji-toggle]");
       const emojiPanel = editor.querySelector("[data-emoji-panel]");
@@ -1444,6 +1993,10 @@
     if (!modal) return;
     const form = modal.querySelector("[data-comment-form]");
     if (!form) return;
+    const modalBound = modal.dataset.commentModalBound === "1";
+    if (!modalBound) {
+      modal.dataset.commentModalBound = "1";
+    }
     const titleEl = modal.querySelector("[data-comment-modal-title]");
     const noteEl = modal.querySelector("[data-comment-modal-note]");
     const submitBtn = modal.querySelector("[data-comment-submit]");
@@ -1538,17 +2091,21 @@
     const close = () => {
       modal.hidden = true;
     };
-    modal.addEventListener("click", (event) => {
-      const target = event.target;
-      if (
-        target &&
-        (target.closest("[data-modal-close]") ||
-          target.classList.contains("modal-backdrop"))
-      ) {
-        close();
-      }
-    });
+    if (!modalBound) {
+      modal.addEventListener("click", (event) => {
+        const target = event.target;
+        if (
+          target &&
+          (target.closest("[data-modal-close]") ||
+            target.classList.contains("modal-backdrop"))
+        ) {
+          close();
+        }
+      });
+    }
     document.querySelectorAll("[data-comment-action]").forEach((btn) => {
+      if (btn.dataset.commentActionBound === "1") return;
+      btn.dataset.commentActionBound = "1";
       btn.addEventListener("click", () => {
         const mode = btn.dataset.commentAction || "";
         if (!mode) return;
@@ -1669,8 +2226,10 @@
     }, 4200);
   };
 
-  const initImageViewer = () => {
+const initImageViewer = () => {
     if (!document.body.classList.contains("layout-share")) return;
+    if (imageViewerReady) return;
+    imageViewerReady = true;
 
     const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
     const getImageSrc = (img) =>
@@ -3289,41 +3848,67 @@
       });
   };
 
+  const refreshShareDynamicContent = () => {
+    initShareMarkdownToggle();
+    initCommentEditors();
+    initCommentModal();
+    initReportModal();
+    initDocTreeScroll();
+    const token = ++shareDynamicToken;
+    scheduleIdle(() => {
+      if (token !== shareDynamicToken) return;
+      try {
+        initMarkdown();
+      } catch (err) {
+        console.error(err);
+      }
+      try {
+        initShareToc();
+      } catch (err) {
+        console.error(err);
+      }
+    });
+  };
+
+  window.addEventListener(
+    "sps:markdown-ready",
+    () => {
+      refreshShareDynamicContent();
+    },
+    {once: true},
+  );
+  window.addEventListener(
+    "load",
+    () => {
+      if (typeof window.markdownit === "function") {
+        refreshShareDynamicContent();
+      }
+    },
+    {once: true},
+  );
+
   initAnnouncementModal();
   initNav();
   initRangeSwitch();
   initAdminCharts();
   initKnowledgeTree();
-  initDocTreeScroll();
   initBatchSelection();
   initUserModal();
   initUserCreateModal();
   initBatchConfirm();
-  initReportModal();
   initToggleSubmit();
   initFormConfirm();
   initPaginationAutoSubmit();
   initFlashToast();
-  initCommentEditors();
-  initCommentModal();
   initAdminCommentModal();
   initScanProgress();
-  try {
-    initMarkdown();
-  } catch (err) {
-    console.error(err);
-  }
-  try {
-    initShareToc();
-  } catch (err) {
-    console.error(err);
-  }
-  initImageViewer();
   initShareSidebarTabs();
   initShareDrawer();
-  initShareMarkdownToggle();
+  initShareDocNavigation();
+  initImageViewer();
   initAppDrawer();
   initScrollTop();
   initLoginTabs();
   initCountdownButtons();
+  refreshShareDynamicContent();
 })();

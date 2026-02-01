@@ -1233,32 +1233,32 @@ function render_page(string $title, string $content, ?array $user = null, string
         }
     }
 
+    echo "<script defer src='{$base}/assets/app.js'></script>";
     if ($includeMarkdown) {
-        echo "<script src='{$base}/assets/vendor/markdown-it.min.js'></script>";
-        echo "<script src='{$base}/assets/vendor/markdown-it-task-lists.min.js'></script>";
-        echo "<script src='{$base}/assets/vendor/markdown-it-emoji.min.js'></script>";
-        echo "<script src='{$base}/assets/vendor/markdown-it-footnote.min.js'></script>";
-        echo "<script src='{$base}/assets/vendor/markdown-it-deflist.min.js'></script>";
-        echo "<script src='{$base}/assets/vendor/markdown-it-mark.min.js'></script>";
-        echo "<script src='{$base}/assets/vendor/markdown-it-sub.min.js'></script>";
-        echo "<script src='{$base}/assets/vendor/markdown-it-sup.min.js'></script>";
-        echo "<script src='{$base}/assets/vendor/markdown-it-abbr.min.js'></script>";
-        echo "<script src='{$base}/assets/vendor/markdown-it-ins.min.js'></script>";
-        echo "<script src='{$base}/assets/vendor/markdown-it-container.min.js'></script>";
-        echo "<script src='{$base}/assets/vendor/markdown-it-multimd-table.min.js'></script>";
-        echo "<script src='{$base}/assets/vendor/markdown-it-anchor.min.js'></script>";
-        echo "<script src='{$base}/assets/vendor/katex.min.js'></script>";
-        echo "<script src='{$base}/assets/vendor/highlight.min.js'></script>";
-        echo "<script src='{$base}/assets/vendor/mermaid.min.js'></script>";
-        echo "<script src='{$base}/assets/vendor/pako.min.js'></script>";
-        echo "<script src='{$base}/assets/vendor/echarts.min.js'></script>";
-        echo "<script src='{$base}/assets/vendor/abcjs-basic-min.js'></script>";
-        echo "<script src='{$base}/assets/vendor/raphael.min.js'></script>";
-        echo "<script src='{$base}/assets/vendor/flowchart.min.js'></script>";
-        echo "<script src='{$base}/assets/vendor/viz.js'></script>";
-        echo "<script src='{$base}/assets/vendor/full.render.js'></script>";
+        echo "<script defer src='{$base}/assets/vendor/markdown-it.min.js'></script>";
+        echo "<script defer src='{$base}/assets/vendor/markdown-it-task-lists.min.js'></script>";
+        echo "<script defer src='{$base}/assets/vendor/markdown-it-emoji.min.js'></script>";
+        echo "<script defer src='{$base}/assets/vendor/markdown-it-footnote.min.js'></script>";
+        echo "<script defer src='{$base}/assets/vendor/markdown-it-deflist.min.js'></script>";
+        echo "<script defer src='{$base}/assets/vendor/markdown-it-mark.min.js'></script>";
+        echo "<script defer src='{$base}/assets/vendor/markdown-it-sub.min.js'></script>";
+        echo "<script defer src='{$base}/assets/vendor/markdown-it-sup.min.js'></script>";
+        echo "<script defer src='{$base}/assets/vendor/markdown-it-abbr.min.js'></script>";
+        echo "<script defer src='{$base}/assets/vendor/markdown-it-ins.min.js'></script>";
+        echo "<script defer src='{$base}/assets/vendor/markdown-it-container.min.js'></script>";
+        echo "<script defer src='{$base}/assets/vendor/markdown-it-multimd-table.min.js'></script>";
+        echo "<script defer src='{$base}/assets/vendor/markdown-it-anchor.min.js'></script>";
+        echo "<script defer src='{$base}/assets/vendor/katex.min.js'></script>";
+        echo "<script defer src='{$base}/assets/vendor/highlight.min.js'></script>";
+        echo "<script defer src='{$base}/assets/vendor/mermaid.min.js'></script>";
+        echo "<script defer src='{$base}/assets/vendor/pako.min.js'></script>";
+        echo "<script defer src='{$base}/assets/vendor/echarts.min.js'></script>";
+        echo "<script defer src='{$base}/assets/vendor/abcjs-basic-min.js'></script>";
+        echo "<script defer src='{$base}/assets/vendor/raphael.min.js'></script>";
+        echo "<script defer src='{$base}/assets/vendor/flowchart.min.js'></script>";
+        echo "<script defer src='{$base}/assets/vendor/viz.js'></script>";
+        echo "<script defer src='{$base}/assets/vendor/full.render.js' onload=\"window.dispatchEvent(new Event('sps:markdown-ready'))\"></script>";
     }
-    echo "<script src='{$base}/assets/app.js'></script>";
     echo "</body>";
     echo "</html>";
     exit;
@@ -4356,6 +4356,15 @@ function hard_delete_share(int $shareId): ?int {
     purge_share_assets($shareId);
     purge_share_chunks($shareId);
     purge_share_access_logs($shareId);
+    $uploadIds = $pdo->prepare('SELECT upload_id FROM share_uploads WHERE share_id = :share_id');
+    $uploadIds->execute([':share_id' => $shareId]);
+    $uploadList = array_values(array_filter($uploadIds->fetchAll(PDO::FETCH_COLUMN)));
+    if ($uploadList) {
+        $placeholders = implode(',', array_fill(0, count($uploadList), '?'));
+        $stmt = $pdo->prepare('DELETE FROM share_upload_docs WHERE upload_id IN (' . $placeholders . ')');
+        $stmt->execute($uploadList);
+    }
+    $pdo->prepare('DELETE FROM share_uploads WHERE share_id = :share_id')->execute([':share_id' => $shareId]);
     $pdo->prepare('DELETE FROM share_comments WHERE share_id = :share_id')->execute([':share_id' => $shareId]);
     $pdo->prepare('DELETE FROM share_reports WHERE share_id = :share_id')->execute([':share_id' => $shareId]);
     $pdo->prepare('DELETE FROM share_visitors WHERE share_id = :share_id')->execute([':share_id' => $shareId]);
@@ -6593,7 +6602,8 @@ function render_doc_tree(array $nodes, string $slug, ?string $activeId = null, i
             $docTitle = htmlspecialchars($doc['title'] ?? $docId);
             $docPath = base_path() . '/s/' . $slug . '/' . rawurlencode($docId);
             $activeClass = $isActive ? ' is-active' : '';
-            $html .= '<a class="kb-tree-item' . $activeClass . '" href="' . $docPath . '">';
+            $docAttrs = ' href="' . $docPath . '" data-doc-id="' . htmlspecialchars($docId) . '" data-share-nav="doc"';
+            $html .= '<a class="kb-tree-item' . $activeClass . '"' . $docAttrs . '>';
             $html .= render_doc_tree_icon($doc, $assetBasePath);
             $html .= '<span class="kb-tree-label">' . $docTitle . '</span></a>';
         } else {
@@ -6619,6 +6629,16 @@ function build_breadcrumbs(string $hpath): array {
     return array_values(array_filter(explode('/', $trimmed)));
 }
 
+function is_share_partial_request(): bool {
+    if (!empty($_GET['partial']) && (string)$_GET['partial'] === '1') {
+        return true;
+    }
+    if (!empty($_SERVER['HTTP_X_SPS_PARTIAL']) && (string)$_SERVER['HTTP_X_SPS_PARTIAL'] === '1') {
+        return true;
+    }
+    return false;
+}
+
 function route_share(string $slug, ?string $docId = null): void {
     $share = find_share_by_slug($slug);
     if (!$share) {
@@ -6631,6 +6651,7 @@ function route_share(string $slug, ?string $docId = null): void {
     $shareTitleRaw = (string)$share['title'];
     $shareTitle = htmlspecialchars($shareTitleRaw);
     $redirectPath = '/s/' . $slug . ($docId ? '/' . rawurlencode($docId) : '');
+    $isPartial = is_share_partial_request();
 
     if (share_is_expired($share)) {
         $content = '<div class="share-shell share-shell--single">';
@@ -6765,27 +6786,36 @@ function route_share(string $slug, ?string $docId = null): void {
                 $prevCrumb = $crumb;
             }
             $crumbs = $filteredCrumbs;
-            $breadcrumbsHtml = '<div class="kb-breadcrumbs"><a class="kb-back" href="' . $base . '/s/' . $slug . '">' . htmlspecialchars($shareTitleRaw) . '</a>';
+            $breadcrumbsHtml = '<div class="kb-breadcrumbs"><a class="kb-back" href="' . $base . '/s/' . $slug . '" data-doc-id="" data-share-nav="doc">' . htmlspecialchars($shareTitleRaw) . '</a>';
             foreach ($crumbs as $crumb) {
                 $breadcrumbsHtml .= '<span>' . htmlspecialchars($crumb) . '</span>';
             }
             $breadcrumbsHtml .= '</div>';
-            $content = '<div class="share-shell share-shell--notebook">';
+            $mainHtml = '<div class="kb-main">';
+            $mainHtml .= '<div class="share-article" data-share-view="preview">';
+            $mainHtml .= '<div class="kb-header">' . $breadcrumbsHtml;
+            $mainHtml .= '<div class="kb-title-row">';
+            $mainHtml .= '<h1 class="kb-title">' . $docTitle . '</h1>';
+            $mainHtml .= '<button class="button ghost share-view-toggle" type="button" data-share-toggle aria-pressed="false">源码</button>';
+            $mainHtml .= '</div>';
+            $mainHtml .= $shareMetaHtml;
+            $mainHtml .= '</div>';
+            $mainHtml .= '<div class="markdown-body" data-md-id="doc">' . render_markdown($markdown) . '</div>';
+            $mainHtml .= '<textarea class="markdown-source" data-md-id="doc" readonly spellcheck="false" aria-label="Markdown 源码">' . htmlspecialchars($markdown) . '</textarea>';
+            $mainHtml .= $commentHtml;
+            $mainHtml .= $reportModalHtml;
+            $mainHtml .= '</div></div>';
+            if ($isPartial) {
+                api_response(200, [
+                    'title' => $docTitleRaw,
+                    'docId' => $activeDocId,
+                    'html' => $mainHtml,
+                ]);
+            }
+            $content = '<div class="share-shell share-shell--notebook" data-share-doc-id="' . htmlspecialchars($activeDocId) . '">';
             $content .= $sidebar;
-            $content .= '<div class="kb-main">';
-            $content .= '<div class="share-article" data-share-view="preview">';
-            $content .= '<div class="kb-header">' . $breadcrumbsHtml;
-            $content .= '<div class="kb-title-row">';
-            $content .= '<h1 class="kb-title">' . $docTitle . '</h1>';
-            $content .= '<button class="button ghost share-view-toggle" type="button" data-share-toggle aria-pressed="false">源码</button>';
+            $content .= $mainHtml;
             $content .= '</div>';
-            $content .= $shareMetaHtml;
-            $content .= '</div>';
-            $content .= '<div class="markdown-body" data-md-id="doc">' . render_markdown($markdown) . '</div>';
-            $content .= '<textarea class="markdown-source" data-md-id="doc" readonly spellcheck="false" aria-label="Markdown 源码">' . htmlspecialchars($markdown) . '</textarea>';
-            $content .= $commentHtml;
-            $content .= $reportModalHtml;
-            $content .= '</div></div></div>';
             render_page($docTitleRaw, $content, null, '', ['layout' => 'share', 'markdown' => true]);
             return;
         }
@@ -6879,34 +6909,51 @@ function route_share(string $slug, ?string $docId = null): void {
             if (!empty($crumbs)) {
                 array_pop($crumbs);
             }
-            $breadcrumbsHtml = '<div class="kb-breadcrumbs"><a class="kb-back" href="' . $base . '/s/' . $slug . '">目录</a>';
+            $breadcrumbsHtml = '<div class="kb-breadcrumbs"><a class="kb-back" href="' . $base . '/s/' . $slug . '" data-doc-id="" data-share-nav="doc">目录</a>';
             foreach ($crumbs as $crumb) {
                 $breadcrumbsHtml .= '<span>' . htmlspecialchars($crumb) . '</span>';
             }
             $breadcrumbsHtml .= '</div>';
-            $content = '<div class="share-shell share-shell--notebook">';
+            $mainHtml = '<div class="kb-main">';
+            $mainHtml .= '<div class="share-article" data-share-view="preview">';
+            $mainHtml .= '<div class="kb-header">' . $breadcrumbsHtml;
+            $mainHtml .= '<div class="kb-title-row">';
+            $mainHtml .= '<h1 class="kb-title">' . $docTitle . '</h1>';
+            $mainHtml .= '<button class="button ghost share-view-toggle" type="button" data-share-toggle aria-pressed="false">源码</button>';
+            $mainHtml .= '</div>';
+            $mainHtml .= $shareMetaHtml;
+            $mainHtml .= '</div>';
+            $mainHtml .= '<div class="markdown-body" data-md-id="doc">' . render_markdown($markdown) . '</div>';
+            $mainHtml .= '<textarea class="markdown-source" data-md-id="doc" readonly spellcheck="false" aria-label="Markdown 源码">' . htmlspecialchars($markdown) . '</textarea>';
+            $mainHtml .= $commentHtml;
+            $mainHtml .= $reportModalHtml;
+            $mainHtml .= '</div></div>';
+            if ($isPartial) {
+                api_response(200, [
+                    'title' => $docTitleRaw,
+                    'docId' => $docId,
+                    'html' => $mainHtml,
+                ]);
+            }
+            $content = '<div class="share-shell share-shell--notebook" data-share-doc-id="' . htmlspecialchars((string)$docId) . '">';
             $content .= $sidebar;
-            $content .= '<div class="kb-main">';
-            $content .= '<div class="share-article" data-share-view="preview">';
-            $content .= '<div class="kb-header">' . $breadcrumbsHtml;
-            $content .= '<div class="kb-title-row">';
-            $content .= '<h1 class="kb-title">' . $docTitle . '</h1>';
-            $content .= '<button class="button ghost share-view-toggle" type="button" data-share-toggle aria-pressed="false">源码</button>';
+            $content .= $mainHtml;
             $content .= '</div>';
-            $content .= $shareMetaHtml;
-            $content .= '</div>';
-            $content .= '<div class="markdown-body" data-md-id="doc">' . render_markdown($markdown) . '</div>';
-            $content .= '<textarea class="markdown-source" data-md-id="doc" readonly spellcheck="false" aria-label="Markdown 源码">' . htmlspecialchars($markdown) . '</textarea>';
-            $content .= $commentHtml;
-            $content .= $reportModalHtml;
-            $content .= '</div></div></div>';
             render_page($docTitleRaw, $content, null, '', ['layout' => 'share', 'markdown' => true]);
         }
 
         if (!$docId) {
-            $content = '<div class="share-shell share-shell--notebook">';
+            $mainHtml = '<div class="kb-main"><div class="share-empty">请先在文档树里面先打开一个文档</div></div>';
+            if ($isPartial) {
+                api_response(200, [
+                    'title' => $shareTitleRaw,
+                    'docId' => '',
+                    'html' => $mainHtml,
+                ]);
+            }
+            $content = '<div class="share-shell share-shell--notebook" data-share-doc-id="">';
             $content .= $sidebar;
-            $content .= '<div class="kb-main"><div class="share-empty">请先在文档树里面先打开一个文档</div></div>';
+            $content .= $mainHtml;
             $content .= '</div>';
             record_share_access($share, null, $shareTitleRaw);
             render_page($shareTitleRaw, $content, null, '', ['layout' => 'share']);
@@ -6923,7 +6970,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $meta = (array)$front['meta'];
             $updatedRaw = $meta['lastmod'] ?? $meta['updated'] ?? $meta['modified'] ?? '';
             $updated = $updatedRaw ? format_meta_date((string)$updatedRaw) : '';
-            $rows .= '<a class="kb-dir-row" href="' . $docPath . '">';
+            $rows .= '<a class="kb-dir-row" href="' . $docPath . '" data-doc-id="' . htmlspecialchars((string)$doc['doc_id']) . '" data-share-nav="doc">';
             $rows .= '<div class="kb-dir-title">' . $docTitle . '</div>';
             $rows .= '<div class="kb-dir-path">' . htmlspecialchars($pathLabel) . '</div>';
             $rows .= '<div class="kb-dir-time">' . htmlspecialchars($updated) . '</div>';

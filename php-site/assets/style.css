@@ -2059,6 +2059,11 @@ body.app-side-open {
   background: var(--surface);
 }
 
+.kb-main.is-loading {
+  opacity: 0.65;
+  transition: opacity 160ms ease;
+}
+
 .share-toc {
   width: var(--toc-width);
   border-right: 1px solid var(--border);
@@ -2124,6 +2129,62 @@ body.app-side-open {
   width: max-content;
   gap: 4px;
   --toc-offset: 0px;
+}
+
+.share-toc-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.share-toc-section:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.share-toc-divider {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+
+.share-toc-list--footnotes .share-toc-link {
+  color: #6f7899;
+}
+
+.share-toc-list--footnotes .share-toc-level-num {
+  color: #9aa3c7;
+}
+
+.share-toc--abs .share-toc-children {
+  padding-left: 0;
+  --toc-offset: 0px;
+}
+
+.share-toc--abs .share-toc-row {
+  padding-left: var(--toc-abs-indent, 0px);
+}
+
+.share-toc--abs .share-toc-row::before {
+  left: var(--toc-abs-indent, 0px);
+}
+
+.share-toc-footnote-index {
+  margin-left: 4px;
+  font-size: 0.65em;
+  vertical-align: super;
+  color: #9aa3c7;
+  cursor: pointer;
+}
+
+.share-toc-footnote-index:hover {
+  color: #5a7bff;
+  text-decoration: underline;
 }
 
 .share-toc-children {
