@@ -1076,6 +1076,11 @@ function collectEmojiTokenNames(markdown) {
         i += 1;
         continue;
       }
+      if (ch === "\n") {
+        inInline = false;
+        i += 1;
+        continue;
+      }
       if (!inInline && ch === ":") {
         const end = source.indexOf(":", i + 1);
         if (end > i + 1) {
@@ -1088,6 +1093,14 @@ function collectEmojiTokenNames(markdown) {
       }
     }
     i += 1;
+  }
+  if (source.includes(":")) {
+    const re = /:([^:\r\n]{1,200}):/g;
+    let match;
+    while ((match = re.exec(source))) {
+      const name = isEmojiTokenName(match[1]);
+      if (name) out.add(name);
+    }
   }
   return out;
 }
@@ -1120,6 +1133,12 @@ function replaceCustomEmojiTokens(markdown, tokenMap) {
     if (!inFence) {
       if (ch === "`") {
         inInline = !inInline;
+        out += ch;
+        i += 1;
+        continue;
+      }
+      if (ch === "\n") {
+        inInline = false;
         out += ch;
         i += 1;
         continue;
@@ -5515,6 +5534,20 @@ class SiYuanSharePlugin extends Plugin {
     };
   }
 
+  async ensureWorkspaceDir() {
+    if (this.workspaceDir) return this.workspaceDir;
+    try {
+      const wsInfo = await fetchSyncPost("/api/system/getWorkspaceInfo", {});
+      if (wsInfo && wsInfo.code === 0 && wsInfo.data?.workspaceDir) {
+        this.workspaceDir = String(wsInfo.data.workspaceDir);
+        return this.workspaceDir;
+      }
+    } catch (err) {
+      // ignore
+    }
+    return this.workspaceDir;
+  }
+
   async fetchEmojiAssetBlob(assetPath, controller, notebookId = "") {
     const t = this.t.bind(this);
     const normalized = normalizeAssetPath(assetPath);
@@ -5535,6 +5568,33 @@ class SiYuanSharePlugin extends Plugin {
         lastErr = err;
       }
     }
+    if (this.hasNodeFs) {
+      const wsDir = await this.ensureWorkspaceDir();
+      if (wsDir) {
+        for (const candidate of candidates) {
+          const clean = candidate.replace(/^[\\/]+/, "");
+          const rel = clean.startsWith("emojis/") ? clean.slice("emojis/".length) : clean;
+          const fsCandidates = new Set([
+            joinFsPath(wsDir, "data", clean),
+            joinFsPath(wsDir, "data", "emojis", rel),
+            joinFsPath(wsDir, clean),
+            joinFsPath(wsDir, "emojis", rel),
+          ]);
+          for (const fsPath of fsCandidates) {
+            try {
+              const stat = await fs.promises.stat(fsPath);
+              if (!stat || !stat.isFile()) continue;
+              const buf = await fs.promises.readFile(fsPath);
+              const blob = new Blob([buf]);
+              return {path: clean, blob};
+            } catch (err) {
+              if (isAbortError(err)) throw err;
+              lastErr = err;
+            }
+          }
+        }
+      }
+    }
     throw lastErr || new Error(t("siyuanShare.error.resourceDownloadFailed", {status: 404}));
   }
 
@@ -5547,6 +5607,11 @@ class SiYuanSharePlugin extends Plugin {
       const cleaned = normalizeAssetPath(value);
       if (!cleaned) return;
       if (cleaned.startsWith("data/")) {
+        candidates.add(cleaned);
+        return;
+      }
+      if (cleaned.startsWith("emojis/")) {
+        candidates.add(`data/${cleaned}`);
         candidates.add(cleaned);
         return;
       }

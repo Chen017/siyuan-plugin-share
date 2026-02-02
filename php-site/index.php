@@ -6018,7 +6018,17 @@ function sanitize_emoji_token_name(string $token): string {
     return $name;
 }
 
+function normalize_emoji_key(string $name): string {
+    $value = strtolower(trim($name));
+    if ($value === '') {
+        return '';
+    }
+    $normalized = preg_replace('/[\s_-]+/', '', $value);
+    return $normalized ?? '';
+}
+
 function resolve_custom_emoji_src(string $name, int $shareId, string $assetBasePath): string {
+    global $config;
     static $cache = [];
     $key = $shareId . '|' . $name;
     if (isset($cache[$key])) {
@@ -6030,13 +6040,19 @@ function resolve_custom_emoji_src(string $name, int $shareId, string $assetBaseP
         $cache[$key] = '';
         return '';
     }
+    $decoded = rawurldecode($clean);
     $candidates = [$clean];
+    if ($decoded !== '' && $decoded !== $clean) {
+        $candidates[] = $decoded;
+    }
     $compact = preg_replace('/\s+/', '', $clean);
     if ($compact !== $clean && $compact !== '') {
         $candidates[] = $compact;
     }
     $extensions = ['svg', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'];
-    $fsBase = __DIR__ . '/uploads/shares/' . $shareId . '/emojis/';
+    $uploadsDir = (string)($config['uploads_dir'] ?? (__DIR__ . '/uploads'));
+    $uploadsDir = rtrim($uploadsDir, '/\\');
+    $fsBase = $uploadsDir . '/shares/' . $shareId . '/emojis/';
     foreach ($candidates as $candidate) {
         $hasExt = (bool)preg_match('/\.(svg|png|jpe?g|gif|webp|bmp)$/i', $candidate);
         $names = $hasExt ? [$candidate] : array_merge([$candidate], array_map(
@@ -6052,8 +6068,124 @@ function resolve_custom_emoji_src(string $name, int $shareId, string $assetBaseP
             }
         }
     }
+    $index = build_share_emoji_index($shareId, $uploadsDir);
+    if (!empty($index)) {
+        $normalizedIndex = [];
+        foreach ($index as $nameKey => $rel) {
+            $norm = normalize_emoji_key($nameKey);
+            if ($norm !== '' && !isset($normalizedIndex[$norm])) {
+                $normalizedIndex[$norm] = $rel;
+            }
+        }
+        foreach ($candidates as $candidate) {
+            if (isset($index[$candidate])) {
+                $cache[$key] = $assetBasePath . encode_path_segments($index[$candidate]);
+                return $cache[$key];
+            }
+            $lower = strtolower($candidate);
+            foreach ($index as $nameKey => $rel) {
+                if (strtolower($nameKey) === $lower) {
+                    $cache[$key] = $assetBasePath . encode_path_segments($rel);
+                    return $cache[$key];
+                }
+            }
+            foreach ($index as $nameKey => $rel) {
+                if (str_starts_with($nameKey, $candidate . '-')) {
+                    $cache[$key] = $assetBasePath . encode_path_segments($rel);
+                    return $cache[$key];
+                }
+            }
+            if (!empty($normalizedIndex)) {
+                $normalized = normalize_emoji_key($candidate);
+                if ($normalized !== '' && isset($normalizedIndex[$normalized])) {
+                    $cache[$key] = $assetBasePath . encode_path_segments($normalizedIndex[$normalized]);
+                    return $cache[$key];
+                }
+            }
+        }
+    }
     $cache[$key] = '';
     return '';
+}
+
+function build_share_emoji_index(int $shareId, string $uploadsDir): array {
+    static $cache = [];
+    $key = $uploadsDir . '|' . $shareId;
+    if (isset($cache[$key])) {
+        return $cache[$key];
+    }
+    $map = [];
+    if ($shareId <= 0 || $uploadsDir === '') {
+        $cache[$key] = $map;
+        return $map;
+    }
+    $root = rtrim($uploadsDir, '/\\') . '/shares/' . $shareId . '/emojis';
+    if (!is_dir($root)) {
+        $cache[$key] = $map;
+        return $map;
+    }
+    try {
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS)
+        );
+        foreach ($iterator as $file) {
+            if (!$file->isFile()) {
+                continue;
+            }
+            $fullPath = str_replace('\\', '/', $file->getPathname());
+            if (!preg_match('/\.(svg|png|jpe?g|gif|webp|bmp)$/i', $fullPath)) {
+                continue;
+            }
+            $relative = substr($fullPath, strlen(rtrim($root, '/\\')) + 1);
+            if ($relative === false || $relative === '') {
+                continue;
+            }
+            $relative = ltrim(str_replace('\\', '/', $relative), '/');
+            $name = preg_replace('/\.(svg|png|jpe?g|gif|webp|bmp)$/i', '', $relative);
+            if ($name === '') {
+                continue;
+            }
+            $map[$name] = 'emojis/' . $relative;
+            $baseName = basename($name);
+            if ($baseName !== '' && !isset($map[$baseName])) {
+                $map[$baseName] = 'emojis/' . $relative;
+            }
+        }
+    } catch (Throwable $err) {
+        // ignore
+    }
+    try {
+        $pdo = db();
+        $stmt = $pdo->prepare('SELECT asset_path FROM share_assets WHERE share_id = :sid AND asset_path LIKE :prefix');
+        $stmt->execute([
+            ':sid' => $shareId,
+            ':prefix' => 'emojis/%',
+        ]);
+        $rows = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        foreach ($rows as $path) {
+            $path = sanitize_asset_path((string)$path);
+            if ($path === '' || !str_starts_with($path, 'emojis/')) {
+                continue;
+            }
+            $relative = substr($path, strlen('emojis/'));
+            if ($relative === '' || substr($relative, -1) === '/') {
+                continue;
+            }
+            $name = preg_replace('/\.(svg|png|jpe?g|gif|webp|bmp)$/i', '', $relative);
+            if ($name === '' || isset($map[$name])) {
+                continue;
+            }
+            $map[$name] = $path;
+            $baseName = basename($name);
+            if ($baseName !== '' && !isset($map[$baseName])) {
+                $map[$baseName] = $path;
+            }
+        }
+    } catch (Throwable $err) {
+        // ignore
+    }
+    $cache[$key] = $map;
+    return $map;
 }
 
 function get_fence_marker(string $text, int $index): string {
@@ -6121,10 +6253,13 @@ function replace_custom_emoji_tokens(string $markdown, int $shareId, string $ass
         $ch = $source[$i];
         if (!$inFence) {
             if ($ch === '<') {
-                $inTag = true;
-                $out .= $ch;
-                $i++;
-                continue;
+                $next = $source[$i + 1] ?? '';
+                if ($next === '!' || $next === '/' || ctype_alpha($next)) {
+                    $inTag = true;
+                    $out .= $ch;
+                    $i++;
+                    continue;
+                }
             }
             if ($inTag) {
                 $out .= $ch;
@@ -6139,6 +6274,9 @@ function replace_custom_emoji_tokens(string $markdown, int $shareId, string $ass
                 $out .= $ch;
                 $i++;
                 continue;
+            }
+            if ($ch === "\n") {
+                $inInline = false;
             }
             if (!$inInline && $ch === ':') {
                 $end = strpos($source, ':', $i + 1);

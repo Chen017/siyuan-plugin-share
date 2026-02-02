@@ -334,7 +334,7 @@
         const row = document.createElement("div");
         row.className = "share-toc-row";
         row.dataset.section = section;
-        const indent = Math.max(0, node.level - baseLevel);
+        const indent = Math.max(0, level);
         row.style.setProperty("--toc-abs-indent", `${indent * 20}px`);
 
         const link = document.createElement("a");
@@ -2950,45 +2950,89 @@ const initImageViewer = () => {
         info: {label: "Info", icon: "ℹ️"},
       };
 
-      md.core.ruler.after("block", "siyuan_callout", (state) => {
-        const tokens = state.tokens;
-        tokens.forEach((token, index) => {
-          if (token.type !== "blockquote_open") return;
-          let inline = null;
-          for (let i = index + 1; i < tokens.length; i += 1) {
-            if (tokens[i].type === "inline") {
-              inline = tokens[i];
-              break;
-            }
-            if (tokens[i].type === "blockquote_close") break;
+      const splitTitleHtml = (html) => {
+        const trimmed = String(html || "").trim();
+        if (!trimmed) return {icon: "", label: ""};
+        const match = trimmed.match(/^<img\b[^>]*>/i);
+        if (match) {
+          const icon = match[0];
+          const label = trimmed.slice(icon.length).trim();
+          return {icon, label};
+        }
+        return {icon: "", label: trimmed};
+      };
+
+      const reparseInline = (inlineToken, text, env) => {
+        inlineToken.content = text;
+        if (md.inline && typeof md.inline.parse === "function") {
+          const children = [];
+          md.inline.parse(text, md, env || {}, children);
+          inlineToken.children = children;
+        }
+      };
+
+      const buildTitleHtml = (titleRaw, meta) => {
+        if (titleRaw) {
+          const titleHtml = typeof md.renderInline === "function" ? md.renderInline(titleRaw) : titleRaw;
+          const parts = splitTitleHtml(titleHtml);
+          const iconHtml = parts.icon ? `<span class="md-alert__icon">${parts.icon}</span>` : "";
+          const labelHtml = parts.label ? `<span class="md-alert__label">${parts.label}</span>` : "";
+          return `<div class="md-alert__title">${iconHtml}${labelHtml}</div>\n`;
+        }
+        return (
+          `<div class="md-alert__title"><span class="md-alert__icon">${meta.icon}</span>` +
+          `<span class="md-alert__label">${meta.label}</span></div>\n`
+        );
+      };
+
+      md.block.ruler.before("blockquote", "siyuan_callout_block", (state, startLine, endLine, silent) => {
+        let pos = state.bMarks[startLine] + state.tShift[startLine];
+        let max = state.eMarks[startLine];
+        if (state.src[pos] !== ">") return false;
+        let line = state.src.slice(pos + 1, max);
+        if (line.startsWith(" ")) line = line.slice(1);
+        if (!calloutPattern.test(line)) return false;
+        if (silent) return true;
+
+        let nextLine = startLine;
+        let content = "";
+        while (nextLine < endLine) {
+          pos = state.bMarks[nextLine] + state.tShift[nextLine];
+          max = state.eMarks[nextLine];
+          if (state.src[pos] !== ">") break;
+          let row = state.src.slice(pos + 1, max);
+          if (row.startsWith(" ")) row = row.slice(1);
+          if (nextLine !== startLine && calloutPattern.test(row)) {
+            break;
           }
-          if (!inline) return;
-          const match = String(inline.content || "").match(calloutPattern);
-          if (!match) return;
-          const typeKey = match[1].toLowerCase();
-          const classKey = calloutClassMap[typeKey] || "note";
-          const meta = calloutMetaMap[classKey] || calloutMetaMap.note;
-          token.attrJoin("class", "md-alert");
-          token.attrJoin("class", `md-alert--${classKey}`);
-          inline.content = inline.content.replace(calloutPattern, "");
-          if (Array.isArray(inline.children)) {
-            let removed = false;
-            inline.children.forEach((child) => {
-              if (removed || child.type !== "text") return;
-              const next = child.content.replace(calloutPattern, "");
-              child.content = next;
-              removed = true;
-            });
-          }
-          const TitleToken = state.Token || md.Token;
-          if (TitleToken) {
-            const titleToken = new TitleToken("html_block", "", 0);
-            titleToken.content =
-              `<div class="md-alert__title"><span class="md-alert__icon">${meta.icon}</span>` +
-              `<span class="md-alert__label">${meta.label}</span></div>\n`;
-            tokens.splice(index + 1, 0, titleToken);
-          }
-        });
+          content += row + "\n";
+          nextLine += 1;
+        }
+
+        const lines = content.split(/\r?\n/);
+        const firstLine = lines.shift() ?? "";
+        const match = firstLine.match(calloutPattern);
+        if (!match) return false;
+        const typeKey = match[1].toLowerCase();
+        const classKey = calloutClassMap[typeKey] || "note";
+        const meta = calloutMetaMap[classKey] || calloutMetaMap.note;
+        const titleRaw = firstLine.replace(calloutPattern, "").trim();
+        const body = lines.join("\n");
+
+        const open = state.push("html_block", "", 0);
+        open.block = true;
+        open.content = `<div class="md-alert md-alert--${classKey}">\n`;
+        const titleToken = state.push("html_block", "", 0);
+        titleToken.block = true;
+        titleToken.content = buildTitleHtml(titleRaw, meta);
+        if (body.trim()) {
+          state.md.block.parse(body, state.md, state.env, state.tokens);
+        }
+        const close = state.push("html_block", "", 0);
+        close.block = true;
+        close.content = "</div>\n";
+        state.line = nextLine;
+        return true;
       });
     };
 
@@ -3799,6 +3843,7 @@ const initImageViewer = () => {
         }
         const tag = el.tagName.toLowerCase();
         if (tag === "img") return;
+        if (tag === "iframe") return;
         if (tag === "video") return;
         if (tag === "svg" && el.ownerSVGElement) return;
         const wrapper = document.createElement("div");
@@ -3807,6 +3852,107 @@ const initImageViewer = () => {
         if (!parent) return;
         parent.insertBefore(wrapper, el);
         wrapper.appendChild(el);
+      });
+    };
+
+    const isMobileViewport = () =>
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(max-width: 900px)").matches;
+
+    const ensureIframeWrapper = (iframe) => {
+      if (!iframe) return null;
+      const mediaWrapper = iframe.closest(".media-scroll");
+      if (mediaWrapper && mediaWrapper.contains(iframe)) {
+        mediaWrapper.replaceWith(iframe);
+      }
+      const existing = iframe.closest(".iframe-fit");
+      if (existing) return existing;
+      const innerParent = iframe.closest(".iframe-fit__inner");
+      if (innerParent && innerParent.parentElement?.classList.contains("iframe-fit")) {
+        return innerParent.parentElement;
+      }
+      const wrapper = document.createElement("div");
+      wrapper.className = "iframe-fit";
+      const parent = iframe.parentNode;
+      if (!parent) return null;
+      parent.insertBefore(wrapper, iframe);
+      wrapper.appendChild(iframe);
+      return wrapper;
+    };
+
+    const getIframeRatio = (iframe) => {
+      const attrW = parseFloat(iframe.getAttribute("width") || "");
+      const attrH = parseFloat(iframe.getAttribute("height") || "");
+      if (Number.isFinite(attrW) && Number.isFinite(attrH) && attrW > 0 && attrH > 0) {
+        return (attrH / attrW) * 100;
+      }
+      return 56.25;
+    };
+
+    const applyIframeFit = (iframe, forceMobile) => {
+      if (!iframe || iframe.closest(".md-diagram, .mermaid")) return;
+      const isMobile = typeof forceMobile === "boolean" ? forceMobile : isMobileViewport();
+      if (!isMobile) {
+        const wrapper = iframe.closest(".iframe-fit");
+        if (wrapper && wrapper.parentNode) {
+          wrapper.parentNode.insertBefore(iframe, wrapper);
+          wrapper.remove();
+        }
+        iframe.style.width = "";
+        iframe.style.height = "";
+        iframe.style.maxWidth = "";
+        iframe.style.minHeight = "";
+        iframe.style.maxHeight = "";
+        iframe.style.aspectRatio = "";
+        iframe.style.overflow = "";
+        iframe.removeAttribute("scrolling");
+        iframe.removeAttribute("data-sps-iframe-mobile");
+        return;
+      }
+
+      const wrapper = ensureIframeWrapper(iframe);
+      if (!wrapper) return;
+      const ratio = getIframeRatio(iframe);
+      wrapper.style.setProperty("--iframe-ratio", `${ratio}%`);
+      iframe.style.maxWidth = "100%";
+      iframe.style.minHeight = "0";
+      iframe.style.maxHeight = "none";
+      iframe.style.aspectRatio = "auto";
+      iframe.style.width = "100%";
+      iframe.style.height = "100%";
+      iframe.style.overflow = "hidden";
+      iframe.setAttribute("scrolling", "no");
+      iframe.setAttribute("data-sps-iframe-mobile", "1");
+    };
+
+    const fitMarkdownIframes = (container) => {
+      const iframes = container.querySelectorAll("iframe");
+      if (!iframes.length) return;
+      const mobile = isMobileViewport();
+      iframes.forEach((iframe) => applyIframeFit(iframe, mobile));
+    };
+
+    const fitMarkdownVideos = (container) => {
+      const mobile = isMobileViewport();
+      container.querySelectorAll("video").forEach((video) => {
+        if (!mobile) {
+          if (video.dataset.spsVideoMobile === "1") {
+            video.style.width = "";
+            video.style.height = "";
+            video.style.maxWidth = "";
+            video.style.objectFit = "";
+            video.style.display = "";
+            video.removeAttribute("data-sps-video-mobile");
+          }
+          return;
+        }
+        if (video.dataset.spsVideoMobile === "1") return;
+        video.dataset.spsVideoMobile = "1";
+        video.style.width = "100%";
+        video.style.height = "auto";
+        video.style.maxWidth = "100%";
+        video.style.objectFit = "contain";
+        video.style.display = "block";
       });
     };
 
@@ -3845,6 +3991,8 @@ const initImageViewer = () => {
         }
         decorateCodeBlocks(target);
         wrapScrollableMedia(target);
+        fitMarkdownIframes(target);
+        fitMarkdownVideos(target);
       });
   };
 
