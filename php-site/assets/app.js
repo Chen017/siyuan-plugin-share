@@ -3865,14 +3865,20 @@ const initImageViewer = () => {
       if (mediaWrapper && mediaWrapper.contains(iframe)) {
         mediaWrapper.replaceWith(iframe);
       }
-      const existing = iframe.closest(".iframe-fit");
-      if (existing) return existing;
+      const existingShell = iframe.closest(".iframe-shell");
+      if (existingShell) return existingShell;
+      const existingFit = iframe.closest(".iframe-fit");
+      if (existingFit) {
+        existingFit.classList.add("iframe-shell");
+        return existingFit;
+      }
       const innerParent = iframe.closest(".iframe-fit__inner");
       if (innerParent && innerParent.parentElement?.classList.contains("iframe-fit")) {
+        innerParent.parentElement.classList.add("iframe-shell");
         return innerParent.parentElement;
       }
       const wrapper = document.createElement("div");
-      wrapper.className = "iframe-fit";
+      wrapper.className = "iframe-shell";
       const parent = iframe.parentNode;
       if (!parent) return null;
       parent.insertBefore(wrapper, iframe);
@@ -3892,12 +3898,10 @@ const initImageViewer = () => {
     const applyIframeFit = (iframe, forceMobile) => {
       if (!iframe || iframe.closest(".md-diagram, .mermaid")) return;
       const isMobile = typeof forceMobile === "boolean" ? forceMobile : isMobileViewport();
+      const wrapper = ensureIframeWrapper(iframe);
+      if (!wrapper) return;
       if (!isMobile) {
-        const wrapper = iframe.closest(".iframe-fit");
-        if (wrapper && wrapper.parentNode) {
-          wrapper.parentNode.insertBefore(iframe, wrapper);
-          wrapper.remove();
-        }
+        wrapper.classList.remove("iframe-fit");
         iframe.style.width = "";
         iframe.style.height = "";
         iframe.style.maxWidth = "";
@@ -3910,8 +3914,7 @@ const initImageViewer = () => {
         return;
       }
 
-      const wrapper = ensureIframeWrapper(iframe);
-      if (!wrapper) return;
+      wrapper.classList.add("iframe-fit");
       const ratio = getIframeRatio(iframe);
       wrapper.style.setProperty("--iframe-ratio", `${ratio}%`);
       iframe.style.maxWidth = "100%";
@@ -3920,8 +3923,8 @@ const initImageViewer = () => {
       iframe.style.aspectRatio = "auto";
       iframe.style.width = "100%";
       iframe.style.height = "100%";
-      iframe.style.overflow = "hidden";
-      iframe.setAttribute("scrolling", "no");
+      iframe.style.overflow = "auto";
+      iframe.removeAttribute("scrolling");
       iframe.setAttribute("data-sps-iframe-mobile", "1");
     };
 
@@ -3930,6 +3933,79 @@ const initImageViewer = () => {
       if (!iframes.length) return;
       const mobile = isMobileViewport();
       iframes.forEach((iframe) => applyIframeFit(iframe, mobile));
+    };
+
+    const iframeFullscreenWrappers = new Set();
+    let iframeFullscreenListenerBound = false;
+
+    const handleIframeFullscreenChange = () => {
+      iframeFullscreenWrappers.forEach((wrapper) => {
+        if (!wrapper.isConnected) {
+          iframeFullscreenWrappers.delete(wrapper);
+          return;
+        }
+        const button = wrapper.querySelector(".iframe-fullscreen-toggle");
+        if (!button) return;
+        const isFullscreen =
+          document.fullscreenElement === wrapper ||
+          document.fullscreenElement === wrapper.querySelector("iframe");
+        button.setAttribute("aria-label", isFullscreen ? "退出全屏" : "全屏");
+        button.setAttribute("title", isFullscreen ? "退出全屏" : "全屏");
+        wrapper.classList.toggle("is-fullscreen", isFullscreen);
+      });
+    };
+
+    const initIframeFullscreen = (container) => {
+      const iframes = container.querySelectorAll("iframe");
+      if (!iframes.length) return;
+      iframes.forEach((iframe) => {
+        const wrapper = ensureIframeWrapper(iframe);
+        if (!wrapper) return;
+        if (!iframe.hasAttribute("allowfullscreen")) {
+          iframe.setAttribute("allowfullscreen", "");
+        }
+        const allowValue = iframe.getAttribute("allow") || "";
+        if (!allowValue.includes("fullscreen")) {
+          const nextValue = allowValue ? `${allowValue}; fullscreen` : "fullscreen";
+          iframe.setAttribute("allow", nextValue);
+        }
+        if (wrapper.querySelector(".iframe-fullscreen-toggle")) return;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "iframe-fullscreen-toggle";
+        button.setAttribute("aria-label", "全屏");
+        button.setAttribute("title", "全屏");
+        button.innerHTML =
+          "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\" focusable=\"false\">" +
+          "<path d=\"M3 7V5a2 2 0 0 1 2-2h2\" />" +
+          "<path d=\"M17 3h2a2 2 0 0 1 2 2v2\" />" +
+          "<path d=\"M7 21H5a2 2 0 0 1-2-2v-2\" />" +
+          "<path d=\"M21 17v2a2 2 0 0 1-2 2h-2\" />" +
+          "</svg>";
+        button.addEventListener("click", async () => {
+          if (document.fullscreenElement) {
+            document.exitFullscreen().catch(() => {});
+            return;
+          }
+          const requestFullscreen = iframe.requestFullscreen?.bind(iframe);
+          if (requestFullscreen) {
+            try {
+              await requestFullscreen();
+              return;
+            } catch (err) {
+              console.warn("iframe fullscreen failed, falling back to wrapper", err);
+            }
+          }
+          wrapper.requestFullscreen?.().catch(() => {});
+        });
+        wrapper.appendChild(button);
+        iframeFullscreenWrappers.add(wrapper);
+        if (!iframeFullscreenListenerBound) {
+          document.addEventListener("fullscreenchange", handleIframeFullscreenChange);
+          iframeFullscreenListenerBound = true;
+        }
+        handleIframeFullscreenChange();
+      });
     };
 
     const fitMarkdownVideos = (container) => {
@@ -3992,6 +4068,7 @@ const initImageViewer = () => {
         decorateCodeBlocks(target);
         wrapScrollableMedia(target);
         fitMarkdownIframes(target);
+        initIframeFullscreen(target);
         fitMarkdownVideos(target);
       });
   };
