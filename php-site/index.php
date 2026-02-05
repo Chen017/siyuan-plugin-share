@@ -84,6 +84,9 @@ function base_url(): string {
     static $customBaseUrl = null;
     if ($customBaseUrl === null) {
         $customBaseUrl = trim((string)get_setting('site_base_url', ''));
+        if (lite_mode_enabled()) {
+            $customBaseUrl = '';
+        }
         if ($customBaseUrl !== '') {
             $customBaseUrl = rtrim($customBaseUrl, '/');
         }
@@ -440,6 +443,7 @@ function ensure_setting(PDO $pdo, string $key, string $value): void {
 function seed_default_settings(PDO $pdo): void {
     global $config;
     $defaultLimit = (int)$config['default_storage_limit_mb'] * 1024 * 1024;
+    ensure_setting($pdo, 'lite_mode_enabled', '0');
     ensure_setting($pdo, 'allow_registration', $config['allow_registration'] ? '1' : '0');
     ensure_setting($pdo, 'default_storage_limit_bytes', (string)$defaultLimit);
     ensure_setting($pdo, 'captcha_enabled', $config['captcha_enabled'] ? '1' : '0');
@@ -504,6 +508,15 @@ function check_csrf(): void {
     }
 }
 
+function require_feature_enabled(bool $enabled): void {
+    if ($enabled) {
+        return;
+    }
+    http_response_code(404);
+    echo '未找到。';
+    exit;
+}
+
 function flash(string $key, ?string $value = null): ?string {
     if ($value !== null) {
         $_SESSION['flash'][$key] = $value;
@@ -543,6 +556,10 @@ function set_setting(string $key, string $value): void {
 function get_bool_setting(string $key, bool $default = false): bool {
     $value = get_setting($key, $default ? '1' : '0');
     return (int)$value === 1;
+}
+
+function lite_mode_enabled(): bool {
+    return get_bool_setting('lite_mode_enabled', false);
 }
 
 function get_user_setting(int $userId, string $key, ?string $default = null): ?string {
@@ -601,18 +618,30 @@ function access_stats_retention_days(int $userId): int {
 }
 
 function allow_registration(): bool {
+    if (lite_mode_enabled()) {
+        return false;
+    }
     return get_bool_setting('allow_registration', true);
 }
 
 function captcha_enabled(): bool {
+    if (lite_mode_enabled()) {
+        return false;
+    }
     return get_bool_setting('captcha_enabled', true);
 }
 
 function email_verification_enabled(): bool {
+    if (lite_mode_enabled()) {
+        return false;
+    }
     return get_bool_setting('email_verification_enabled', false);
 }
 
 function smtp_enabled(): bool {
+    if (lite_mode_enabled()) {
+        return false;
+    }
     return get_bool_setting('smtp_enabled', false);
 }
 
@@ -626,6 +655,9 @@ function default_storage_limit_bytes(): int {
 }
 
 function get_banned_words_raw(): string {
+    if (lite_mode_enabled()) {
+        return '';
+    }
     return (string)get_setting('banned_words', '');
 }
 
@@ -659,6 +691,20 @@ function string_sub(string $text, int $start, int $length): string {
         return (string)mb_substr($text, $start, $length, 'UTF-8');
     }
     return substr($text, $start, $length);
+}
+
+function format_url_label(string $url, int $max = 48): string {
+    $raw = trim($url);
+    if ($raw === '' || $max <= 0) {
+        return $raw;
+    }
+    if (function_exists('mb_strimwidth')) {
+        return (string)mb_strimwidth($raw, 0, $max, '…', 'UTF-8');
+    }
+    if (strlen($raw) <= $max) {
+        return $raw;
+    }
+    return substr($raw, 0, max(0, $max - 1)) . '…';
 }
 
 function find_banned_word(string $text, array $words): ?array {
@@ -954,10 +1000,13 @@ function render_share_stats(array $share, string $extraHtml = ''): string {
     $created = format_share_datetime((string)($share['created_at'] ?? ''));
     $expiresAt = (int)($share['expires_at'] ?? 0);
     $visitorLimit = (int)($share['visitor_limit'] ?? 0);
+    $liteMode = lite_mode_enabled();
     $chips = [];
-    $chips[] = ['label' => '访问次数', 'value' => $count . ' 次'];
-    if ($created !== '') {
-        $chips[] = ['label' => '创建时间', 'value' => $created];
+    if (!$liteMode) {
+        $chips[] = ['label' => '访问次数', 'value' => $count . ' 次'];
+        if ($created !== '') {
+            $chips[] = ['label' => '创建时间', 'value' => $created];
+        }
     }
     if ($expiresAt > 0) {
         $chips[] = ['label' => '到期时间', 'value' => date('Y-m-d H:i', $expiresAt)];
@@ -1146,7 +1195,7 @@ function render_page(string $title, string $content, ?array $user = null, string
         echo "<div class='share-page'>";
         echo render_share_icon_defs();
         echo $content;
-        echo "<footer class='share-footer'>由 <a href='https://github.com/b8l8u8e8/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>b8l8u8e8</a> 提供支持</footer>";
+        echo "<footer class='share-footer'>感谢 <a href='https://github.com/b8l8u8e8/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>b8l8u8e8</a> 提供上游支持 | Fork<a href='https://github.com/Chen017/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>分支</a></footer>";
         echo "<button class='share-side-trigger' type='button' data-share-drawer-open aria-label='打开侧边栏'><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='currentColor' d='M4 6h16v2H4zM4 11h16v2H4zM4 16h16v2H4z'/></svg><span>导航</span></button>";
         echo "<div class='share-side-backdrop' data-share-drawer-close></div>";
         echo "<button class='scroll-top' type='button' data-scroll-top aria-label='回到顶部'><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='currentColor' d='M12 2c-2.76 0-5 2.24-5 5v2.5L4 13l4.5 1L12 22l3.5-8L20 13l-3-3.5V7c0-2.76-2.24-5-5-5zm0 3a2 2 0 0 1 2 2v1.5l-2 2-2-2V7a2 2 0 0 1 2-2z'/></svg></button>";
@@ -1159,19 +1208,22 @@ function render_page(string $title, string $content, ?array $user = null, string
             ['key' => 'account', 'label' => '账号设置', 'href' => $base . '/account'],
         ];
         if (($user['role'] ?? '') === 'admin') {
-            $reportBadge = pending_report_count();
+            $liteMode = lite_mode_enabled();
+            $reportBadge = $liteMode ? 0 : pending_report_count();
             $navItems = [
                 ['key' => 'dashboard', 'label' => '控制台', 'href' => $base . '/dashboard'],
                 ['key' => 'account', 'label' => '账号设置', 'href' => $base . '/account'],
                 ['key' => 'admin-home', 'label' => '数据统计', 'href' => $base . '/admin-home'],
                 ['key' => 'admin-settings', 'label' => '站点设置', 'href' => $base . '/admin#settings'],
                 ['key' => 'admin-announcements', 'label' => '公告管理', 'href' => $base . '/admin#announcements'],
-                ['key' => 'admin-reports', 'label' => '举报管理', 'href' => $base . '/admin#reports', 'badge' => $reportBadge],
-                ['key' => 'admin-users', 'label' => '用户管理', 'href' => $base . '/admin#users'],
                 ['key' => 'admin-shares', 'label' => '分享管理', 'href' => $base . '/admin#shares'],
                 ['key' => 'admin-chunks', 'label' => '分片清理', 'href' => $base . '/admin#chunks'],
-                ['key' => 'admin-scan', 'label' => '违禁词扫描', 'href' => $base . '/admin#scan'],
             ];
+            if (!$liteMode) {
+                $navItems[] = ['key' => 'admin-reports', 'label' => '举报管理', 'href' => $base . '/admin#reports', 'badge' => $reportBadge];
+                $navItems[] = ['key' => 'admin-users', 'label' => '用户管理', 'href' => $base . '/admin#users'];
+                $navItems[] = ['key' => 'admin-scan', 'label' => '违禁词扫描', 'href' => $base . '/admin#scan'];
+            }
         }
         echo "<div class='app-shell'>";
         echo "<aside class='app-sidebar'>";
@@ -2658,6 +2710,9 @@ function render_comment_node(array $comment, array $share, ?array $user, string 
 }
 
 function render_share_comments(array $share, ?array $user, ?string $docId = null): string {
+    if (lite_mode_enabled()) {
+        return '';
+    }
     $shareId = (int)($share['id'] ?? 0);
     $slug = (string)($share['slug'] ?? '');
     if ($shareId <= 0 || $slug === '') {
@@ -2795,6 +2850,9 @@ function share_report_modal_id(string $slug): string {
 }
 
 function render_share_report_trigger(array $share): string {
+    if (lite_mode_enabled()) {
+        return '';
+    }
     $slug = (string)($share['slug'] ?? '');
     if ($slug === '') {
         return '';
@@ -2804,6 +2862,9 @@ function render_share_report_trigger(array $share): string {
 }
 
 function render_share_report_form(array $share, ?array $user, ?string $docId = null): string {
+    if (lite_mode_enabled()) {
+        return '';
+    }
     $slug = (string)($share['slug'] ?? '');
     if ($slug === '') {
         return '';
@@ -2877,6 +2938,9 @@ function render_share_report_form(array $share, ?array $user, ?string $docId = n
 }
 
 function pending_report_count(): int {
+    if (lite_mode_enabled()) {
+        return 0;
+    }
     $pdo = db();
     $stmt = $pdo->query('SELECT COUNT(*) FROM share_reports WHERE handled_at IS NULL');
     return (int)$stmt->fetchColumn();
@@ -3337,6 +3401,7 @@ function handle_share_comment_edit(string $slug): void {
 }
 
 function handle_share_report_submit(string $slug): void {
+    require_feature_enabled(!lite_mode_enabled());
     check_csrf();
     $share = find_share_by_slug($slug);
     if (!$share) {
@@ -7163,22 +7228,27 @@ if (strpos($path, '/api/v1/') === 0) {
 }
 
 if (preg_match('#^/s/([a-zA-Z0-9_-]+)/comment$#', $path, $matches) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     handle_share_comment_submit($matches[1]);
 }
 
 if (preg_match('#^/s/([a-zA-Z0-9_-]+)/comment/upload$#', $path, $matches) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     handle_share_comment_upload($matches[1]);
 }
 
 if (preg_match('#^/s/([a-zA-Z0-9_-]+)/comment/edit$#', $path, $matches) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     handle_share_comment_edit($matches[1]);
 }
 
 if (preg_match('#^/s/([a-zA-Z0-9_-]+)/comment/delete$#', $path, $matches) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     handle_share_comment_delete($matches[1]);
 }
 
 if (preg_match('#^/s/([a-zA-Z0-9_-]+)/report$#', $path, $matches) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     handle_share_report_submit($matches[1]);
 }
 
@@ -7476,7 +7546,9 @@ if ($path === '/login') {
             $content .= '</form>';
         }
     }
-    $content .= '<div class="auth-footer">没有账号？ <a class="link" href="' . base_path() . '/register">立即注册</a></div>';
+    if (allow_registration()) {
+        $content .= '<div class="auth-footer">没有账号？ <a class="link" href="' . base_path() . '/register">立即注册</a></div>';
+    }
     $content .= '</div>';
     render_page('登录', $content, null, '', ['layout' => 'auth']);
 }
@@ -7975,6 +8047,7 @@ if ($path === '/account') {
 if ($path === '/dashboard') {
     $user = require_login();
     $pdo = db();
+    $liteMode = lite_mode_enabled();
     $usedBytes = recalculate_user_storage((int)$user['id']);
     $user['storage_used_bytes'] = $usedBytes;
     $limitBytes = get_user_limit_bytes($user);
@@ -8192,11 +8265,16 @@ if ($path === '/dashboard') {
     if (empty($shares)) {
         $content .= '<p class="muted" style="margin-top:12px">暂无分享记录。</p>';
     } else {
-        $content .= '<table class="table" style="margin-top:12px"><thead><tr><th>标题</th><th>类型</th><th>链接</th><th>密码</th><th>到期</th><th>访客上限</th><th>状态</th><th>评论邮件通知</th><th>大小</th><th>更新时间</th></tr></thead><tbody>';
+        $content .= '<table class="table" style="margin-top:12px"><thead><tr><th>标题</th><th>类型</th><th>链接</th><th>密码</th><th>到期</th><th>访客上限</th><th>状态</th>';
+        if (!$liteMode) {
+            $content .= '<th>评论邮件通知</th>';
+        }
+        $content .= '<th>大小</th><th>更新时间</th></tr></thead><tbody>';
         foreach ($shares as $share) {
             $title = htmlspecialchars($share['title']);
             $type = $share['type'] === 'notebook' ? '笔记本' : '文档';
             $url = share_url($share['slug']);
+            $urlLabel = htmlspecialchars(format_url_label($url, 48));
             $updated = htmlspecialchars($share['updated_at']);
             $size = format_bytes((int)($share['size_bytes'] ?? 0));
             $hasPassword = !empty($share['password_hash']) ? '已设置' : '无';
@@ -8209,32 +8287,37 @@ if ($path === '/dashboard') {
                 $visitorLabel = '不限';
             }
             $status = $share['deleted_at'] ? '已删除' : '正常';
-            $notifyEnabled = (int)($share['comment_notify'] ?? 0) === 1;
-            if (!empty($share['deleted_at'])) {
-                $notifyHtml = '<span class="muted">已删除</span>';
-            } else {
-                $notifyHtml = '<div class="comment-notify">';
-                $notifyHtml .= '<span class="comment-notify-status">' . ($notifyEnabled ? '已开启' : '已关闭') . '</span>';
-                if ($notifyEnabled || smtp_enabled()) {
-                    $notifyHtml .= '<form method="post" action="' . base_path() . '/dashboard/comment-notify" class="inline-form">';
-                    $notifyHtml .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
-                    $notifyHtml .= '<input type="hidden" name="share_id" value="' . (int)$share['id'] . '">';
-                    $notifyHtml .= '<input type="hidden" name="action" value="' . ($notifyEnabled ? 'disable' : 'enable') . '" data-toggle-action>';
-                    $notifyHtml .= '<label class="switch">';
-                    $notifyHtml .= '<input type="checkbox" ' . ($notifyEnabled ? 'checked ' : '') . 'data-toggle-input>';
-                    $notifyHtml .= '<span class="switch-slider"></span>';
-                    $notifyHtml .= '</label>';
-                    $notifyHtml .= '</form>';
+            $rowHtml = "<tr><td>{$title}</td><td>{$type}</td><td><a href=\"{$url}\" target=\"_blank\">{$urlLabel}</a></td><td>{$hasPassword}</td><td>{$expiresAt}</td><td>{$visitorLabel}</td><td>{$status}</td>";
+            if (!$liteMode) {
+                $notifyEnabled = (int)($share['comment_notify'] ?? 0) === 1;
+                if (!empty($share['deleted_at'])) {
+                    $notifyHtml = '<span class="muted">已删除</span>';
                 } else {
-                    $notifyHtml .= '<span class="muted">需开启SMTP</span>';
-                    $notifyHtml .= '<label class="switch is-disabled">';
-                    $notifyHtml .= '<input type="checkbox" disabled>';
-                    $notifyHtml .= '<span class="switch-slider"></span>';
-                    $notifyHtml .= '</label>';
+                    $notifyHtml = '<div class="comment-notify">';
+                    $notifyHtml .= '<span class="comment-notify-status">' . ($notifyEnabled ? '已开启' : '已关闭') . '</span>';
+                    if ($notifyEnabled || smtp_enabled()) {
+                        $notifyHtml .= '<form method="post" action="' . base_path() . '/dashboard/comment-notify" class="inline-form">';
+                        $notifyHtml .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+                        $notifyHtml .= '<input type="hidden" name="share_id" value="' . (int)$share['id'] . '">';
+                        $notifyHtml .= '<input type="hidden" name="action" value="' . ($notifyEnabled ? 'disable' : 'enable') . '" data-toggle-action>';
+                        $notifyHtml .= '<label class="switch">';
+                        $notifyHtml .= '<input type="checkbox" ' . ($notifyEnabled ? 'checked ' : '') . 'data-toggle-input>';
+                        $notifyHtml .= '<span class="switch-slider"></span>';
+                        $notifyHtml .= '</label>';
+                        $notifyHtml .= '</form>';
+                    } else {
+                        $notifyHtml .= '<span class="muted">需开启SMTP</span>';
+                        $notifyHtml .= '<label class="switch is-disabled">';
+                        $notifyHtml .= '<input type="checkbox" disabled>';
+                        $notifyHtml .= '<span class="switch-slider"></span>';
+                        $notifyHtml .= '</label>';
+                    }
+                    $notifyHtml .= '</div>';
                 }
-                $notifyHtml .= '</div>';
+                $rowHtml .= '<td>' . $notifyHtml . '</td>';
             }
-            $content .= "<tr><td>{$title}</td><td>{$type}</td><td><a href=\"{$url}\" target=\"_blank\">{$url}</a></td><td>{$hasPassword}</td><td>{$expiresAt}</td><td>{$visitorLabel}</td><td>{$status}</td><td>{$notifyHtml}</td><td>{$size}</td><td>{$updated}</td></tr>";
+            $rowHtml .= "<td>{$size}</td><td>{$updated}</td></tr>";
+            $content .= $rowHtml;
         }
         $content .= '</tbody></table>';
     }
@@ -8460,7 +8543,7 @@ if ($path === '/dashboard') {
 
     $content .= '</div>';
 
-    if ($user['role'] === 'admin') {
+    if (($user['role'] ?? '') === 'admin' && !lite_mode_enabled()) {
         $content .= '<div class="card"><h2>管理员入口</h2>';
         $content .= '<a class="button" href="' . base_path() . '/admin-home">进入后台</a>';
         $content .= '</div>';
@@ -8473,6 +8556,7 @@ if ($path === '/dashboard') {
 if ($path === '/admin-home') {
     $admin = require_admin();
     $pdo = db();
+    $liteMode = lite_mode_enabled();
     $totalUsers = (int)$pdo->query('SELECT COUNT(*) FROM users')->fetchColumn();
     $disabledUsers = (int)$pdo->query('SELECT COUNT(*) FROM users WHERE disabled = 1')->fetchColumn();
     $totalSharesAll = (int)$pdo->query('SELECT COUNT(*) FROM shares')->fetchColumn();
@@ -8846,18 +8930,20 @@ if ($path === '/admin-home') {
     $content .= '</div>';
     $content .= '</div>';
 
-    $content .= '<div class="admin-governance-grid">';
-    $content .= '<div class="admin-governance card">';
-    $content .= '<div class="admin-governance__label">评论总量</div>';
-    $content .= '<div class="admin-governance__value">' . number_format($commentTotal) . '</div>';
-    $content .= '<div class="admin-governance__meta">近7天新增 ' . number_format($commentNew7) . '</div>';
-    $content .= '</div>';
-    $content .= '<div class="admin-governance card">';
-    $content .= '<div class="admin-governance__label">举报总量</div>';
-    $content .= '<div class="admin-governance__value">' . number_format($reportTotal) . '</div>';
-    $content .= '<div class="admin-governance__meta">待处理 ' . number_format($reportPending) . '</div>';
-    $content .= '</div>';
-    $content .= '</div>';
+    if (!$liteMode) {
+        $content .= '<div class="admin-governance-grid">';
+        $content .= '<div class="admin-governance card">';
+        $content .= '<div class="admin-governance__label">评论总量</div>';
+        $content .= '<div class="admin-governance__value">' . number_format($commentTotal) . '</div>';
+        $content .= '<div class="admin-governance__meta">近7天新增 ' . number_format($commentNew7) . '</div>';
+        $content .= '</div>';
+        $content .= '<div class="admin-governance card">';
+        $content .= '<div class="admin-governance__label">举报总量</div>';
+        $content .= '<div class="admin-governance__value">' . number_format($reportTotal) . '</div>';
+        $content .= '<div class="admin-governance__meta">待处理 ' . number_format($reportPending) . '</div>';
+        $content .= '</div>';
+        $content .= '</div>';
+    }
     $content .= '</section>';
 
     $titleHtml = build_topbar_title('数据统计', $admin);
@@ -8882,6 +8968,7 @@ if ($path === '/api-key/rotate' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 if ($path === '/dashboard/comment-notify' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     $user = require_login();
     check_csrf();
     $shareId = (int)($_POST['share_id'] ?? 0);
@@ -8969,6 +9056,7 @@ if ($path === '/dashboard/access-stats/delete-all' && $_SERVER['REQUEST_METHOD']
 if ($path === '/admin') {
     $admin = require_admin();
     $pdo = db();
+    $liteMode = lite_mode_enabled();
     $info = flash('info');
     $error = flash('error');
     $createForm = $_SESSION['user_create_form'] ?? [];
@@ -9005,6 +9093,13 @@ if ($path === '/admin') {
     $siteContactEmail = get_setting('site_contact_email', '');
     $siteBaseUrl = get_setting('site_base_url', '');
     $bannedWordsRaw = get_banned_words_raw();
+    if ($liteMode) {
+        $emailVerifyEnabled = false;
+        $smtpEnabled = false;
+        $siteIcp = '';
+        $siteBaseUrl = '';
+        $bannedWordsRaw = '';
+    }
     $scanKeep = ((string)($_GET['scan_keep'] ?? '')) === '1';
     if (!$scanKeep) {
         unset($_SESSION['scan_results'], $_SESSION['scan_logs'], $_SESSION['scan_done'], $_SESSION['scan_at'], $_SESSION['scan_total']);
@@ -9180,61 +9275,72 @@ if ($path === '/admin') {
     $content .= '<form method="post" action="' . base_path() . '/admin/settings">';
     $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
     $content .= '<div class="grid">';
+    $content .= '<div><label>精简模式</label><label class="checkbox"><input type="checkbox" name="lite_mode_enabled" value="1"' . ($liteMode ? ' checked' : '') . '> 开启精简模式</label><div class="muted">开启后将禁用评论、SMTP、举报、违禁词、注册等功能。</div></div>';
     $content .= '<div><label>默认存储上限 (MB)</label><input class="input" name="default_storage_limit_mb" type="number" min="0" value="' . (int)$defaultLimitMb . '"></div>';
-    $content .= '<div><label>邮箱发件人</label><input class="input" name="email_from" value="' . htmlspecialchars((string)$emailFrom) . '"></div>';
-    $content .= '<div><label>发件人名称</label><input class="input" name="email_from_name" value="' . htmlspecialchars((string)$emailFromName) . '"></div>';
-    $content .= '<div><label>验证码主题</label><input class="input" name="email_subject" value="' . htmlspecialchars((string)$emailSubject) . '"></div>';
-    $content .= '<div><label>重置密码主题</label><input class="input" name="email_reset_subject" value="' . htmlspecialchars((string)$emailResetSubject) . '"></div>';
-    $content .= '<div><label>ICP备案号</label><input class="input" name="site_icp" value="' . htmlspecialchars((string)$siteIcp) . '"></div>';
     $content .= '<div><label>联系邮箱</label><input class="input" name="site_contact_email" value="' . htmlspecialchars((string)$siteContactEmail) . '"></div>';
-    $content .= '<div><label>网站地址（分享链接前缀）<button class="link-button" type="button" data-report-open data-report-target="site-base-url-help">说明</button></label><input class="input" name="site_base_url" placeholder="https://share.example.com" value="' . htmlspecialchars((string)$siteBaseUrl) . '"></div>';
+    if (!$liteMode) {
+        $content .= '<div><label>邮箱发件人</label><input class="input" name="email_from" value="' . htmlspecialchars((string)$emailFrom) . '"></div>';
+        $content .= '<div><label>发件人名称</label><input class="input" name="email_from_name" value="' . htmlspecialchars((string)$emailFromName) . '"></div>';
+        $content .= '<div><label>验证码主题</label><input class="input" name="email_subject" value="' . htmlspecialchars((string)$emailSubject) . '"></div>';
+        $content .= '<div><label>重置密码主题</label><input class="input" name="email_reset_subject" value="' . htmlspecialchars((string)$emailResetSubject) . '"></div>';
+        $content .= '<div><label>ICP备案号</label><input class="input" name="site_icp" value="' . htmlspecialchars((string)$siteIcp) . '"></div>';
+        $content .= '<div><label>网站地址（分享链接前缀）<button class="link-button" type="button" data-report-open data-report-target="site-base-url-help">说明</button></label><input class="input" name="site_base_url" placeholder="https://share.example.com" value="' . htmlspecialchars((string)$siteBaseUrl) . '"></div>';
+    }
     $content .= '</div>';
-    $content .= '<div style="margin-top:12px">';
-    $content .= '<label>违禁词（用 | 分隔）</label>';
-    $content .= '<textarea class="input" name="banned_words" rows="2" placeholder="示例：词1|词2|词3">' . htmlspecialchars($bannedWordsRaw) . '</textarea>';
-    $content .= '<div class="muted">用户分享和分享页评论命中任意违禁词将拒绝分享和评论，并在扫描结果中标记。</div>';
-    $content .= '</div>';
+    if (!$liteMode) {
+        $content .= '<div style="margin-top:12px">';
+        $content .= '<label>违禁词（用 | 分隔）</label>';
+        $content .= '<textarea class="input" name="banned_words" rows="2" placeholder="示例：词1|词2|词3">' . htmlspecialchars($bannedWordsRaw) . '</textarea>';
+        $content .= '<div class="muted">用户分享和分享页评论命中任意违禁词将拒绝分享和评论，并在扫描结果中标记。</div>';
+        $content .= '</div>';
+    }
     $content .= '<div class="grid" style="margin-top:12px">';
-    $content .= '<label><input type="checkbox" name="allow_registration" value="1"' . ($allowRegistration ? ' checked' : '') . '> 允许注册</label>';
-    $content .= '<label><input type="checkbox" name="captcha_enabled" value="1"' . ($captchaEnabled ? ' checked' : '') . '> 启用验证码</label>';
-    $content .= '<label><input type="checkbox" name="email_verification_enabled" value="1"' . ($emailVerifyEnabled ? ' checked' : '') . '> 启用邮箱验证码</label>';
-    $content .= '<label><input type="checkbox" name="smtp_enabled" value="1"' . ($smtpEnabled ? ' checked' : '') . '> 启用 SMTP</label>';
+    if (!$liteMode) {
+        $content .= '<label><input type="checkbox" name="captcha_enabled" value="1"' . ($captchaEnabled ? ' checked' : '') . '> 启用验证码</label>';
+        $content .= '<label><input type="checkbox" name="allow_registration" value="1"' . ($allowRegistration ? ' checked' : '') . '> 允许注册</label>';
+        $content .= '<label><input type="checkbox" name="email_verification_enabled" value="1"' . ($emailVerifyEnabled ? ' checked' : '') . '> 启用邮箱验证码</label>';
+        $content .= '<label><input type="checkbox" name="smtp_enabled" value="1"' . ($smtpEnabled ? ' checked' : '') . '> 启用 SMTP</label>';
+    }
     $content .= '</div>';
-    $content .= '<div class="grid" style="margin-top:12px">';
-    $content .= '<div><label>SMTP 主机</label><input class="input" name="smtp_host" value="' . htmlspecialchars((string)$smtpHost) . '"></div>';
-    $content .= '<div><label>SMTP 端口</label><input class="input" name="smtp_port" type="number" min="0" value="' . htmlspecialchars((string)$smtpPort) . '"></div>';
-    $content .= '<div><label>加密方式</label><select class="input" name="smtp_secure">';
-    $content .= '<option value="none"' . ($smtpSecure === 'none' ? ' selected' : '') . '>无</option>';
-    $content .= '<option value="tls"' . ($smtpSecure === 'tls' ? ' selected' : '') . '>TLS</option>';
-    $content .= '<option value="ssl"' . ($smtpSecure === 'ssl' ? ' selected' : '') . '>SSL</option>';
-    $content .= '</select></div>';
-    $content .= '<div><label>SMTP 用户名</label><input class="input" name="smtp_user" value="' . htmlspecialchars((string)$smtpUser) . '"></div>';
-    $content .= '<div><label>SMTP 密码</label><input class="input" type="password" name="smtp_pass" value="' . htmlspecialchars((string)$smtpPass) . '"></div>';
-    $content .= '</div>';
+    if (!$liteMode) {
+        $content .= '<div class="grid" style="margin-top:12px">';
+        $content .= '<div><label>SMTP 主机</label><input class="input" name="smtp_host" value="' . htmlspecialchars((string)$smtpHost) . '"></div>';
+        $content .= '<div><label>SMTP 端口</label><input class="input" name="smtp_port" type="number" min="0" value="' . htmlspecialchars((string)$smtpPort) . '"></div>';
+        $content .= '<div><label>加密方式</label><select class="input" name="smtp_secure">';
+        $content .= '<option value="none"' . ($smtpSecure === 'none' ? ' selected' : '') . '>无</option>';
+        $content .= '<option value="tls"' . ($smtpSecure === 'tls' ? ' selected' : '') . '>TLS</option>';
+        $content .= '<option value="ssl"' . ($smtpSecure === 'ssl' ? ' selected' : '') . '>SSL</option>';
+        $content .= '</select></div>';
+        $content .= '<div><label>SMTP 用户名</label><input class="input" name="smtp_user" value="' . htmlspecialchars((string)$smtpUser) . '"></div>';
+        $content .= '<div><label>SMTP 密码</label><input class="input" type="password" name="smtp_pass" value="' . htmlspecialchars((string)$smtpPass) . '"></div>';
+        $content .= '</div>';
+    }
     $content .= '<div style="margin-top:12px"><button class="button primary" type="submit">保存设置</button></div>';
     $content .= '</form></div>';
-    $content .= '<div class="modal" id="site-base-url-help" data-report-modal hidden>';
-    $content .= '<div class="modal-backdrop" data-modal-close></div>';
-    $content .= '<div class="modal-card">';
-    $content .= '<div class="modal-header">网站地址说明</div>';
-    $content .= '<div class="modal-body">';
-    $content .= '<p><strong>留空：</strong>自动识别当前访问地址（协议/域名/端口）。</p>';
-    $content .= '<p><strong>填写：</strong>分享链接统一使用该前缀，适合反代/HTTPS 终止/端口丢失等场景。</p>';
-    $content .= '<p><strong>示例：</strong><code>https://share.example.com</code> 或 <code>https://IP:端口</code></p>';
-    $content .= '<p><strong>说明：</strong>仅影响分享链接前缀，不会限制其他访问方式。</p>';
-    $content .= '</div>';
-    $content .= '<div class="modal-actions"><button class="button" type="button" data-modal-close>关闭</button></div>';
-    $content .= '</div>';
-    $content .= '</div>';
+    if (!$liteMode) {
+        $content .= '<div class="modal" id="site-base-url-help" data-report-modal hidden>';
+        $content .= '<div class="modal-backdrop" data-modal-close></div>';
+        $content .= '<div class="modal-card">';
+        $content .= '<div class="modal-header">网站地址说明</div>';
+        $content .= '<div class="modal-body">';
+        $content .= '<p><strong>留空：</strong>自动识别当前访问地址（协议/域名/端口）。</p>';
+        $content .= '<p><strong>填写：</strong>分享链接统一使用该前缀，适合反代/HTTPS 终止/端口丢失等场景。</p>';
+        $content .= '<p><strong>示例：</strong><code>https://share.example.com</code> 或 <code>https://IP:端口</code></p>';
+        $content .= '<p><strong>说明：</strong>仅影响分享链接前缀，不会限制其他访问方式。</p>';
+        $content .= '</div>';
+        $content .= '<div class="modal-actions"><button class="button" type="button" data-modal-close>关闭</button></div>';
+        $content .= '</div>';
+        $content .= '</div>';
 
-    $content .= '<div class="card"><h2>SMTP 测试</h2>';
-    $content .= '<form method="post" action="' . base_path() . '/admin/smtp-test">';
-    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
-    $content .= '<div class="grid">';
-    $content .= '<div><label>测试邮箱</label><input class="input" name="test_email" placeholder="例如 test@example.com" required></div>';
-    $content .= '</div>';
-    $content .= '<div style="margin-top:12px"><button class="button" type="submit">发送测试邮件</button></div>';
-    $content .= '</form></div>';
+        $content .= '<div class="card"><h2>SMTP 测试</h2>';
+        $content .= '<form method="post" action="' . base_path() . '/admin/smtp-test">';
+        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+        $content .= '<div class="grid">';
+        $content .= '<div><label>测试邮箱</label><input class="input" name="test_email" placeholder="例如 test@example.com" required></div>';
+        $content .= '</div>';
+        $content .= '<div style="margin-top:12px"><button class="button" type="submit">发送测试邮件</button></div>';
+        $content .= '</form></div>';
+    }
 
     $content .= '<div class="card" id="announcements"><h2>发布公告</h2>';
     $content .= '<form method="post" action="' . base_path() . '/admin/announcement/create">';
@@ -9295,7 +9401,8 @@ if ($path === '/admin') {
     }
     $content .= '</div>';
 
-    $content .= '<div class="card" id="reports"><h2>举报管理</h2>';
+    if (!$liteMode) {
+        $content .= '<div class="card" id="reports"><h2>举报管理</h2>';
     $content .= '<form method="get" action="' . base_path() . '/admin#reports" class="filter-form">';
     $content .= render_hidden_inputs($reportQuery);
     $content .= '<div class="grid">';
@@ -9425,9 +9532,11 @@ if ($path === '/admin') {
     $content .= '<button class="button" type="submit">跳转</button>';
     $content .= '</form>';
     $content .= '</div>';
-    $content .= '</div>';
+        $content .= '</div>';
+    }
 
-    $content .= '<div class="card" id="users"><h2>用户管理</h2>';
+    if (!$liteMode) {
+        $content .= '<div class="card" id="users"><h2>用户管理</h2>';
     $content .= '<form method="get" action="' . base_path() . '/admin#users" class="filter-form">';
     $content .= render_hidden_inputs($userQuery);
     $content .= '<div class="grid">';
@@ -9442,7 +9551,7 @@ if ($path === '/admin') {
     $content .= '<option value="admin"' . ($userRole === 'admin' ? ' selected' : '') . '>管理员</option>';
     $content .= '<option value="user"' . ($userRole === 'user' ? ' selected' : '') . '>普通用户</option>';
     $content .= '</select></div>';
-    $content .= '</div>';
+        $content .= '</div>';
     $content .= '<div class="table-actions">';
     $content .= '<button class="button" type="submit">筛选</button>';
     $content .= '<button class="button" type="button" data-user-create-open>添加账号</button>';
@@ -9520,6 +9629,7 @@ if ($path === '/admin') {
     $content .= '</form>';
     $content .= '</div>';
     $content .= '</div>';
+    }
 
     $content .= '<div class="card" id="shares"><h2>分享管理</h2>';
     $content .= '<form method="get" action="' . base_path() . '/admin#shares" class="filter-form">';
@@ -9557,12 +9667,17 @@ if ($path === '/admin') {
     if (empty($shares)) {
         $content .= '<p class="muted" style="margin-top:12px">暂无分享记录。</p>';
     } else {
-        $content .= '<table class="table" style="margin-top:12px"><thead><tr><th><input type="checkbox" data-check-all="shares" form="share-batch-form"></th><th>标题</th><th>链接</th><th>类型</th><th>用户</th><th>密码</th><th>到期</th><th>访客上限</th><th>状态</th><th>评论邮件通知</th><th>大小</th><th>更新时间</th><th>操作</th></tr></thead><tbody>';
+        $content .= '<table class="table" style="margin-top:12px"><thead><tr><th><input type="checkbox" data-check-all="shares" form="share-batch-form"></th><th>标题</th><th>链接</th><th>类型</th><th>用户</th><th>密码</th><th>到期</th><th>访客上限</th><th>状态</th>';
+        if (!$liteMode) {
+            $content .= '<th>评论邮件通知</th>';
+        }
+        $content .= '<th>大小</th><th>更新时间</th><th>操作</th></tr></thead><tbody>';
         foreach ($shares as $share) {
             $type = $share['type'] === 'notebook' ? '笔记本' : '文档';
             $status = $share['deleted_at'] ? '已删除' : '正常';
             $size = format_bytes((int)($share['size_bytes'] ?? 0));
             $url = share_url((string)$share['slug']);
+            $urlLabel = htmlspecialchars(format_url_label($url, 48));
             $hasPassword = !empty($share['password_hash']) ? '有密码' : '无密码';
             $expiresAt = !empty($share['expires_at']) ? date('Y-m-d H:i', (int)$share['expires_at']) : '永久';
             $visitorLimit = (int)($share['visitor_limit'] ?? 0);
@@ -9575,14 +9690,16 @@ if ($path === '/admin') {
             $content .= '<tr>';
             $content .= '<td><input type="checkbox" name="share_ids[]" value="' . (int)$share['id'] . '" data-check-item="shares" form="share-batch-form"></td>';
             $content .= '<td>' . htmlspecialchars($share['title']) . '</td>';
-            $content .= '<td><a href="' . htmlspecialchars($url) . '" target="_blank">' . htmlspecialchars($url) . '</a></td>';
+            $content .= '<td><a href="' . htmlspecialchars($url) . '" target="_blank">' . $urlLabel . '</a></td>';
             $content .= '<td>' . htmlspecialchars($type) . '</td>';
             $content .= '<td>' . htmlspecialchars($share['username'] ?? '') . '</td>';
             $content .= '<td>' . htmlspecialchars($hasPassword) . '</td>';
             $content .= '<td>' . htmlspecialchars($expiresAt) . '</td>';
             $content .= '<td>' . htmlspecialchars($visitorLabel) . '</td>';
             $content .= '<td>' . htmlspecialchars($status) . '</td>';
-            $content .= '<td>' . (((int)($share['comment_notify'] ?? 0) === 1) ? '开启' : '关闭') . '</td>';
+            if (!$liteMode) {
+                $content .= '<td>' . (((int)($share['comment_notify'] ?? 0) === 1) ? '开启' : '关闭') . '</td>';
+            }
             $content .= '<td>' . htmlspecialchars($size) . '</td>';
             $content .= '<td>' . htmlspecialchars($share['updated_at']) . '</td>';
             $content .= '<td class="actions">';
@@ -9665,7 +9782,8 @@ if ($path === '/admin') {
     }
     $content .= '</div>';
 
-    $content .= '<div class="card" id="scan"><h2>违禁词扫描</h2>';
+    if (!$liteMode) {
+        $content .= '<div class="card" id="scan"><h2>违禁词扫描</h2>';
     if ($bannedWordsRaw === '') {
         $content .= '<div class="notice">请先在“站点设置”里配置违禁词。</div>';
     }
@@ -9677,7 +9795,7 @@ if ($path === '/admin') {
     $content .= '<div class="scan-progress__bar"><span data-scan-bar' . $scanBarStyle . '></span></div>';
     $content .= '<div class="scan-progress__status" data-scan-status>' . htmlspecialchars($scanStatusLabel) . '</div>';
     $content .= '<div class="scan-log" data-scan-log>' . $scanLogHtml . '</div>';
-    $content .= '</div>';
+        $content .= '</div>';
     if (!empty($scanResults)) {
         $shareIds = [];
         $userIds = [];
@@ -9813,6 +9931,7 @@ if ($path === '/admin') {
         $content .= '<p class="muted" style="margin-top:12px">暂无扫描结果。</p>';
     }
     $content .= '</div>';
+    }
 
     $content .= '<div class="card danger-zone"><h2>危险操作</h2>';
     $content .= '<p class="muted">删除所有数据将清空用户、分享与公告，仅保留初始管理员。</p>';
@@ -9842,54 +9961,56 @@ $content .= '<div class="modal admin-comment-modal" data-admin-comment-modal hid
     $content .= '</div>';
     $content .= '</div>';
 
-    $content .= '<div class="modal" data-user-modal hidden>';
-    $content .= '<div class="modal-backdrop" data-modal-close></div>';
-    $content .= '<div class="modal-card">';
-    $content .= '<div class="modal-header">编辑用户</div>';
-    $content .= '<form method="post" action="' . base_path() . '/admin/user-update" class="modal-form">';
-    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
-    $content .= '<input type="hidden" name="user_id" value="" data-user-field="id">';
-    $content .= '<div class="grid">';
-    $content .= '<div><label>用户名</label><input class="input" name="username" data-user-field="username" required></div>';
-    $content .= '<div><label>邮箱</label><input class="input" name="email" data-user-field="email"></div>';
-    $content .= '<div><label>角色</label><select class="input" name="role" data-user-field="role"><option value="user">普通用户</option><option value="admin">管理员</option></select></div>';
-    $content .= '<div><label>状态</label><select class="input" name="disabled" data-user-field="disabled"><option value="0">正常</option><option value="1">禁用</option></select></div>';
-    $content .= '<div><label>存储上限 (MB)</label><input class="input" name="limit_mb" type="number" min="0" data-user-field="limit"></div>';
-    $content .= '<div><label>新密码（留空不修改）</label><input class="input" name="password" type="password" placeholder="********"></div>';
-    $content .= '</div>';
-    $content .= '<div class="modal-actions">';
-    $content .= '<button class="button ghost" type="button" data-modal-close>取消</button>';
-    $content .= '<button class="button primary" type="submit">保存</button>';
-    $content .= '</div>';
-    $content .= '</form>';
-    $content .= '</div>';
-    $content .= '</div>';
-    $createModalHidden = $createOpen ? '' : ' hidden';
-    $roleAdminSelected = $createRole === 'admin' ? ' selected' : '';
-    $roleUserSelected = $createRole !== 'admin' ? ' selected' : '';
-    $disabledSelected = $createDisabled === '1' ? ' selected' : '';
-    $activeSelected = $createDisabled === '1' ? '' : ' selected';
-    $content .= '<div class="modal" data-user-create-modal' . $createModalHidden . '>';
-    $content .= '<div class="modal-backdrop" data-modal-close></div>';
-    $content .= '<div class="modal-card">';
-    $content .= '<div class="modal-header">添加账号</div>';
-    $content .= '<form method="post" action="' . base_path() . '/admin/user-create" class="modal-form">';
-    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
-    $content .= '<div class="grid">';
-    $content .= '<div><label>用户名</label><input class="input" name="username" value="' . htmlspecialchars($createUsername) . '" required></div>';
-    $content .= '<div><label>邮箱</label><input class="input" name="email" value="' . htmlspecialchars($createEmail) . '"></div>';
-    $content .= '<div><label>角色</label><select class="input" name="role"><option value="user"' . $roleUserSelected . '>普通用户</option><option value="admin"' . $roleAdminSelected . '>管理员</option></select></div>';
-    $content .= '<div><label>状态</label><select class="input" name="disabled"><option value="0"' . $activeSelected . '>正常</option><option value="1"' . $disabledSelected . '>禁用</option></select></div>';
-    $content .= '<div><label>存储上限 (MB)</label><input class="input" name="limit_mb" type="number" min="0" value="' . htmlspecialchars($createLimitMb) . '"></div>';
-    $content .= '<div><label>密码</label><input class="input" name="password" type="password" value="' . htmlspecialchars($createPassword) . '" required></div>';
-    $content .= '</div>';
-    $content .= '<div class="modal-actions">';
-    $content .= '<button class="button ghost" type="button" data-modal-close>取消</button>';
-    $content .= '<button class="button primary" type="submit">添加</button>';
-    $content .= '</div>';
-    $content .= '</form>';
-    $content .= '</div>';
-    $content .= '</div>';
+    if (!$liteMode) {
+        $content .= '<div class="modal" data-user-modal hidden>';
+        $content .= '<div class="modal-backdrop" data-modal-close></div>';
+        $content .= '<div class="modal-card">';
+        $content .= '<div class="modal-header">编辑用户</div>';
+        $content .= '<form method="post" action="' . base_path() . '/admin/user-update" class="modal-form">';
+        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+        $content .= '<input type="hidden" name="user_id" value="" data-user-field="id">';
+        $content .= '<div class="grid">';
+        $content .= '<div><label>用户名</label><input class="input" name="username" data-user-field="username" required></div>';
+        $content .= '<div><label>邮箱</label><input class="input" name="email" data-user-field="email"></div>';
+        $content .= '<div><label>角色</label><select class="input" name="role" data-user-field="role"><option value="user">普通用户</option><option value="admin">管理员</option></select></div>';
+        $content .= '<div><label>状态</label><select class="input" name="disabled" data-user-field="disabled"><option value="0">正常</option><option value="1">禁用</option></select></div>';
+        $content .= '<div><label>存储上限 (MB)</label><input class="input" name="limit_mb" type="number" min="0" data-user-field="limit"></div>';
+        $content .= '<div><label>新密码（留空不修改）</label><input class="input" name="password" type="password" placeholder="********"></div>';
+        $content .= '</div>';
+        $content .= '<div class="modal-actions">';
+        $content .= '<button class="button ghost" type="button" data-modal-close>取消</button>';
+        $content .= '<button class="button primary" type="submit">保存</button>';
+        $content .= '</div>';
+        $content .= '</form>';
+        $content .= '</div>';
+        $content .= '</div>';
+        $createModalHidden = $createOpen ? '' : ' hidden';
+        $roleAdminSelected = $createRole === 'admin' ? ' selected' : '';
+        $roleUserSelected = $createRole !== 'admin' ? ' selected' : '';
+        $disabledSelected = $createDisabled === '1' ? ' selected' : '';
+        $activeSelected = $createDisabled === '1' ? '' : ' selected';
+        $content .= '<div class="modal" data-user-create-modal' . $createModalHidden . '>';
+        $content .= '<div class="modal-backdrop" data-modal-close></div>';
+        $content .= '<div class="modal-card">';
+        $content .= '<div class="modal-header">添加账号</div>';
+        $content .= '<form method="post" action="' . base_path() . '/admin/user-create" class="modal-form">';
+        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+        $content .= '<div class="grid">';
+        $content .= '<div><label>用户名</label><input class="input" name="username" value="' . htmlspecialchars($createUsername) . '" required></div>';
+        $content .= '<div><label>邮箱</label><input class="input" name="email" value="' . htmlspecialchars($createEmail) . '"></div>';
+        $content .= '<div><label>角色</label><select class="input" name="role"><option value="user"' . $roleUserSelected . '>普通用户</option><option value="admin"' . $roleAdminSelected . '>管理员</option></select></div>';
+        $content .= '<div><label>状态</label><select class="input" name="disabled"><option value="0"' . $activeSelected . '>正常</option><option value="1"' . $disabledSelected . '>禁用</option></select></div>';
+        $content .= '<div><label>存储上限 (MB)</label><input class="input" name="limit_mb" type="number" min="0" value="' . htmlspecialchars($createLimitMb) . '"></div>';
+        $content .= '<div><label>密码</label><input class="input" name="password" type="password" value="' . htmlspecialchars($createPassword) . '" required></div>';
+        $content .= '</div>';
+        $content .= '<div class="modal-actions">';
+        $content .= '<button class="button ghost" type="button" data-modal-close>取消</button>';
+        $content .= '<button class="button primary" type="submit">添加</button>';
+        $content .= '</div>';
+        $content .= '</form>';
+        $content .= '</div>';
+        $content .= '</div>';
+    }
     $titleHtml = build_topbar_title('后台', $admin);
     render_page('后台', $content, $admin, '', ['layout' => 'app', 'nav' => 'admin-settings', 'title_html' => $titleHtml]);
 }
@@ -9897,6 +10018,7 @@ $content .= '<div class="modal admin-comment-modal" data-admin-comment-modal hid
 if ($path === '/admin/settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     require_admin();
     check_csrf();
+    $liteModeEnabled = isset($_POST['lite_mode_enabled']) ? '1' : '0';
     $allowRegistration = isset($_POST['allow_registration']) ? '1' : '0';
     $captchaEnabled = isset($_POST['captcha_enabled']) ? '1' : '0';
     $emailVerifyEnabled = isset($_POST['email_verification_enabled']) ? '1' : '0';
@@ -9918,6 +10040,21 @@ if ($path === '/admin/settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($bannedWords !== '') {
         $bannedWords = str_replace(["\r\n", "\n", "\r"], '|', $bannedWords);
     }
+    if ($liteModeEnabled === '1') {
+        $allowRegistration = '0';
+        $captchaEnabled = '0';
+        $emailVerifyEnabled = '0';
+        $smtpEnabled = '0';
+        $siteIcp = '';
+        $siteBaseUrl = '';
+        $bannedWords = '';
+        $smtpHost = '';
+        $smtpPort = '587';
+        $smtpSecure = 'tls';
+        $smtpUser = '';
+        $smtpPass = '';
+    }
+    set_setting('lite_mode_enabled', $liteModeEnabled);
     set_setting('allow_registration', $allowRegistration);
     set_setting('captcha_enabled', $captchaEnabled);
     set_setting('email_verification_enabled', $emailVerifyEnabled);
@@ -10010,6 +10147,7 @@ if ($path === '/admin/announcement/delete' && $_SERVER['REQUEST_METHOD'] === 'PO
 }
 
 if ($path === '/admin/smtp-test' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     require_admin();
     check_csrf();
     $email = trim((string)($_POST['test_email'] ?? ''));
@@ -10033,6 +10171,7 @@ if ($path === '/admin/smtp-test' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 if ($path === '/admin/user-batch' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     $admin = require_admin();
     check_csrf();
     $ids = $_POST['user_ids'] ?? [];
@@ -10073,6 +10212,7 @@ if ($path === '/admin/user-batch' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 if ($path === '/admin/user-delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     $admin = require_admin();
     check_csrf();
     $userId = (int)($_POST['user_id'] ?? 0);
@@ -10089,6 +10229,7 @@ if ($path === '/admin/user-delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 if ($path === '/admin/user-create' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     require_admin();
     check_csrf();
     $username = trim((string)($_POST['username'] ?? ''));
@@ -10173,6 +10314,7 @@ if ($path === '/admin/user-create' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 if ($path === '/admin/user-update' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     $admin = require_admin();
     check_csrf();
     $userId = (int)($_POST['user_id'] ?? 0);
@@ -10272,6 +10414,7 @@ if ($path === '/admin/share-batch' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 if ($path === '/admin/scan/batch' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     require_admin();
     check_csrf();
     $action = (string)($_POST['action'] ?? '');
@@ -10317,6 +10460,7 @@ if ($path === '/admin/scan/batch' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 if ($path === '/admin/user-toggle' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     $admin = require_admin();
     check_csrf();
     $userId = (int)($_POST['user_id'] ?? 0);
@@ -10332,6 +10476,7 @@ if ($path === '/admin/user-toggle' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 if ($path === '/admin/user-role' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     $admin = require_admin();
     check_csrf();
     $userId = (int)($_POST['user_id'] ?? 0);
@@ -10347,6 +10492,7 @@ if ($path === '/admin/user-role' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 if ($path === '/admin/user-limit' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     require_admin();
     check_csrf();
     $userId = (int)($_POST['user_id'] ?? 0);
@@ -10413,6 +10559,7 @@ if ($path === '/admin/share-hard-delete' && $_SERVER['REQUEST_METHOD'] === 'POST
 }
 
 if ($path === '/admin/report-handle' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     $admin = require_admin();
     check_csrf();
     $reportId = (int)($_POST['report_id'] ?? 0);
@@ -10432,6 +10579,7 @@ if ($path === '/admin/report-handle' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 if ($path === '/admin/report-share-delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     $admin = require_admin();
     check_csrf();
     $reportId = (int)($_POST['report_id'] ?? 0);
@@ -10457,6 +10605,7 @@ if ($path === '/admin/report-share-delete' && $_SERVER['REQUEST_METHOD'] === 'PO
 }
 
 if ($path === '/admin/report-user-disable' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     $admin = require_admin();
     check_csrf();
     $reportId = (int)($_POST['report_id'] ?? 0);
@@ -10492,6 +10641,7 @@ if ($path === '/admin/report-user-disable' && $_SERVER['REQUEST_METHOD'] === 'PO
 }
 
 if ($path === '/admin/report-delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     require_admin();
     check_csrf();
     $reportId = (int)($_POST['report_id'] ?? 0);
@@ -10513,6 +10663,7 @@ if ($path === '/admin/report-delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 if ($path === '/admin/report-batch' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     require_admin();
     check_csrf();
     $ids = $_POST['report_ids'] ?? [];
@@ -10566,6 +10717,7 @@ if ($path === '/admin/chunk-clean' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 if ($path === '/admin/scan/start' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     require_admin();
     check_csrf();
     $words = get_banned_words();
@@ -10582,6 +10734,7 @@ if ($path === '/admin/scan/start' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 if ($path === '/admin/scan/step' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     require_admin();
     check_csrf();
     $words = get_banned_words();
@@ -10618,6 +10771,7 @@ if ($path === '/admin/scan/step' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 if ($path === '/admin/scan' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     require_admin();
     check_csrf();
     $words = get_banned_words();
@@ -10635,6 +10789,7 @@ if ($path === '/admin/scan' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 if ($path === '/admin/scan/delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     require_admin();
     check_csrf();
     $results = $_SESSION['scan_results'] ?? [];
@@ -10662,6 +10817,7 @@ if ($path === '/admin/scan/delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 if ($path === '/admin/scan/disable' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     require_admin();
     check_csrf();
     $results = $_SESSION['scan_results'] ?? [];
@@ -10689,6 +10845,7 @@ if ($path === '/admin/scan/disable' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 if ($path === '/admin/comment/edit' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_feature_enabled(!lite_mode_enabled());
     require_admin();
     check_csrf();
     $commentId = max(0, (int)($_POST['comment_id'] ?? 0));
@@ -10794,7 +10951,7 @@ if ($path === '/') {
         redirect('/dashboard');
     }
     $allowRegistration = allow_registration();
-    $siteIcp = get_setting('site_icp', '');
+    $siteIcp = lite_mode_enabled() ? '' : get_setting('site_icp', '');
     $siteContactEmail = get_setting('site_contact_email', '');
     $appName = htmlspecialchars($config['app_name']);
     $versionText = site_version();
