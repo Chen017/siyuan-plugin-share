@@ -1,6 +1,6 @@
 # SiYuan Plugin Share (Lite Edition) 🌟
 
-[English](https://www.google.com/search?q=%23english) | [中文](https://www.google.com/search?q=%23%E4%B8%AD%E6%96%87)
+[中文](https://github.com/Chen017/siyuan-plugin-share/blob/main/README_zh_CN.md)
 
 ## English
 
@@ -28,3 +28,4 @@ The following features are disabled to ensure a minimalist approach:
 ### 🔗 Links
 
 * **Original Repository**: [b8l8u8e8/siyuan-plugin-share](https://github.com/b8l8u8e8/siyuan-plugin-share)
+
