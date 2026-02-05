@@ -625,6 +625,9 @@ function allow_registration(): bool {
 }
 
 function captcha_enabled(): bool {
+    if (lite_mode_enabled()) {
+        return false;
+    }
     return get_bool_setting('captcha_enabled', true);
 }
 
@@ -688,6 +691,20 @@ function string_sub(string $text, int $start, int $length): string {
         return (string)mb_substr($text, $start, $length, 'UTF-8');
     }
     return substr($text, $start, $length);
+}
+
+function format_url_label(string $url, int $max = 48): string {
+    $raw = trim($url);
+    if ($raw === '' || $max <= 0) {
+        return $raw;
+    }
+    if (function_exists('mb_strimwidth')) {
+        return (string)mb_strimwidth($raw, 0, $max, '…', 'UTF-8');
+    }
+    if (strlen($raw) <= $max) {
+        return $raw;
+    }
+    return substr($raw, 0, max(0, $max - 1)) . '…';
 }
 
 function find_banned_word(string $text, array $words): ?array {
@@ -8257,6 +8274,7 @@ if ($path === '/dashboard') {
             $title = htmlspecialchars($share['title']);
             $type = $share['type'] === 'notebook' ? '笔记本' : '文档';
             $url = share_url($share['slug']);
+            $urlLabel = htmlspecialchars(format_url_label($url, 48));
             $updated = htmlspecialchars($share['updated_at']);
             $size = format_bytes((int)($share['size_bytes'] ?? 0));
             $hasPassword = !empty($share['password_hash']) ? '已设置' : '无';
@@ -8269,7 +8287,7 @@ if ($path === '/dashboard') {
                 $visitorLabel = '不限';
             }
             $status = $share['deleted_at'] ? '已删除' : '正常';
-            $rowHtml = "<tr><td>{$title}</td><td>{$type}</td><td><a href=\"{$url}\" target=\"_blank\">{$url}</a></td><td>{$hasPassword}</td><td>{$expiresAt}</td><td>{$visitorLabel}</td><td>{$status}</td>";
+            $rowHtml = "<tr><td>{$title}</td><td>{$type}</td><td><a href=\"{$url}\" target=\"_blank\">{$urlLabel}</a></td><td>{$hasPassword}</td><td>{$expiresAt}</td><td>{$visitorLabel}</td><td>{$status}</td>";
             if (!$liteMode) {
                 $notifyEnabled = (int)($share['comment_notify'] ?? 0) === 1;
                 if (!empty($share['deleted_at'])) {
@@ -8525,7 +8543,7 @@ if ($path === '/dashboard') {
 
     $content .= '</div>';
 
-    if ($user['role'] === 'admin') {
+    if (($user['role'] ?? '') === 'admin' && !lite_mode_enabled()) {
         $content .= '<div class="card"><h2>管理员入口</h2>';
         $content .= '<a class="button" href="' . base_path() . '/admin-home">进入后台</a>';
         $content .= '</div>';
@@ -9277,8 +9295,8 @@ if ($path === '/admin') {
         $content .= '</div>';
     }
     $content .= '<div class="grid" style="margin-top:12px">';
-    $content .= '<label><input type="checkbox" name="captcha_enabled" value="1"' . ($captchaEnabled ? ' checked' : '') . '> 启用验证码</label>';
     if (!$liteMode) {
+        $content .= '<label><input type="checkbox" name="captcha_enabled" value="1"' . ($captchaEnabled ? ' checked' : '') . '> 启用验证码</label>';
         $content .= '<label><input type="checkbox" name="allow_registration" value="1"' . ($allowRegistration ? ' checked' : '') . '> 允许注册</label>';
         $content .= '<label><input type="checkbox" name="email_verification_enabled" value="1"' . ($emailVerifyEnabled ? ' checked' : '') . '> 启用邮箱验证码</label>';
         $content .= '<label><input type="checkbox" name="smtp_enabled" value="1"' . ($smtpEnabled ? ' checked' : '') . '> 启用 SMTP</label>';
@@ -9534,7 +9552,6 @@ if ($path === '/admin') {
     $content .= '<option value="user"' . ($userRole === 'user' ? ' selected' : '') . '>普通用户</option>';
     $content .= '</select></div>';
         $content .= '</div>';
-    }
     $content .= '<div class="table-actions">';
     $content .= '<button class="button" type="submit">筛选</button>';
     $content .= '<button class="button" type="button" data-user-create-open>添加账号</button>';
@@ -9612,6 +9629,7 @@ if ($path === '/admin') {
     $content .= '</form>';
     $content .= '</div>';
     $content .= '</div>';
+    }
 
     $content .= '<div class="card" id="shares"><h2>分享管理</h2>';
     $content .= '<form method="get" action="' . base_path() . '/admin#shares" class="filter-form">';
@@ -9659,6 +9677,7 @@ if ($path === '/admin') {
             $status = $share['deleted_at'] ? '已删除' : '正常';
             $size = format_bytes((int)($share['size_bytes'] ?? 0));
             $url = share_url((string)$share['slug']);
+            $urlLabel = htmlspecialchars(format_url_label($url, 48));
             $hasPassword = !empty($share['password_hash']) ? '有密码' : '无密码';
             $expiresAt = !empty($share['expires_at']) ? date('Y-m-d H:i', (int)$share['expires_at']) : '永久';
             $visitorLimit = (int)($share['visitor_limit'] ?? 0);
@@ -9671,7 +9690,7 @@ if ($path === '/admin') {
             $content .= '<tr>';
             $content .= '<td><input type="checkbox" name="share_ids[]" value="' . (int)$share['id'] . '" data-check-item="shares" form="share-batch-form"></td>';
             $content .= '<td>' . htmlspecialchars($share['title']) . '</td>';
-            $content .= '<td><a href="' . htmlspecialchars($url) . '" target="_blank">' . htmlspecialchars($url) . '</a></td>';
+            $content .= '<td><a href="' . htmlspecialchars($url) . '" target="_blank">' . $urlLabel . '</a></td>';
             $content .= '<td>' . htmlspecialchars($type) . '</td>';
             $content .= '<td>' . htmlspecialchars($share['username'] ?? '') . '</td>';
             $content .= '<td>' . htmlspecialchars($hasPassword) . '</td>';
@@ -9777,7 +9796,6 @@ if ($path === '/admin') {
     $content .= '<div class="scan-progress__status" data-scan-status>' . htmlspecialchars($scanStatusLabel) . '</div>';
     $content .= '<div class="scan-log" data-scan-log>' . $scanLogHtml . '</div>';
         $content .= '</div>';
-    }
     if (!empty($scanResults)) {
         $shareIds = [];
         $userIds = [];
@@ -9913,6 +9931,7 @@ if ($path === '/admin') {
         $content .= '<p class="muted" style="margin-top:12px">暂无扫描结果。</p>';
     }
     $content .= '</div>';
+    }
 
     $content .= '<div class="card danger-zone"><h2>危险操作</h2>';
     $content .= '<p class="muted">删除所有数据将清空用户、分享与公告，仅保留初始管理员。</p>';
@@ -10023,6 +10042,7 @@ if ($path === '/admin/settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     if ($liteModeEnabled === '1') {
         $allowRegistration = '0';
+        $captchaEnabled = '0';
         $emailVerifyEnabled = '0';
         $smtpEnabled = '0';
         $siteIcp = '';
