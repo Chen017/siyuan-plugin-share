@@ -1,13 +1,18 @@
 # 更新日志
 
-## 0.3.7 进行中 预计2月15日之前发布
+## 0.3.8 后续反馈问题归于这个版本,0.3.7不再收纳其他问题
+
+- [ ] 待反馈其他问题
+
+## 0.3.7 进行中 预计2月10日之前发布
 
 - [x] 修复表格中有合并分享后布局错乱及列数显示异常的问题 [Issues 22](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/22)
-- [ ] 修复笔记本分享页在未加载文档时文档树位置偏上的布局偏移问题
 - [x] 内嵌 IFrame 支持全屏模式，并在右上角提供全屏切换及取消控件。 [Issues 23](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/23)
-- [ ] 修复公式排版中的垂直对齐偏移问题。 [Issues 26](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/26)
-- [ ] 修复有时候第一次打开分享页不渲染的bug
-- [ ] 待反馈
+- [x] 修复公式排版中的垂直对齐偏移问题。 [Issues 26](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/26)
+- [x] 修复有时候第一次打开分享页不渲染的bug  [Issues 26](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/26)
+- [ ] 修复其他数学公式显示问题 [Issues 26](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/26)
+- [ ] 修复笔记本分享页在未加载文档时文档树位置偏上的布局偏移问题
+- [ ] 对引用分享生成的脚注，除脚注跳转外，支持窗口打开方式：点击正文引用可弹窗查看内容，点击脚注编号跳转至脚注位置，阅读时无需在正文与脚注间来回切换。
 
 ## 0.3.6 2026/2/3
 
