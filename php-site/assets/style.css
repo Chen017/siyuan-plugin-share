@@ -4613,6 +4613,98 @@ body.image-viewer-open {
     border-right-color: var(--border);
   }
 
+  body.layout-share .hljs {
+    color: #c9d1d9;
+    background: transparent;
+  }
+
+  body.layout-share .hljs-doctag,
+  body.layout-share .hljs-keyword,
+  body.layout-share .hljs-meta .hljs-keyword,
+  body.layout-share .hljs-template-tag,
+  body.layout-share .hljs-template-variable,
+  body.layout-share .hljs-type,
+  body.layout-share .hljs-variable.language_ {
+    color: #ff7b72;
+  }
+
+  body.layout-share .hljs-title,
+  body.layout-share .hljs-title.class_,
+  body.layout-share .hljs-title.class_.inherited__,
+  body.layout-share .hljs-title.function_ {
+    color: #d2a8ff;
+  }
+
+  body.layout-share .hljs-attr,
+  body.layout-share .hljs-attribute,
+  body.layout-share .hljs-literal,
+  body.layout-share .hljs-meta,
+  body.layout-share .hljs-number,
+  body.layout-share .hljs-operator,
+  body.layout-share .hljs-selector-attr,
+  body.layout-share .hljs-selector-class,
+  body.layout-share .hljs-selector-id,
+  body.layout-share .hljs-variable {
+    color: #79c0ff;
+  }
+
+  body.layout-share .hljs-meta .hljs-string,
+  body.layout-share .hljs-regexp,
+  body.layout-share .hljs-string {
+    color: #a5d6ff;
+  }
+
+  body.layout-share .hljs-built_in,
+  body.layout-share .hljs-symbol {
+    color: #ffa657;
+  }
+
+  body.layout-share .hljs-code,
+  body.layout-share .hljs-comment,
+  body.layout-share .hljs-formula {
+    color: #8b949e;
+  }
+
+  body.layout-share .hljs-name,
+  body.layout-share .hljs-quote,
+  body.layout-share .hljs-selector-pseudo,
+  body.layout-share .hljs-selector-tag {
+    color: #7ee787;
+  }
+
+  body.layout-share .hljs-subst {
+    color: #c9d1d9;
+  }
+
+  body.layout-share .hljs-section {
+    color: #79c0ff;
+    font-weight: 700;
+  }
+
+  body.layout-share .hljs-bullet {
+    color: #f2cc60;
+  }
+
+  body.layout-share .hljs-emphasis {
+    color: #c9d1d9;
+    font-style: italic;
+  }
+
+  body.layout-share .hljs-strong {
+    color: #c9d1d9;
+    font-weight: 700;
+  }
+
+  body.layout-share .hljs-addition {
+    color: #7ee787;
+    background-color: rgba(46, 160, 67, 0.2);
+  }
+
+  body.layout-share .hljs-deletion {
+    color: #ff7b72;
+    background-color: rgba(248, 81, 73, 0.2);
+  }
+
   body.layout-share .markdown-body {
     background: var(--surface);
     --color-canvas-default: var(--surface);
