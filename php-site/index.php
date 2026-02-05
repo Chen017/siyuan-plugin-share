@@ -7093,7 +7093,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $content .= $mainHtml;
             $content .= '</div>';
             record_share_access($share, null, $shareTitleRaw);
-            render_page($shareTitleRaw, $content, null, '', ['layout' => 'share']);
+            render_page($shareTitleRaw, $content, null, '', ['layout' => 'share', 'markdown' => true]);
         }
 
         $rows = '';
@@ -10884,3 +10884,4 @@ if ($path === '/') {
 
 http_response_code(404);
 echo '未找到。';
+
