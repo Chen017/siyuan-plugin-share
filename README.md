@@ -6,26 +6,10 @@
 
 This repository is a fork of [siyuan-plugin-share](https://github.com/b8l8u8e8/siyuan-plugin-share), focusing on providing a more lightweight and clean sharing experience.
 
-### 🛠️ Branch Changes
+### 🛠️ Branch Change Description
 
-This branch introduces a **Lite Mode** toggle. Once enabled, it implements the following changes:
+#### 1. Introduced **Lite Mode**, which when enabled will:
 
-#### 1. Feature Deactivation
-
-The following features are disabled to ensure a minimalist approach:
-
-* **Interaction**: Comments and Reporting system.
-* **Backend Services**: SMTP functions, CAPTCHA, and ICP filing number display.
-* **Content Control**: Banned words filtering.
-* **User Management**: Registration is disabled; user management is restricted to `admin` only.
-* **Link Optimization**: Removed share link prefix.
-
-#### 2. UI Simplification
-
-* **Share Page**: Hidden creation time, report button, comment section, and visit counter.
-* **Console**: Removed the admin entry card at the bottom of the console for a cleaner look.
-
-### 🔗 Links
-
-* **Original Repository**: [b8l8u8e8/siyuan-plugin-share](https://github.com/b8l8u8e8/siyuan-plugin-share)
-
+- Disable features such as comments, reports, banned words, SMTP, CAPTCHA, registration, ICP, share link prefixes, and back-end user management.
+- Streamline the share page: hide creation time, report button, comment section, and visit counts.
+- Streamline the back-end page: remove the administrator entry card at the bottom of the dashboard and hide entry points for disabled features.
