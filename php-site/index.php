@@ -1204,7 +1204,7 @@ function render_page(string $title, string $content, ?array $user = null, string
         $navItems = [
             ['key' => 'dashboard', 'label' => '控制台', 'href' => $base . '/dashboard'],
             ['key' => 'shares', 'label' => '分享记录', 'href' => $base . '/dashboard#shares'],
-            ['key' => 'access-stats', 'label' => '访问统计', 'href' => $base . '/dashboard#access-stats']
+            ['key' => 'access-stats', 'label' => '访问统计', 'href' => $base . '/dashboard#access-stats'],
             ['key' => 'account', 'label' => '账号设置', 'href' => $base . '/account'],
         ];
         if (($user['role'] ?? '') === 'admin') {
