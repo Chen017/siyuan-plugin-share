@@ -33,6 +33,12 @@
   let markdownInitRetryTimer = null;
   let markdownInitRetryCount = 0;
   const markdownInitRetryLimit = 40;
+  const FOOTNOTE_ICON_SVG =
+    '<svg t="1770295603918" class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" p-id="6974" width="32" height="32" aria-hidden="true"><path d="M551.557889 78.312604a278.444815 278.444815 0 0 1 390.539326 3.412314 278.956662 278.956662 0 0 1 3.412314 390.79525l-0.554501 0.511847-141.525719 141.696335a278.572776 278.572776 0 0 1-330.610564 47.559125 278.658084 278.658084 0 0 1-89.487932-77.630141 42.653924 42.653924 0 0 1 68.331586-51.099401 193.264929 193.264929 0 0 0 222.226943 65.388465 193.264929 193.264929 0 0 0 69.184665-44.488042l141.269795-141.440412a193.648814 193.648814 0 0 0-2.601889-271.023032 193.136967 193.136967 0 0 0-270.681801-2.559235L530.188273 219.966285a42.653924 42.653924 0 1 1-60.142033-60.44061l81.127763-80.786532 0.42654-0.426539z" p-id="6975" fill="#0969DA"></path><path d="M319.904429 344.856974a278.359507 278.359507 0 0 1 320.458929 94.265172 42.653924 42.653924 0 0 1-68.331586 51.056746 193.350237 193.350237 0 0 0-140.928564-77.118294 193.051659 193.051659 0 0 0-150.483043 56.217872l-141.269796 141.397757a193.648814 193.648814 0 0 0 2.601889 271.023032 193.136967 193.136967 0 0 0 270.639147 2.601889l80.402646-80.487954a42.653924 42.653924 0 0 1 60.355303 60.312648l-80.701224 80.743878-0.511847 0.511847a278.444815 278.444815 0 0 1-390.539327-3.412314 278.956662 278.956662 0 0 1-3.412314-390.79525l0.554501-0.511847 141.52572-141.696335A278.572776 278.572776 0 0 1 319.904429 344.856974z" p-id="6976" fill="#0969DA"></path></svg>';
+  const footnoteWindows = new Set();
+  let footnoteWindowZ = 1300;
+  let footnoteWindowSeq = 0;
+  let footnotePreviewBound = false;
 
   const initAnnouncementModal = () => {
     const modal = document.querySelector("[data-announcement-modal]");
@@ -981,6 +987,653 @@
     });
   };
 
+  const escapeHtml = (value) =>
+    String(value || "").replace(/[&<>"']/g, (ch) => {
+      switch (ch) {
+        case "&":
+          return "&amp;";
+        case "<":
+          return "&lt;";
+        case ">":
+          return "&gt;";
+        case '"':
+          return "&quot;";
+        case "'":
+          return "&#39;";
+        default:
+          return ch;
+      }
+    });
+
+  const parseFootnoteIndexLoose = (value) => {
+    const raw = String(value || "").trim();
+    if (!raw) return 0;
+    const match = raw.match(/^#?fn(?:ref)?[:\-_]?(\d+)/i);
+    if (match) return Number(match[1]) || 0;
+    const num = Number(raw);
+    return Number.isFinite(num) ? num : 0;
+  };
+
+  const getFootnoteIndexForItem = (item, fallbackIndex) => {
+    if (!item) return 0;
+    let index = parseFootnoteIndexLoose(item.dataset.footnoteIndex || item.id || "");
+    if (!index) {
+      const list = item.closest("ol");
+      if (list) {
+        const siblings = Array.from(list.children || []);
+        const pos = siblings.indexOf(item);
+        if (pos >= 0) index = pos + 1;
+      }
+    }
+    if (!index && Number.isFinite(fallbackIndex)) {
+      index = fallbackIndex + 1;
+    }
+    if (index) {
+      item.dataset.footnoteIndex = String(index);
+    }
+    return index;
+  };
+
+  const stripFootnoteExtras = (element) => {
+    if (!element) return;
+    element
+      .querySelectorAll(
+        ".footnote-backref, [data-footnote-backref], a[href^=\"#fnref\"]",
+      )
+      .forEach((node) => node.remove());
+  };
+
+  const buildFootnoteContentHtml = (item) => {
+    if (!item) return "";
+    const clone = item.cloneNode(true);
+    stripFootnoteExtras(clone);
+    clone.removeAttribute("id");
+    clone.removeAttribute("data-footnote-index");
+    return clone.innerHTML;
+  };
+
+  const openFootnoteInNewTab = (index, contentHtml) => {
+    const title = index ? `脚注 ${index}` : "脚注";
+    const tab = window.open("", "_blank");
+    if (!tab || !tab.document) return;
+    const safeTitle = escapeHtml(title);
+    const baseHref = escapeHtml(window.location.href || "");
+    const doc = tab.document;
+    doc.open();
+    doc.write(
+      `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">` +
+        `<meta name="viewport" content="width=device-width, initial-scale=1">` +
+        `<base href="${baseHref}">` +
+        `<title>${safeTitle}</title>` +
+        `<style>` +
+        `:root{color-scheme:light;}` +
+        `*{box-sizing:border-box;}` +
+        `body{margin:0;padding:36px 20px;font-family:"Noto Sans SC","Outfit","Microsoft YaHei",sans-serif;color:#1f2a37;background:#fff;line-height:1.7;}` +
+        `main{max-width:760px;margin:0 auto;}` +
+        `p{margin:0 0 12px 0;}` +
+        `a{color:#0969da;text-decoration:none;}a:hover{text-decoration:underline;}` +
+        `code,pre{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;}` +
+        `pre{background:#f6f8fa;padding:12px;border-radius:8px;overflow:auto;}` +
+        `</style></head><body><main>${contentHtml}</main></body></html>`,
+    );
+    doc.close();
+  };
+
+  const bringFootnoteWindowToFront = (windowEl) => {
+    if (!windowEl) return;
+    footnoteWindowZ += 1;
+    windowEl.style.zIndex = String(footnoteWindowZ);
+  };
+
+  const closeFootnoteWindow = (windowEl) => {
+    if (!windowEl) return;
+    footnoteWindows.delete(windowEl);
+    windowEl.remove();
+  };
+
+  const clearFootnoteWindows = () => {
+    footnoteWindows.forEach((windowEl) => {
+      windowEl.remove();
+    });
+    footnoteWindows.clear();
+    footnoteWindowSeq = 0;
+    footnoteWindowZ = 1300;
+  };
+
+  const createFootnoteWindow = (index, contentHtml) => {
+    const windowEl = document.createElement("section");
+    windowEl.className = "sps-footnote-window";
+    windowEl.dataset.footnoteIndex = String(index || "");
+    windowEl.dataset.pinned = "0";
+    windowEl.setAttribute("role", "dialog");
+    windowEl.setAttribute("aria-label", index ? `脚注 ${index}` : "脚注");
+    bringFootnoteWindowToFront(windowEl);
+
+    const header = document.createElement("div");
+    header.className = "sps-footnote-window__header";
+
+    const title = document.createElement("div");
+    title.className = "sps-footnote-window__title";
+    title.textContent = index ? `脚注 ${index}` : "脚注";
+
+    const actions = document.createElement("div");
+    actions.className = "sps-footnote-window__actions";
+
+    const btnOpen = document.createElement("button");
+    btnOpen.type = "button";
+    btnOpen.className = "sps-footnote-window__btn";
+    btnOpen.innerHTML =
+      '<svg class="sps-footnote-line-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3h7v7"></path><path d="M10 14L21 3"></path><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"></path></svg>';
+    btnOpen.setAttribute("title", "在新标签页打开");
+    btnOpen.setAttribute("aria-label", "在新标签页打开");
+
+    const btnPin = document.createElement("button");
+    btnPin.type = "button";
+    btnPin.className = "sps-footnote-window__btn";
+    btnPin.innerHTML =
+      '<svg class="sps-footnote-pin-icon" viewBox="0 0 1024 1024" aria-hidden="true"><path d="M916.8 380.8L645 109.4c-7.2-7.2-16.5-10.7-25.9-10.7-9.4 0-18.8 3.5-25.9 10.7L415.5 286.9c-13.5-1.5-27-2.2-40.6-2.2-80.7 0-161.5 26.5-227.8 79.6-17 13.5-18.4 39-3 54.4l200.4 200.1L106.9 856c-2.9 2.9-4.7 6.7-5.1 10.8l-3.7 41c-1 10.4 7.3 19.2 17.5 19.2 0.6 0 1.1 0 1.7-0.1l41-3.7c4.1-0.3 7.9-2.2 10.8-5.1l237.6-237.3 200.4 200.1c7.2 7.2 16.5 10.7 25.9 10.7 10.7 0 21.3-4.6 28.6-13.7 62.1-77.4 87.9-174.4 77.4-268.1l177.7-177.4c14.4-14.2 14.4-37.3 0.1-51.6zM682.9 553.9l-27 27 4.2 37.9c4.1 37.1 1.1 74-9 109.8-6 20.9-14.1 40.9-24.5 59.7L237 399.2c14.2-7.8 29-14.4 44.5-19.7 30-10.4 61.4-15.5 93.4-15.5 10.6 0 21.3 0.5 31.9 1.8l37.9 4.2 174.5-174.3 211.2 210.9-147.5 147.3z m0 0" fill="currentColor"></path></svg>';
+    btnPin.setAttribute("title", "置顶");
+    btnPin.setAttribute("aria-label", "置顶");
+
+    const btnClose = document.createElement("button");
+    btnClose.type = "button";
+    btnClose.className = "sps-footnote-window__btn";
+    btnClose.innerHTML =
+      '<svg class="sps-footnote-line-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg>';
+    btnClose.setAttribute("title", "关闭");
+    btnClose.setAttribute("aria-label", "关闭");
+
+    actions.append(btnOpen, btnPin, btnClose);
+    header.append(title, actions);
+
+    const body = document.createElement("div");
+    body.className = "sps-footnote-window__body markdown-body";
+    body.innerHTML = contentHtml || "<p>暂无内容</p>";
+    applyFootnotePreviewToContainer(body);
+
+    windowEl.style.visibility = "hidden";
+    windowEl.append(header, body);
+    document.body.appendChild(windowEl);
+    footnoteWindows.add(windowEl);
+
+    const setPinned = (nextState) => {
+      const pinned = Boolean(nextState);
+      windowEl.dataset.pinned = pinned ? "1" : "0";
+      btnPin.classList.toggle("is-pinned", pinned);
+      btnPin.setAttribute("aria-pressed", pinned ? "true" : "false");
+      const label = pinned ? "取消置顶" : "置顶";
+      btnPin.setAttribute("title", label);
+      btnPin.setAttribute("aria-label", label);
+      if (pinned) bringFootnoteWindowToFront(windowEl);
+    };
+
+    btnOpen.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      bringFootnoteWindowToFront(windowEl);
+      openFootnoteInNewTab(index, contentHtml || "");
+    });
+
+    btnPin.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const pinned = windowEl.dataset.pinned === "1";
+      setPinned(!pinned);
+      bringFootnoteWindowToFront(windowEl);
+    });
+
+    btnClose.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      closeFootnoteWindow(windowEl);
+    });
+
+    windowEl.addEventListener("mousedown", () => bringFootnoteWindowToFront(windowEl));
+
+    body.addEventListener("click", (event) => {
+      const anchor = event.target?.closest?.("a");
+      if (!anchor) return;
+      const href = anchor.getAttribute("href") || "";
+      if (!href.startsWith("#fn")) return;
+      if (href.startsWith("#fnref")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const targetId = href.slice(1);
+      const index = parseFootnoteIndexLoose(href);
+      let item = null;
+      if (index) {
+        const localItems = Array.from(
+          body.querySelectorAll(".footnotes li, .markdown-footnotes li"),
+        );
+        for (const candidate of localItems) {
+          const candidateIndex = getFootnoteIndexForItem(candidate, 0);
+          if (candidateIndex === index) {
+            item = candidate;
+            break;
+          }
+        }
+      }
+      if (!item && targetId) {
+        item = document
+          .getElementById(targetId)
+          ?.closest?.(".footnotes li, .markdown-footnotes li");
+      }
+      if (!item && index) {
+        const globalItems = Array.from(
+          document.querySelectorAll(".footnotes li, .markdown-footnotes li"),
+        );
+        for (const candidate of globalItems) {
+          const candidateIndex = getFootnoteIndexForItem(candidate, 0);
+          if (candidateIndex === index) {
+            item = candidate;
+            break;
+          }
+        }
+      }
+      if (!item) return;
+      const nextIndex = getFootnoteIndexForItem(item, 0);
+      const nextHtml = buildFootnoteContentHtml(item);
+      createFootnoteWindow(nextIndex, nextHtml);
+    });
+
+    const dragState = {
+      active: false,
+      startX: 0,
+      startY: 0,
+      startLeft: 0,
+      startTop: 0,
+    };
+    let touchPressTimer = null;
+    let touchStartX = 0;
+    let touchStartY = 0;
+    let lastTouch = null;
+    const touchMoveOpts = {passive: false};
+    const longPressDelay = 320;
+    const touchSlop = 6;
+
+    const clearTouchTimer = () => {
+      if (touchPressTimer) {
+        clearTimeout(touchPressTimer);
+        touchPressTimer = null;
+      }
+    };
+
+    const applyDrag = (clientX, clientY) => {
+      const deltaX = clientX - dragState.startX;
+      const deltaY = clientY - dragState.startY;
+      const rect = windowEl.getBoundingClientRect();
+      const minLeft = 8;
+      const minTop = 8;
+      const maxLeft = Math.max(minLeft, window.innerWidth - rect.width - 8);
+      const maxTop = Math.max(minTop, window.innerHeight - rect.height - 8);
+      const nextLeft = Math.min(
+        Math.max(minLeft, dragState.startLeft + deltaX),
+        maxLeft,
+      );
+      const nextTop = Math.min(
+        Math.max(minTop, dragState.startTop + deltaY),
+        maxTop,
+      );
+      windowEl.style.left = `${nextLeft}px`;
+      windowEl.style.top = `${nextTop}px`;
+    };
+
+    const onDragMove = (event) => {
+      if (!dragState.active) return;
+      applyDrag(event.clientX, event.clientY);
+    };
+
+    const onTouchMove = (event) => {
+      if (!event.touches || !event.touches[0]) return;
+      const touch = event.touches[0];
+      lastTouch = touch;
+      if (dragState.active) {
+        if (event.currentTarget !== window) return;
+        event.preventDefault();
+        applyDrag(touch.clientX, touch.clientY);
+        return;
+      }
+      if (touchPressTimer) {
+        const dx = touch.clientX - touchStartX;
+        const dy = touch.clientY - touchStartY;
+        if (Math.hypot(dx, dy) > touchSlop) {
+          clearTouchTimer();
+        }
+      }
+    };
+
+    const onDragEnd = (event) => {
+      clearTouchTimer();
+      if (!dragState.active) return;
+      if (event?.type && event.type.startsWith("touch")) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      dragState.active = false;
+      document.body.classList.remove("sps-footnote-dragging");
+      window.removeEventListener("mousemove", onDragMove);
+      window.removeEventListener("mouseup", onDragEnd);
+      window.removeEventListener("touchmove", onTouchMove, touchMoveOpts);
+      window.removeEventListener("touchend", onDragEnd);
+      window.removeEventListener("touchcancel", onDragEnd);
+    };
+
+    header.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
+      if (event.target?.closest?.(".sps-footnote-window__btn")) return;
+      event.preventDefault();
+      bringFootnoteWindowToFront(windowEl);
+      const rect = windowEl.getBoundingClientRect();
+      dragState.active = true;
+      dragState.startX = event.clientX;
+      dragState.startY = event.clientY;
+      dragState.startLeft = rect.left;
+      dragState.startTop = rect.top;
+      document.body.classList.add("sps-footnote-dragging");
+      window.addEventListener("mousemove", onDragMove);
+      window.addEventListener("mouseup", onDragEnd);
+    });
+
+    header.addEventListener(
+      "touchstart",
+      (event) => {
+      if (!event.touches || event.touches.length !== 1) return;
+      if (event.target?.closest?.(".sps-footnote-window__btn")) return;
+      event.preventDefault();
+      bringFootnoteWindowToFront(windowEl);
+      const touch = event.touches[0];
+      lastTouch = touch;
+      touchStartX = touch.clientX;
+      touchStartY = touch.clientY;
+      clearTouchTimer();
+      touchPressTimer = window.setTimeout(() => {
+        const activeTouch = lastTouch || touch;
+        if (!activeTouch) return;
+        const rect = windowEl.getBoundingClientRect();
+        dragState.active = true;
+        dragState.startX = activeTouch.clientX;
+        dragState.startY = activeTouch.clientY;
+        dragState.startLeft = rect.left;
+        dragState.startTop = rect.top;
+        document.body.classList.add("sps-footnote-dragging");
+        window.addEventListener("touchmove", onTouchMove, touchMoveOpts);
+        window.addEventListener("touchend", onDragEnd);
+        window.addEventListener("touchcancel", onDragEnd);
+      }, longPressDelay);
+    },
+    {passive: false},
+    );
+
+    header.addEventListener("touchmove", onTouchMove, touchMoveOpts);
+    header.addEventListener("touchend", onDragEnd);
+    header.addEventListener("touchcancel", onDragEnd);
+
+    const handleDefs = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
+    handleDefs.forEach((dir) => {
+      const handle = document.createElement("div");
+      handle.className = `sps-footnote-window__resize-handle is-${dir}`;
+      handle.dataset.dir = dir;
+      windowEl.appendChild(handle);
+    });
+
+    const resizeState = {
+      active: false,
+      dir: "",
+      cursor: "",
+      startX: 0,
+      startY: 0,
+      startLeft: 0,
+      startTop: 0,
+      startWidth: 0,
+      startHeight: 0,
+    };
+
+    const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+
+    const onResizeMove = (event) => {
+      if (!resizeState.active) return;
+      const dx = event.clientX - resizeState.startX;
+      const dy = event.clientY - resizeState.startY;
+      const margin = 8;
+      const minWidth = 220;
+      const minHeight = 140;
+      let nextLeft = resizeState.startLeft;
+      let nextTop = resizeState.startTop;
+      let nextWidth = resizeState.startWidth;
+      let nextHeight = resizeState.startHeight;
+
+      if (resizeState.dir.includes("e")) {
+        const maxWidth = Math.max(minWidth, window.innerWidth - resizeState.startLeft - margin);
+        nextWidth = clamp(resizeState.startWidth + dx, minWidth, maxWidth);
+      }
+      if (resizeState.dir.includes("s")) {
+        const maxHeight = Math.max(minHeight, window.innerHeight - resizeState.startTop - margin);
+        nextHeight = clamp(resizeState.startHeight + dy, minHeight, maxHeight);
+      }
+      if (resizeState.dir.includes("w")) {
+        const maxWidth = Math.max(minWidth, resizeState.startWidth + (resizeState.startLeft - margin));
+        nextWidth = clamp(resizeState.startWidth - dx, minWidth, maxWidth);
+        nextLeft = resizeState.startLeft + (resizeState.startWidth - nextWidth);
+      }
+      if (resizeState.dir.includes("n")) {
+        const maxHeight = Math.max(
+          minHeight,
+          resizeState.startHeight + (resizeState.startTop - margin),
+        );
+        nextHeight = clamp(resizeState.startHeight - dy, minHeight, maxHeight);
+        nextTop = resizeState.startTop + (resizeState.startHeight - nextHeight);
+      }
+
+      nextLeft = Math.max(margin, nextLeft);
+      nextTop = Math.max(margin, nextTop);
+      windowEl.style.left = `${nextLeft}px`;
+      windowEl.style.top = `${nextTop}px`;
+      windowEl.style.width = `${nextWidth}px`;
+      windowEl.style.height = `${nextHeight}px`;
+    };
+
+    const onResizeEnd = () => {
+      if (!resizeState.active) return;
+      resizeState.active = false;
+      resizeState.dir = "";
+      windowEl.dataset.userSized = "1";
+      document.body.classList.remove("sps-footnote-resizing");
+      document.body.style.cursor = "";
+      window.removeEventListener("mousemove", onResizeMove);
+      window.removeEventListener("mouseup", onResizeEnd);
+    };
+
+    windowEl.addEventListener("mousedown", (event) => {
+      const handle = event.target?.closest?.(".sps-footnote-window__resize-handle");
+      if (!handle) return;
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      bringFootnoteWindowToFront(windowEl);
+      const rect = windowEl.getBoundingClientRect();
+      resizeState.active = true;
+      resizeState.dir = String(handle.dataset.dir || "");
+      resizeState.startX = event.clientX;
+      resizeState.startY = event.clientY;
+      resizeState.startLeft = rect.left;
+      resizeState.startTop = rect.top;
+      resizeState.startWidth = rect.width;
+      resizeState.startHeight = rect.height;
+      document.body.classList.add("sps-footnote-resizing");
+      const cursorMap = {
+        n: "n-resize",
+        s: "s-resize",
+        e: "e-resize",
+        w: "w-resize",
+        ne: "ne-resize",
+        nw: "nw-resize",
+        se: "se-resize",
+        sw: "sw-resize",
+      };
+      resizeState.cursor = cursorMap[resizeState.dir] || "se-resize";
+      document.body.style.cursor = resizeState.cursor;
+      window.addEventListener("mousemove", onResizeMove);
+      window.addEventListener("mouseup", onResizeEnd);
+    });
+
+    const offset = (footnoteWindowSeq % 6) * 18;
+    footnoteWindowSeq += 1;
+    const minLeft = 8;
+    const minTop = 8;
+    const maxLeft = Math.max(minLeft, window.innerWidth - 260);
+    const maxTop = Math.max(minTop, window.innerHeight - 180);
+    windowEl.style.left = `${Math.min(Math.max(minLeft, 48 + offset), maxLeft)}px`;
+    windowEl.style.top = `${Math.min(Math.max(minTop, 120 + offset), maxTop)}px`;
+
+    const applyDefaultWindowSize = () => {
+      const maxHeight = Math.min(window.innerHeight * 0.6, 520);
+      const maxWidth = Math.min(window.innerWidth * 0.7, 520);
+      const safeWidth = Math.min(maxWidth, 360);
+      const safeHeight = Math.min(maxHeight, 400);
+      windowEl.style.width = `${safeWidth}px`;
+      windowEl.style.height = `${safeHeight}px`;
+    };
+
+    const revealWindow = () => {
+      windowEl.style.visibility = "visible";
+    };
+
+    requestAnimationFrame(() => {
+      applyDefaultWindowSize();
+      revealWindow();
+    });
+
+    return windowEl;
+  };
+
+  const findFootnoteItemForAction = (action) => {
+    if (!action) return null;
+    const container = action.closest(".markdown-body") || document;
+    const targetId = String(action.dataset.footnoteTarget || "").replace(/^#/, "");
+    if (targetId) {
+      const direct = document.getElementById(targetId);
+      if (direct) {
+        const item = direct.closest(
+          ".footnotes li, .markdown-footnotes li",
+        );
+        if (item) return item;
+      }
+    }
+    const index = parseFootnoteIndexLoose(action.dataset.footnoteIndex || "");
+    if (!index) return null;
+    const items = Array.from(
+      container.querySelectorAll(".footnotes li, .markdown-footnotes li"),
+    );
+    for (const item of items) {
+      const itemIndex = getFootnoteIndexForItem(item, 0);
+      if (itemIndex === index) return item;
+    }
+    return null;
+  };
+
+  const applyFootnotePreviewToContainer = (container) => {
+    if (!container) return;
+      const items = Array.from(
+        container.querySelectorAll(".footnotes li, .markdown-footnotes li"),
+      );
+    items.forEach((item, idx) => {
+      getFootnoteIndexForItem(item, idx);
+    });
+
+    const refs = Array.from(
+      container.querySelectorAll(
+        "sup.footnote-ref a[href^=\"#fn\"], .footnote-ref a[href^=\"#fn\"], a[href^=\"#fn\"]",
+      ),
+    );
+    refs.forEach((anchor) => {
+      const href = anchor.getAttribute("href") || "";
+      if (!href || !href.startsWith("#fn") || href.startsWith("#fnref")) return;
+      if (anchor.dataset.spsFootnotePreview === "1") return;
+      anchor.dataset.spsFootnotePreview = "1";
+      const sup = anchor.closest("sup") || anchor;
+      if (sup.previousElementSibling?.classList?.contains("sps-footnote-action")) {
+        return;
+      }
+      const index = parseFootnoteIndexLoose(href);
+      const action = document.createElement("button");
+      action.type = "button";
+      action.className = "sps-footnote-action";
+      action.innerHTML = FOOTNOTE_ICON_SVG;
+      action.dataset.spsFootnoteAction = "1";
+      action.dataset.footnoteTarget = href.slice(1);
+      action.dataset.footnoteIndex = String(index || "");
+      action.setAttribute("aria-label", "脚注预览");
+      action.setAttribute("title", "脚注预览");
+      sup.parentNode?.insertBefore(action, sup);
+    });
+  };
+
+  const initShareFootnotePreview = () => {
+    const containers = Array.from(document.querySelectorAll(".markdown-body"));
+    if (!containers.length) return;
+
+    containers.forEach((container) => {
+      applyFootnotePreviewToContainer(container);
+    });
+
+    if (!footnotePreviewBound) {
+      footnotePreviewBound = true;
+      document.addEventListener("click", (event) => {
+        const action = event.target?.closest?.(".sps-footnote-action");
+        if (!action) return;
+        const item = findFootnoteItemForAction(action);
+        if (!item) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const index = getFootnoteIndexForItem(item, 0);
+        const contentHtml = buildFootnoteContentHtml(item);
+        createFootnoteWindow(index, contentHtml);
+      });
+
+      document.addEventListener("mousedown", (event) => {
+        const rawTarget = event.target;
+        const target =
+          rawTarget && typeof rawTarget.closest === "function"
+            ? rawTarget
+            : rawTarget?.parentElement;
+        if (!target) return;
+        if (target.closest(".sps-footnote-window")) return;
+        if (target.closest(".sps-footnote-action")) return;
+        Array.from(footnoteWindows).forEach((windowEl) => {
+          if (windowEl.dataset.pinned === "1") return;
+          closeFootnoteWindow(windowEl);
+        });
+      });
+
+      document.addEventListener(
+        "touchstart",
+        (event) => {
+          const rawTarget = event.target;
+          const target =
+            rawTarget && typeof rawTarget.closest === "function"
+              ? rawTarget
+              : rawTarget?.parentElement;
+          if (!target) return;
+          if (target.closest(".sps-footnote-window")) return;
+          if (target.closest(".sps-footnote-action")) return;
+          Array.from(footnoteWindows).forEach((windowEl) => {
+            if (windowEl.dataset.pinned === "1") return;
+            closeFootnoteWindow(windowEl);
+          });
+        },
+        {passive: true},
+      );
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape") return;
+        Array.from(footnoteWindows).forEach((windowEl) => {
+          if (windowEl.dataset.pinned === "1") return;
+          closeFootnoteWindow(windowEl);
+        });
+      });
+    }
+  };
+
   const initShareSidebarTabs = () => {
     const tabs = document.querySelector("[data-share-tabs]");
     if (!tabs) return;
@@ -1130,6 +1783,7 @@
     };
 
     const loadDoc = async (url, {pushState = true} = {}) => {
+      clearFootnoteWindows();
       const currentId = ++requestId;
       if (controller) controller.abort();
       controller = new AbortController();
@@ -4101,6 +4755,7 @@ const initImageViewer = () => {
   };
 
   const refreshShareDynamicContent = () => {
+    clearFootnoteWindows();
     initShareMarkdownToggle();
     initCommentEditors();
     initCommentModal();
@@ -4116,6 +4771,11 @@ const initImageViewer = () => {
       }
       try {
         initShareToc();
+      } catch (err) {
+        console.error(err);
+      }
+      try {
+        initShareFootnotePreview();
       } catch (err) {
         console.error(err);
       }

@@ -2187,6 +2187,234 @@ body.app-side-open {
   text-decoration: underline;
 }
 
+.sps-footnote-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1em;
+  height: 1em;
+  margin-right: 0.25em;
+  margin-left: 0.2em;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 6px;
+  vertical-align: baseline;
+  flex: 0 0 auto;
+  font-size: 1em;
+  line-height: 1;
+  transform: translateY(0.06em);
+  -webkit-tap-highlight-color: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.sps-footnote-action svg {
+  width: 1em;
+  height: 1em;
+  display: block;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.sps-footnote-action + sup {
+  margin-left: 0.1em;
+}
+
+.sps-footnote-action:hover,
+.sps-footnote-action:focus,
+.sps-footnote-action:focus-visible,
+.sps-footnote-action:active {
+  background: transparent;
+  outline: none;
+  box-shadow: none;
+}
+
+.sps-footnote-window__header {
+  touch-action: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.sps-footnote-window {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  min-width: 220px;
+  min-height: 140px;
+  max-width: 90vw;
+  max-height: 70vh;
+  z-index: 1300;
+}
+
+.sps-footnote-window__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--surface-muted);
+  border-bottom: 1px solid var(--border);
+  cursor: move;
+  user-select: none;
+}
+
+.sps-footnote-window__title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sps-footnote-window__actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sps-footnote-window__btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 0;
+}
+
+.sps-footnote-window__btn svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.sps-footnote-window__btn .sps-footnote-line-icon {
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sps-footnote-window__btn .sps-footnote-pin-icon {
+  fill: currentColor;
+}
+
+.sps-footnote-window__btn:hover {
+  background: rgba(90, 123, 255, 0.12);
+  color: var(--primary);
+}
+
+.sps-footnote-window__btn.is-pinned {
+  background: rgba(90, 123, 255, 0.18);
+  color: var(--primary-700);
+}
+
+.sps-footnote-window__body {
+  padding: 12px 14px;
+  overflow: auto;
+  font-family: var(--font-markdown);
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+.sps-footnote-window__body p {
+  margin: 0 0 12px;
+}
+
+.sps-footnote-window__body p:last-child {
+  margin-bottom: 0;
+}
+
+body.sps-footnote-resizing {
+  user-select: none;
+}
+
+.sps-footnote-window__resize-handle {
+  position: absolute;
+  z-index: 2;
+}
+
+.sps-footnote-window__resize-handle.is-n {
+  top: -4px;
+  left: 12px;
+  right: 12px;
+  height: 8px;
+  cursor: n-resize;
+}
+
+.sps-footnote-window__resize-handle.is-s {
+  bottom: -4px;
+  left: 12px;
+  right: 12px;
+  height: 8px;
+  cursor: s-resize;
+}
+
+.sps-footnote-window__resize-handle.is-e {
+  top: 12px;
+  bottom: 12px;
+  right: -4px;
+  width: 8px;
+  cursor: e-resize;
+}
+
+.sps-footnote-window__resize-handle.is-w {
+  top: 12px;
+  bottom: 12px;
+  left: -4px;
+  width: 8px;
+  cursor: w-resize;
+}
+
+.sps-footnote-window__resize-handle.is-ne {
+  top: -4px;
+  right: -4px;
+  width: 12px;
+  height: 12px;
+  cursor: ne-resize;
+}
+
+.sps-footnote-window__resize-handle.is-nw {
+  top: -4px;
+  left: -4px;
+  width: 12px;
+  height: 12px;
+  cursor: nw-resize;
+}
+
+.sps-footnote-window__resize-handle.is-se {
+  bottom: -4px;
+  right: -4px;
+  width: 12px;
+  height: 12px;
+  cursor: se-resize;
+}
+
+.sps-footnote-window__resize-handle.is-sw {
+  bottom: -4px;
+  left: -4px;
+  width: 12px;
+  height: 12px;
+  cursor: sw-resize;
+}
+
+body.sps-footnote-dragging {
+  user-select: none;
+  cursor: move;
+}
+
 .share-toc-children {
   padding-left: 18px;
   --toc-offset: calc(var(--toc-offset) + 18px);
