@@ -1278,7 +1278,7 @@ function render_page(string $title, string $content, ?array $user = null, string
         echo "</div>";
     }
 
-    if ($layout !== 'app') {
+    if ($layout !== 'app' && $layout !== 'auth') {
         $announcements = get_active_announcements();
         if (should_show_announcement_modal($announcements)) {
             echo render_announcement_modal($announcements);
