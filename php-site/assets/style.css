@@ -4975,5 +4975,26 @@ body.image-viewer-open {
   }
 }
 
-
-
+/*Admin dark mode*/
+@media (prefers-color-scheme: dark) {
+  body.layout-app {
+    color-scheme: dark;
+    --bg: #1a1b2e;
+    --bg-strong: #2d3555;
+    --surface: #232640;
+    --surface-muted: #2a2d48;
+    --panel-bg: #1e2038;
+    --text: #e8ecf3;
+    --muted: #9ca3b4;
+    --primary: #86adff;
+    --primary-700: #a4bfff;
+    --accent: #43d3c7;
+    --danger: #f28482;
+    --border: #3a3f5c;
+    --shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+    --shadow-soft: 0 12px 30px rgba(0, 0, 0, 0.25);
+  }
+  body.layout-app .topbar-title { color: var(--text); }
+  body.layout-app .user-pill { background: rgba(122, 162, 255, 0.15); color: #c7d2fe; }
+  body.layout-app .app-sidebar { background: var(--panel-bg); }
+}
