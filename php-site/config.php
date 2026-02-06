@@ -1,7 +1,7 @@
 <?php
 return [
     'app_name' => '思源笔记分享',
-    'allow_registration' => true,
+    'allow_registration' => false,
     'default_storage_limit_mb' => 1024,
     // Session lifetime (days)
     'session_lifetime_days' => 30,
@@ -12,7 +12,7 @@ return [
     // Upload chunk size limits (plugin will adapt to these values)
     'min_chunk_size_kb' => 256,
     'max_chunk_size_mb' => 8,
-    'captcha_enabled' => true,
+    'captcha_enabled' => false,
     'email_verification_enabled' => false,
     'email_from' => 'no-reply@example.com',
     'email_from_name' => '思源笔记分享',
