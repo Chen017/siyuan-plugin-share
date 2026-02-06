@@ -89,7 +89,7 @@ This plugin relies on a server-side service:
 
 ---
 
-## 📖 Feature Demo
+## 📖 Feature Demo(GIF from GitHub; "magic" may be required)
 
 ### ① Generate an API Key and configure the plugin
 
@@ -165,5 +165,4 @@ Your support motivates me to **continue maintaining and improving** the plugin.
 
 - 💖 Sponsor List:  
   [Sponsor List](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/sponsor-list.md)
-
 

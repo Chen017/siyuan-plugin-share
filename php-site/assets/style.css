@@ -1235,6 +1235,11 @@ body.app-side-open {
     var(--surface) var(--sidebar-width)
   );
 }
+@media (min-width: 961px) {
+  .share-shell[data-share-doc-id=""] .kb-sidebar {
+    margin-top: 24px;
+  }
+}
 
 .share-shell--doc .share-toc {
   border-top-left-radius: 22px;
