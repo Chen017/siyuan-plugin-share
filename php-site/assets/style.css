@@ -4997,4 +4997,9 @@ body.image-viewer-open {
   body.layout-app .topbar-title { color: var(--text); }
   body.layout-app .user-pill { background: rgba(122, 162, 255, 0.15); color: #c7d2fe; }
   body.layout-app .app-sidebar { background: var(--panel-bg); }
+  body.layout-app .input,
+  body.layout-app select,
+  body.layout-app textarea { background: var(--surface-muted); color: var(--text); border-color: var(--border); }
+  body.layout-app .button.ghost { background: rgba(122, 162, 255, 0.12); color: #c7d2fe; }
+  body.layout-app .card.danger-zone { background: #2a1f2a; border-color: #5c3333; }
 }
