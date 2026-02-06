@@ -1,5 +1,5 @@
 # Change log
-## 0.3.7(dev)
-Based on 0.3.6 plus a part of commits of 0.3.7 in upstream, this fork has such changes:
-- Fix error: When first time opening a file in the notebook, katex is not rendering correctly.
+## 0.3.7
+Based on 0.3.7 in upstream, this fork has such new changes:
 - Modify the port of docker from 8080 to 8081 and disable ip access.
+- Modify the footer.
