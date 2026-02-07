@@ -35,6 +35,7 @@ const DEFAULT_UPLOAD_ASSET_CONCURRENCY = 8;
 const DEFAULT_UPLOAD_CHUNK_CONCURRENCY = 4;
 const DEFAULT_DOC_EXPORT_CONCURRENCY = 4;
 const DEFAULT_MARKDOWN_ASSET_PREPARE_CONCURRENCY = 3;
+const DOC_CHUNK_UPLOAD_PREFIX = "__sps_docs";
 const UPLOAD_RETRY_LIMIT = 5;
 const UPLOAD_RETRY_BASE_DELAY = 400;
 const UPLOAD_RETRY_MAX_DELAY = 2000;
@@ -3486,6 +3487,7 @@ class SiYuanSharePlugin extends Plugin {
     if (!raw || typeof raw !== "object") return null;
     return {
       incrementalShare: !!raw.incrementalShare,
+      docChunkUpload: !!raw.docChunkUpload,
     };
   }
 
@@ -4444,6 +4446,114 @@ class SiYuanSharePlugin extends Plugin {
     return !!this.remoteFeatures?.incrementalShare;
   }
 
+  supportsDocChunkUpload() {
+    return !!this.remoteFeatures?.docChunkUpload;
+  }
+
+  buildDocChunkPath(docId, index = 0, usedPaths = null) {
+    const safeId = String(docId || "")
+      .replace(/[^0-9a-zA-Z_-]/g, "")
+      .trim();
+    const base = safeId || `doc-${index}`;
+    let candidate = `${DOC_CHUNK_UPLOAD_PREFIX}/${base}.md`;
+    if (usedPaths && usedPaths.has(candidate)) {
+      let seq = 1;
+      candidate = `${DOC_CHUNK_UPLOAD_PREFIX}/${base}-${seq}.md`;
+      while (usedPaths.has(candidate)) {
+        seq += 1;
+        candidate = `${DOC_CHUNK_UPLOAD_PREFIX}/${base}-${seq}.md`;
+      }
+    }
+    usedPaths?.add(candidate);
+    return candidate;
+  }
+
+  buildDocChunkUploadPlan(payload) {
+    const metadata = payload && typeof payload === "object" ? {...payload} : {};
+    const hasDocsField = Object.prototype.hasOwnProperty.call(metadata, "docs");
+    const sourceDocs = hasDocsField ? (Array.isArray(metadata.docs) ? metadata.docs : []) : null;
+    const docs = [];
+    if (sourceDocs !== null) {
+      sourceDocs.forEach((doc, index) => {
+        const docId = String(doc?.docId || "").trim();
+        if (!isValidDocId(docId)) return;
+        const sortIndexNum = Number(doc?.sortIndex);
+        const sortOrderNum = Number(doc?.sortOrder);
+        docs.push({
+          docId,
+          title: String(doc?.title || ""),
+          icon: normalizeDocIconValue(doc?.icon || ""),
+          hPath: String(doc?.hPath || ""),
+          parentId: String(doc?.parentId || ""),
+          sortIndex: Number.isFinite(sortIndexNum) ? sortIndexNum : index,
+          sortOrder: Number.isFinite(sortOrderNum) ? Math.max(0, Math.floor(sortOrderNum)) : index,
+          markdown: String(doc?.markdown || ""),
+          contentHash: normalizeHashHex(doc?.contentHash),
+          metaHash: normalizeHashHex(doc?.metaHash),
+        });
+      });
+    } else {
+      const docId = String(metadata?.docId || "").trim();
+      if (isValidDocId(docId)) {
+        const sortOrderNum = Number(metadata?.sortOrder);
+        docs.push({
+          docId,
+          title: String(metadata?.title || ""),
+          icon: normalizeDocIconValue(metadata?.icon || ""),
+          hPath: String(metadata?.hPath || ""),
+          parentId: "",
+          sortIndex: 0,
+          sortOrder: Number.isFinite(sortOrderNum) ? Math.max(0, Math.floor(sortOrderNum)) : 0,
+          markdown: String(metadata?.markdown || ""),
+          contentHash: normalizeHashHex(metadata?.contentHash),
+          metaHash: normalizeHashHex(metadata?.metaHash),
+        });
+      }
+    }
+
+    const usedPaths = new Set();
+    const docEntries = [];
+    const docManifest = [];
+    const docMetaRows = [];
+    let totalBytes = 0;
+    docs.forEach((doc, index) => {
+      const markdown = String(doc?.markdown || "");
+      const blob = new Blob([markdown], {type: "text/markdown"});
+      const size = Number(blob.size) || 0;
+      const path = this.buildDocChunkPath(doc.docId, index, usedPaths);
+      const contentHash = normalizeHashHex(doc.contentHash);
+      const metaHash = normalizeHashHex(doc.metaHash);
+      const metaRow = {
+        docId: doc.docId,
+        title: String(doc.title || ""),
+        hPath: String(doc.hPath || ""),
+        parentId: String(doc.parentId || ""),
+        sortIndex: Number.isFinite(Number(doc.sortIndex)) ? Number(doc.sortIndex) : index,
+        sortOrder: Number.isFinite(Number(doc.sortOrder)) ? Math.max(0, Math.floor(Number(doc.sortOrder))) : index,
+        size,
+      };
+      if (doc.icon) metaRow.icon = doc.icon;
+      if (contentHash) metaRow.contentHash = contentHash;
+      if (metaHash) metaRow.metaHash = metaHash;
+      docMetaRows.push(metaRow);
+      docEntries.push({asset: {path, blob}, docId: doc.docId});
+      const manifestItem = {path, size, docId: doc.docId};
+      if (contentHash) manifestItem.hash = contentHash;
+      docManifest.push(manifestItem);
+      totalBytes += size;
+    });
+
+    delete metadata.markdown;
+    delete metadata.hPath;
+    delete metadata.sortOrder;
+    delete metadata.icon;
+    delete metadata.contentHash;
+    delete metadata.metaHash;
+    metadata.docs = docMetaRows;
+
+    return {metadata, docEntries, docManifest, totalBytes};
+  }
+
   async fetchShareSnapshot(shareId, {controller = null, progress = null} = {}) {
     if (!shareId) throw new Error(this.t("siyuanShare.error.missingShareId"));
     return this.remoteRequest(REMOTE_API.shareSnapshot, {
@@ -5184,9 +5294,18 @@ class SiYuanSharePlugin extends Plugin {
       let uploadId = "";
       let uploadComplete = false;
       try {
+        const useDocChunkUpload = this.supportsDocChunkUpload();
+        const docChunkPlan = useDocChunkUpload ? this.buildDocChunkUploadPlan(uploadPayload) : null;
+        const initBody = docChunkPlan
+          ? {
+              metadata: docChunkPlan.metadata,
+              assets: uploadAssetManifest,
+              docChunks: docChunkPlan.docManifest,
+            }
+          : {metadata: uploadPayload, assets: uploadAssetManifest};
         const init = await this.remoteRequest(REMOTE_API.shareDocInit, {
           method: "POST",
-          body: {metadata: uploadPayload, assets: uploadAssetManifest},
+          body: initBody,
           progressText: t("siyuanShare.progress.uploadingContent"),
           controller,
           progress,
@@ -5195,11 +5314,14 @@ class SiYuanSharePlugin extends Plugin {
         if (!uploadId) {
           throw new Error(t("siyuanShare.error.missingUploadId"));
         }
+        const uploadEntries = docChunkPlan
+          ? [...docChunkPlan.docEntries, ...uploadAssetEntries]
+          : uploadAssetEntries;
         const totalBytes = uploadAssetEntries.reduce(
           (sum, entry) => sum + (Number(entry?.asset?.blob?.size) || 0),
           0,
-        );
-        await this.uploadAssetsChunked(uploadId, uploadAssetEntries, controller, progress, totalBytes);
+        ) + (docChunkPlan?.totalBytes || 0);
+        await this.uploadAssetsChunked(uploadId, uploadEntries, controller, progress, totalBytes);
         await this.remoteRequest(REMOTE_API.shareUploadComplete, {
           method: "POST",
           body: {uploadId},
@@ -5414,9 +5536,18 @@ class SiYuanSharePlugin extends Plugin {
       let uploadId = "";
       let uploadComplete = false;
       try {
+        const useDocChunkUpload = this.supportsDocChunkUpload();
+        const docChunkPlan = useDocChunkUpload ? this.buildDocChunkUploadPlan(uploadPayload) : null;
+        const initBody = docChunkPlan
+          ? {
+              metadata: docChunkPlan.metadata,
+              assets: uploadAssetManifest,
+              docChunks: docChunkPlan.docManifest,
+            }
+          : {metadata: uploadPayload, assets: uploadAssetManifest};
         const init = await this.remoteRequest(REMOTE_API.shareNotebookInit, {
           method: "POST",
-          body: {metadata: uploadPayload, assets: uploadAssetManifest},
+          body: initBody,
           progressText: t("siyuanShare.progress.uploadingContent"),
           controller,
           progress,
@@ -5425,11 +5556,14 @@ class SiYuanSharePlugin extends Plugin {
         if (!uploadId) {
           throw new Error(t("siyuanShare.error.missingUploadId"));
         }
+        const uploadEntries = docChunkPlan
+          ? [...docChunkPlan.docEntries, ...uploadAssetEntries]
+          : uploadAssetEntries;
         const totalBytes = uploadAssetEntries.reduce(
           (sum, entry) => sum + (Number(entry?.asset?.blob?.size) || 0),
           0,
-        );
-        await this.uploadAssetsChunked(uploadId, uploadAssetEntries, controller, progress, totalBytes);
+        ) + (docChunkPlan?.totalBytes || 0);
+        await this.uploadAssetsChunked(uploadId, uploadEntries, controller, progress, totalBytes);
         await this.remoteRequest(REMOTE_API.shareUploadComplete, {
           method: "POST",
           body: {uploadId},
