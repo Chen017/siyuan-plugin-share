@@ -33,6 +33,8 @@ const UPLOAD_TARGET_CHUNK_MS = 1800;
 const UPLOAD_DEFAULT_SPEED_BPS = 2 * MB;
 const DEFAULT_UPLOAD_ASSET_CONCURRENCY = 8;
 const DEFAULT_UPLOAD_CHUNK_CONCURRENCY = 4;
+const DEFAULT_DOC_EXPORT_CONCURRENCY = 4;
+const DEFAULT_MARKDOWN_ASSET_PREPARE_CONCURRENCY = 3;
 const UPLOAD_RETRY_LIMIT = 5;
 const UPLOAD_RETRY_BASE_DELAY = 400;
 const UPLOAD_RETRY_MAX_DELAY = 2000;
@@ -41,6 +43,7 @@ const UPLOAD_MISSING_CHUNK_RETRY_LIMIT = 3;
 const REMOTE_API = {
   verify: "/api/v1/auth/verify",
   shares: "/api/v1/shares",
+  shareSnapshot: "/api/v1/shares/snapshot",
   shareDocInit: "/api/v1/shares/doc/init",
   shareDoc: "/api/v1/shares/doc",
   shareNotebookInit: "/api/v1/shares/notebook/init",
@@ -68,6 +71,7 @@ const BLOCK_REF_LINK_RE = new RegExp(`siyuan://blocks/${BLOCK_REF_ID_PATTERN}`, 
 const TREE_SHARE_CLASS = "sps-tree-share";
 const TREE_SHARED_CLASS = "sps-tree-item--shared";
 const TREE_SHARE_ICON_ID = "iconSiyuanShare";
+const HASH_HEX_RE = /^[a-f0-9]{64}$/i;
 
 let globalI18nProvider = null;
 
@@ -106,6 +110,103 @@ function normalizePositiveInt(value, fallback) {
   return Math.floor(parsed);
 }
 
+function normalizeHashHex(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  return HASH_HEX_RE.test(raw) ? raw : "";
+}
+
+function encodeUtf8Bytes(input) {
+  const text = String(input || "");
+  if (globalThis.TextEncoder) {
+    return new TextEncoder().encode(text);
+  }
+  if (typeof Buffer !== "undefined") {
+    return Uint8Array.from(Buffer.from(text, "utf8"));
+  }
+  const encoded = unescape(encodeURIComponent(text));
+  const bytes = new Uint8Array(encoded.length);
+  for (let i = 0; i < encoded.length; i += 1) {
+    bytes[i] = encoded.charCodeAt(i) & 0xff;
+  }
+  return bytes;
+}
+
+function fallbackHashBytes(bytes) {
+  const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  let h3 = 0x9e3779b9;
+  let h4 = 0x85ebca6b;
+  for (let i = 0; i < data.length; i += 1) {
+    const v = data[i];
+    h1 ^= v;
+    h1 = Math.imul(h1, 0x01000193);
+    h2 ^= (v << (i % 8));
+    h2 = Math.imul(h2, 0x85ebca6b);
+    h3 ^= (v + i) & 0xff;
+    h3 = Math.imul(h3, 0xc2b2ae35);
+    h4 ^= (v * 131) & 0xff;
+    h4 = Math.imul(h4, 0x27d4eb2f);
+  }
+  const words = [h1 >>> 0, h2 >>> 0, h3 >>> 0, h4 >>> 0, (h1 ^ h3) >>> 0, (h2 ^ h4) >>> 0, (h1 ^ h2) >>> 0, (h3 ^ h4) >>> 0];
+  return words.map((n) => n.toString(16).padStart(8, "0")).join("");
+}
+
+async function hashTextSha256(text) {
+  const source = String(text || "");
+  try {
+    if (globalThis?.crypto?.subtle && globalThis.TextEncoder) {
+      const buf = encodeUtf8Bytes(source);
+      const digest = await globalThis.crypto.subtle.digest("SHA-256", buf);
+      return Array.from(new Uint8Array(digest))
+        .map((n) => n.toString(16).padStart(2, "0"))
+        .join("");
+    }
+  } catch {
+    // fallback below
+  }
+  return fallbackHashBytes(encodeUtf8Bytes(source));
+}
+
+async function hashBlobSha256(blob) {
+  if (!blob) return "";
+  try {
+    const buf = await blob.arrayBuffer();
+    try {
+      if (globalThis?.crypto?.subtle) {
+        const digest = await globalThis.crypto.subtle.digest("SHA-256", buf);
+        return Array.from(new Uint8Array(digest))
+          .map((n) => n.toString(16).padStart(2, "0"))
+          .join("");
+      }
+    } catch {
+      // fallback below
+    }
+    return fallbackHashBytes(new Uint8Array(buf));
+  } catch {
+    return "";
+  }
+}
+
+function normalizeSortIndexForHash(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  const rounded = Math.round(num * 1000000) / 1000000;
+  return Number.isFinite(rounded) ? rounded : 0;
+}
+
+function buildDocMetaHashInput(doc) {
+  const meta = {
+    title: String(doc?.title || ""),
+    hPath: String(doc?.hPath || doc?.hpath || ""),
+    parentId: String(doc?.parentId || doc?.parent_id || ""),
+    sortIndex: normalizeSortIndexForHash(doc?.sortIndex ?? doc?.sort_index ?? 0),
+    sortOrder: Math.max(0, Math.floor(Number(doc?.sortOrder ?? doc?.sort_order ?? 0) || 0)),
+    icon: normalizeDocIconValue(doc?.icon || ""),
+  };
+  return JSON.stringify(meta);
+}
+
 async function runTasksWithConcurrency(tasks, concurrency) {
   if (!Array.isArray(tasks) || tasks.length === 0) return;
   const limit = Math.max(1, Math.floor(concurrency || 1));
@@ -124,8 +225,25 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function createAbortError(message = tGlobal("siyuanShare.message.cancelled")) {
+  const err = new Error(message || tGlobal("siyuanShare.message.cancelled"));
+  err.name = "AbortError";
+  err.isAbortError = true;
+  return err;
+}
+
 function isAbortError(err) {
-  return err?.name === "AbortError" || /cancelled/i.test(String(err?.message || ""));
+  if (!err) return false;
+  if (err?.name === "AbortError" || err?.isAbortError) return true;
+  const code = String(err?.code || "").toUpperCase();
+  if (code === "ABORT_ERR" || code === "ERR_CANCELED" || code === "ECONNABORTED") return true;
+  const message = String(err?.message || "").trim();
+  if (!message) return false;
+  // Avoid treating common filesystem errors as abort/cancel because file paths
+  // may contain words like "取消", which can cause false positives.
+  if (/^(ENOENT|EACCES|EPERM|ENOTDIR|EISDIR)\b/i.test(message)) return false;
+  if (/\b(canceled|cancelled|aborted|abort)\b/i.test(message)) return true;
+  return /^(已取消|用户取消|操作已取消|请求已取消)$/i.test(message);
 }
 
 function getMissingChunksFromError(err) {
@@ -142,7 +260,7 @@ async function withRetry(task, {retries = 0, baseDelay = 0, maxDelay = 0, contro
   let attempt = 0;
   while (true) {
     if (controller?.signal?.aborted) {
-      throw new Error(tGlobal("siyuanShare.message.cancelled"));
+      throw createAbortError(tGlobal("siyuanShare.message.cancelled"));
     }
     try {
       return await task();
@@ -275,7 +393,7 @@ function sanitizeAssetUploadPath(path, used) {
 
 function throwIfAborted(controller, message) {
   if (controller?.signal?.aborted) {
-    throw new Error(message || tGlobal("siyuanShare.message.cancelled"));
+    throw createAbortError(message || tGlobal("siyuanShare.message.cancelled"));
   }
 }
 
@@ -1456,6 +1574,7 @@ class SiYuanSharePlugin extends Plugin {
       refWarningDisabled: false,
     };
     this.remoteUploadLimits = null;
+    this.remoteFeatures = null;
     this.uploadTuner = {avgSpeed: 0, samples: 0};
     this.shares = [];
     this.siteShares = {};
@@ -2956,6 +3075,7 @@ class SiYuanSharePlugin extends Plugin {
     }
     const rawMessage = message || t("siyuanShare.message.processing");
     const safeMessage = escapeHtml(rawMessage);
+    let onDialogDestroy = () => {};
     const dialog = new Dialog({
       title: t("siyuanShare.title.processing"),
       content: `<div class="sps-progress">
@@ -2968,19 +3088,24 @@ class SiYuanSharePlugin extends Plugin {
 </div>
 <div class="b3-dialog__action">
   <div class="fn__space"></div>
-  <button class="b3-button b3-button--outline" data-action="cancel">${t(
-    "siyuanShare.action.cancel",
-  )}</button>
+  <button class="b3-button b3-button--outline" data-action="continue" style="display:none"></button>
 </div>`,
       width: "360px",
+      destroyCallback: () => onDialogDestroy(),
     });
     this.progressDialog = dialog;
+    dialog.element?.classList?.add("sps-progress-dialog");
 
     const label = dialog.element?.querySelector?.(".sps-progress__title");
     const percentEl = dialog.element?.querySelector?.(".sps-progress__percent");
     const detailEl = dialog.element?.querySelector?.(".sps-progress__detail");
+    const barWrap = dialog.element?.querySelector?.(".sps-progress__bar");
     const bar = dialog.element?.querySelector?.(".sps-progress__bar-inner");
+    const continueBtn = dialog.element?.querySelector?.("[data-action='continue']");
+    let confirmResolver = null;
     let currentText = rawMessage;
+    let barVisible = true;
+    let closed = false;
     const setIndeterminate = () => {
       if (!bar) return;
       bar.style.animation = "";
@@ -2992,6 +3117,16 @@ class SiYuanSharePlugin extends Plugin {
       bar.style.animation = "none";
       bar.style.width = `${clamped}%`;
       return clamped;
+    };
+    const setBarVisible = (visible = true) => {
+      barVisible = !!visible;
+      if (barWrap) {
+        barWrap.style.display = barVisible ? "" : "none";
+      }
+      if (!barVisible && percentEl) {
+        percentEl.textContent = "";
+        percentEl.style.display = "none";
+      }
     };
     const update = (next, percent = null, detail = "") => {
       let text = next;
@@ -3023,7 +3158,12 @@ class SiYuanSharePlugin extends Plugin {
           detailEl.style.display = "none";
         }
       }
-      if (Number.isFinite(numeric)) {
+      if (!barVisible) {
+        if (percentEl) {
+          percentEl.textContent = "";
+          percentEl.style.display = "none";
+        }
+      } else if (Number.isFinite(numeric)) {
         const clamped = setDeterminate(numeric);
         if (percentEl) {
           percentEl.textContent = `${Math.round(clamped)}%`;
@@ -3037,7 +3177,52 @@ class SiYuanSharePlugin extends Plugin {
         }
       }
     };
+    const hideContinue = () => {
+      if (!continueBtn) return;
+      continueBtn.style.display = "none";
+      continueBtn.textContent = "";
+    };
+    const showContinue = (labelText) => {
+      if (!continueBtn) return;
+      continueBtn.textContent = String(labelText || t("siyuanShare.action.continueUpload"));
+      continueBtn.style.display = "";
+    };
+    const settleConfirm = (result) => {
+      if (!confirmResolver) return;
+      const resolver = confirmResolver;
+      confirmResolver = null;
+      hideContinue();
+      resolver(!!result);
+    };
+    onDialogDestroy = () => {
+      if (closed) return;
+      closed = true;
+      settleConfirm(false);
+      if (controller && !controller.signal?.aborted) {
+        try {
+          controller.abort();
+        } catch {
+          // ignore
+        }
+      }
+      if (this.progressDialog === dialog) {
+        this.progressDialog = null;
+      }
+    };
+    const confirm = ({text = null, detail = "", continueText = ""} = {}) =>
+      new Promise((resolve) => {
+        if (typeof text === "string" || (text && typeof text === "object")) {
+          update({text, detail});
+        } else if (detail) {
+          update({detail});
+        }
+        confirmResolver = resolve;
+        showContinue(continueText);
+      });
     const close = () => {
+      if (closed) return;
+      closed = true;
+      settleConfirm(false);
       try {
         dialog.destroy();
       } catch {
@@ -3049,13 +3234,15 @@ class SiYuanSharePlugin extends Plugin {
     };
 
     dialog.element?.addEventListener("click", (event) => {
-      const btn = event.target?.closest?.("[data-action='cancel']");
+      const btn = event.target?.closest?.("[data-action]");
       if (!btn) return;
-      if (controller) controller.abort();
-      close();
+      const action = btn.getAttribute("data-action");
+      if (action === "continue") {
+        settleConfirm(true);
+      }
     });
 
-    return {close, update};
+    return {close, update, confirm, setBarVisible};
   }
 
   async loadState() {
@@ -3295,9 +3482,17 @@ class SiYuanSharePlugin extends Plugin {
     return Math.floor(ts);
   }
 
+  normalizeRemoteFeatures(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    return {
+      incrementalShare: !!raw.incrementalShare,
+    };
+  }
+
   syncRemoteStatusFromSite(site) {
     this.remoteUser = this.normalizeRemoteUser(site?.remoteUser);
     this.remoteVerifiedAt = this.normalizeRemoteVerifiedAt(site?.remoteVerifiedAt);
+    this.remoteFeatures = this.normalizeRemoteFeatures(site?.remoteFeatures);
   }
 
   async persistActiveRemoteStatus({clear = false} = {}) {
@@ -3308,9 +3503,11 @@ class SiYuanSharePlugin extends Plugin {
     if (clear) {
       activeSite.remoteUser = null;
       activeSite.remoteVerifiedAt = 0;
+      activeSite.remoteFeatures = null;
     } else {
       activeSite.remoteUser = this.normalizeRemoteUser(this.remoteUser);
       activeSite.remoteVerifiedAt = this.normalizeRemoteVerifiedAt(this.remoteVerifiedAt);
+      activeSite.remoteFeatures = this.normalizeRemoteFeatures(this.remoteFeatures);
     }
     this.settings = {
       ...this.settings,
@@ -3334,7 +3531,8 @@ class SiYuanSharePlugin extends Plugin {
       const name = this.resolveSiteName(raw.name, siteUrl, sites.length);
       const remoteUser = this.normalizeRemoteUser(raw.remoteUser);
       const remoteVerifiedAt = this.normalizeRemoteVerifiedAt(raw.remoteVerifiedAt);
-      sites.push({id, name, siteUrl, apiKey, remoteUser, remoteVerifiedAt});
+      const remoteFeatures = this.normalizeRemoteFeatures(raw.remoteFeatures);
+      sites.push({id, name, siteUrl, apiKey, remoteUser, remoteVerifiedAt, remoteFeatures});
       seen.add(id);
     });
     return sites;
@@ -3420,6 +3618,7 @@ class SiYuanSharePlugin extends Plugin {
         apiKey,
         remoteUser: null,
         remoteVerifiedAt: 0,
+        remoteFeatures: null,
       };
       sites.push(activeSite);
     } else if (activeSite) {
@@ -3429,7 +3628,9 @@ class SiYuanSharePlugin extends Plugin {
       if (prevSiteUrl !== siteUrl || prevApiKey !== apiKey) {
         activeSite.remoteUser = null;
         activeSite.remoteVerifiedAt = 0;
+        activeSite.remoteFeatures = null;
         this.remoteUploadLimits = null;
+        this.remoteFeatures = null;
       }
     }
     this.settings = {
@@ -3524,6 +3725,7 @@ class SiYuanSharePlugin extends Plugin {
             apiKey,
             remoteUser: null,
             remoteVerifiedAt: 0,
+            remoteFeatures: null,
           };
           sites.push(activeSite);
         } else if (activeSite) {
@@ -3533,7 +3735,9 @@ class SiYuanSharePlugin extends Plugin {
           if (prevSiteUrl !== siteUrl || prevApiKey !== apiKey) {
             activeSite.remoteUser = null;
             activeSite.remoteVerifiedAt = 0;
+            activeSite.remoteFeatures = null;
             this.remoteUploadLimits = null;
+            this.remoteFeatures = null;
           }
         }
         this.settings = {
@@ -3569,6 +3773,7 @@ class SiYuanSharePlugin extends Plugin {
             apiKey: "",
             remoteUser: null,
             remoteVerifiedAt: 0,
+            remoteFeatures: null,
           };
           sites.push(newSite);
           this.settings = {
@@ -3582,6 +3787,7 @@ class SiYuanSharePlugin extends Plugin {
           this.shares = this.siteShares[newSiteId];
           this.remoteUser = null;
           this.remoteVerifiedAt = 0;
+          this.remoteFeatures = null;
           this.remoteUploadLimits = null;
           await this.saveData(STORAGE_SETTINGS, this.settings);
           await this.saveData(STORAGE_SITE_SHARES, this.siteShares);
@@ -3871,6 +4077,7 @@ class SiYuanSharePlugin extends Plugin {
         apiKey,
         remoteUser: null,
         remoteVerifiedAt: 0,
+        remoteFeatures: null,
       };
       sites.push(activeSite);
     } else if (activeSite) {
@@ -3880,7 +4087,9 @@ class SiYuanSharePlugin extends Plugin {
       if (prevSiteUrl !== siteUrl || prevApiKey !== apiKey) {
         activeSite.remoteUser = null;
         activeSite.remoteVerifiedAt = 0;
+        activeSite.remoteFeatures = null;
         this.remoteUploadLimits = null;
+        this.remoteFeatures = null;
       }
     }
     this.settings = {
@@ -3900,6 +4109,7 @@ class SiYuanSharePlugin extends Plugin {
       }
       this.remoteUser = null;
       this.remoteVerifiedAt = 0;
+      this.remoteFeatures = null;
       this.remoteUploadLimits = null;
     }
     this.syncRemoteStatusFromSite(activeSite);
@@ -4109,6 +4319,94 @@ class SiYuanSharePlugin extends Plugin {
     return Math.min(limit, concurrency, totalChunks);
   }
 
+  getDocExportConcurrency(totalDocs = 0) {
+    const total = Math.max(0, Math.floor(Number(totalDocs) || 0));
+    if (total <= 1) return 1;
+    const cpu = normalizePositiveInt(globalThis?.navigator?.hardwareConcurrency, 0);
+    let concurrency = DEFAULT_DOC_EXPORT_CONCURRENCY;
+    if (cpu > 0 && cpu <= 3) {
+      concurrency = 2;
+    } else if (cpu > 0 && cpu <= 5) {
+      concurrency = 3;
+    }
+    return Math.max(1, Math.min(4, total, concurrency));
+  }
+
+  getPrepareAssetsConcurrency(totalAssets = 0, maxConcurrency = DEFAULT_MARKDOWN_ASSET_PREPARE_CONCURRENCY) {
+    const total = Math.max(0, Math.floor(Number(totalAssets) || 0));
+    if (total <= 1) return 1;
+    const cpu = normalizePositiveInt(globalThis?.navigator?.hardwareConcurrency, 0);
+    let concurrency = normalizePositiveInt(maxConcurrency, DEFAULT_MARKDOWN_ASSET_PREPARE_CONCURRENCY);
+    if (cpu > 0 && cpu <= 3) {
+      concurrency = Math.min(concurrency, 2);
+    }
+    return Math.max(1, Math.min(concurrency, total));
+  }
+
+  async collectDocExportResults(docs, notebookId, {controller = null, progress = null} = {}) {
+    const t = this.t.bind(this);
+    const list = (Array.isArray(docs) ? docs : []).filter((doc) => isValidDocId(String(doc?.docId || "")));
+    if (list.length === 0) return [];
+    const total = list.length;
+    const concurrency = this.getDocExportConcurrency(total);
+    const perDocAssetConcurrency = concurrency >= 4 ? 2 : 3;
+    const results = new Array(total);
+    const docProgress = new Array(total).fill(0);
+    const reportProgress = (docIndex, ratio) => {
+      if (!progress?.update) return;
+      if (docIndex < 0 || docIndex >= total) return;
+      const clamped = Math.max(0, Math.min(1, Number(ratio) || 0));
+      if (clamped <= docProgress[docIndex]) return;
+      docProgress[docIndex] = clamped;
+      const sum = docProgress.reduce((acc, value) => acc + value, 0);
+      const percent = total > 0 ? (sum / total) * 100 : 0;
+      const completed = docProgress.filter((value) => value >= 1).length;
+      const currentIndex = Math.max(1, Math.min(total, completed + 1));
+      progress.update({
+        text: t("siyuanShare.progress.exportingDoc", {index: currentIndex, total}),
+        percent,
+      });
+    };
+    reportProgress(0, 0.01);
+    const tasks = list.map((doc, index) => async () => {
+      throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+      reportProgress(index, 0.05);
+      const exportRes = await this.exportDocMarkdown(String(doc.docId || ""));
+      throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+      reportProgress(index, 0.35);
+      const prepared = await this.prepareMarkdownAssets(exportRes.content || "", controller, notebookId, {
+        concurrency: perDocAssetConcurrency,
+        onProgress: ({current = 0, total: assetTotal = 0} = {}) => {
+          const totalCount = Math.max(1, Math.floor(Number(assetTotal) || 0));
+          const doneCount = Math.max(0, Math.min(totalCount, Math.floor(Number(current) || 0)));
+          reportProgress(index, 0.35 + (doneCount / totalCount) * 0.6);
+        },
+      });
+      results[index] = {
+        doc,
+        index,
+        exportRes,
+        markdown: prepared.markdown,
+        assets: prepared.assets,
+        failures: prepared.failures,
+      };
+      reportProgress(index, 1);
+    });
+    try {
+      await runTasksWithConcurrency(tasks, concurrency);
+    } catch (err) {
+      if (!isAbortError(err) && controller && !controller.signal?.aborted) {
+        try {
+          controller.abort();
+        } catch {
+          // ignore
+        }
+      }
+      throw err;
+    }
+    return results.filter(Boolean);
+  }
+
   formatUploadDetail(uploaded, total, assetDone = null, assetTotal = null) {
     const hasAssets = Number.isFinite(assetDone) && Number.isFinite(assetTotal) && assetTotal > 0;
     if (hasAssets) {
@@ -4140,6 +4438,332 @@ class SiYuanSharePlugin extends Plugin {
     }
     if (hasAssets) return assetPercent;
     return null;
+  }
+
+  supportsIncrementalShare() {
+    return !!this.remoteFeatures?.incrementalShare;
+  }
+
+  async fetchShareSnapshot(shareId, {controller = null, progress = null} = {}) {
+    if (!shareId) throw new Error(this.t("siyuanShare.error.missingShareId"));
+    return this.remoteRequest(REMOTE_API.shareSnapshot, {
+      method: "POST",
+      body: {shareId},
+      controller,
+      progress,
+      progressText: this.t("siyuanShare.progress.analyzingIncrement"),
+    });
+  }
+
+  collectPayloadDocRows(payload) {
+    if (!payload || typeof payload !== "object") return [];
+    const docs = [];
+    if (Array.isArray(payload.docs) && payload.docs.length > 0) {
+      payload.docs.forEach((doc, index) => {
+        const docId = String(doc?.docId || "").trim();
+        if (!isValidDocId(docId)) return;
+        docs.push({
+          docId,
+          title: String(doc?.title || ""),
+          icon: normalizeDocIconValue(doc?.icon || ""),
+          hPath: String(doc?.hPath || ""),
+          parentId: String(doc?.parentId || ""),
+          sortIndex: Number.isFinite(Number(doc?.sortIndex)) ? Number(doc.sortIndex) : index,
+          sortOrder: Math.max(0, Math.floor(Number(doc?.sortOrder) || index)),
+          markdown: String(doc?.markdown || ""),
+        });
+      });
+      return docs;
+    }
+    const docId = String(payload?.docId || "").trim();
+    if (!isValidDocId(docId)) return [];
+    docs.push({
+      docId,
+      title: String(payload?.title || ""),
+      icon: normalizeDocIconValue(payload?.icon || ""),
+      hPath: String(payload?.hPath || ""),
+      parentId: "",
+      sortIndex: 0,
+      sortOrder: Math.max(0, Math.floor(Number(payload?.sortOrder) || 0)),
+      markdown: String(payload?.markdown || ""),
+    });
+    return docs;
+  }
+
+  async buildIncrementalLocalState(payload, assetEntries, {controller = null, progress = null} = {}) {
+    const t = this.t.bind(this);
+    const docs = this.collectPayloadDocRows(payload);
+    const localDocs = [];
+    for (let i = 0; i < docs.length; i += 1) {
+      throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+      const doc = docs[i];
+      const contentHash = await hashTextSha256(doc.markdown || "");
+      const metaHash = await hashTextSha256(buildDocMetaHashInput(doc));
+      localDocs.push({
+        ...doc,
+        contentHash: normalizeHashHex(contentHash),
+        metaHash: normalizeHashHex(metaHash),
+        size: String(doc.markdown || "").length,
+      });
+      progress?.update?.({
+        text: t("siyuanShare.progress.analyzingIncrement"),
+        detail: t("siyuanShare.progress.analyzingDocs", {index: i + 1, total: docs.length}),
+      });
+    }
+
+    const localAssets = [];
+    const seenPath = new Set();
+    const list = Array.isArray(assetEntries) ? assetEntries : [];
+    for (let i = 0; i < list.length; i += 1) {
+      throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+      const entry = list[i] || {};
+      const asset = entry.asset || entry;
+      const rawPath = normalizeAssetPath(asset?.path || "");
+      if (!rawPath || seenPath.has(rawPath)) continue;
+      seenPath.add(rawPath);
+      const blob = asset?.blob || null;
+      const hash = blob ? await hashBlobSha256(blob) : "";
+      const size = Number(asset?.blob?.size) || 0;
+      localAssets.push({
+        path: rawPath,
+        docId: String(entry?.docId || "").trim(),
+        size: Math.max(0, size),
+        hash: normalizeHashHex(hash),
+      });
+      progress?.update?.({
+        text: t("siyuanShare.progress.analyzingIncrement"),
+        detail: t("siyuanShare.progress.analyzingAssets", {index: i + 1, total: list.length}),
+      });
+    }
+    return {docs: localDocs, assets: localAssets};
+  }
+
+  normalizeSnapshotDocs(rawDocs) {
+    if (!Array.isArray(rawDocs)) return [];
+    const out = [];
+    rawDocs.forEach((doc, index) => {
+      const docId = String(doc?.docId || "").trim();
+      if (!isValidDocId(docId)) return;
+      out.push({
+        docId,
+        contentHash: normalizeHashHex(doc?.contentHash),
+        metaHash: normalizeHashHex(doc?.metaHash),
+        sortOrder: Math.max(0, Math.floor(Number(doc?.sortOrder) || index)),
+      });
+    });
+    return out;
+  }
+
+  normalizeSnapshotAssets(rawAssets) {
+    if (!Array.isArray(rawAssets)) return [];
+    const out = [];
+    rawAssets.forEach((asset) => {
+      const path = normalizeAssetPath(asset?.path || "");
+      if (!path) return;
+      out.push({
+        path,
+        docId: String(asset?.docId || "").trim(),
+        hash: normalizeHashHex(asset?.hash),
+      });
+    });
+    return out;
+  }
+
+  buildIncrementalPlan(localState, remoteSnapshot) {
+    const localDocs = Array.isArray(localState?.docs) ? localState.docs : [];
+    const localAssets = Array.isArray(localState?.assets) ? localState.assets : [];
+    const remoteDocs = this.normalizeSnapshotDocs(remoteSnapshot?.docs);
+    const remoteAssets = this.normalizeSnapshotAssets(remoteSnapshot?.assets);
+    const localDocMap = new Map(localDocs.map((doc) => [String(doc.docId), doc]));
+    const remoteDocMap = new Map(remoteDocs.map((doc) => [String(doc.docId), doc]));
+    const localAssetMap = new Map(localAssets.map((asset) => [String(asset.path), asset]));
+    const remoteAssetMap = new Map(remoteAssets.map((asset) => [String(asset.path), asset]));
+
+    const addedDocIds = [];
+    const updatedDocIds = [];
+    const changedDocIds = new Set();
+    localDocs.forEach((doc) => {
+      const remote = remoteDocMap.get(String(doc.docId));
+      if (!remote) {
+        addedDocIds.push(String(doc.docId));
+        changedDocIds.add(String(doc.docId));
+        return;
+      }
+      if (!remote.contentHash || !remote.metaHash) {
+        updatedDocIds.push(String(doc.docId));
+        changedDocIds.add(String(doc.docId));
+        return;
+      }
+      if (remote.contentHash !== normalizeHashHex(doc.contentHash)) {
+        updatedDocIds.push(String(doc.docId));
+        changedDocIds.add(String(doc.docId));
+        return;
+      }
+      if (remote.metaHash !== normalizeHashHex(doc.metaHash)) {
+        updatedDocIds.push(String(doc.docId));
+        changedDocIds.add(String(doc.docId));
+      }
+    });
+
+    const deletedDocIds = [];
+    remoteDocs.forEach((doc) => {
+      if (!localDocMap.has(String(doc.docId))) {
+        deletedDocIds.push(String(doc.docId));
+      }
+    });
+
+    const addedAssetPaths = [];
+    const updatedAssetPaths = [];
+    const changedAssetPaths = new Set();
+    localAssets.forEach((asset) => {
+      const remote = remoteAssetMap.get(String(asset.path));
+      if (!remote) {
+        addedAssetPaths.push(String(asset.path));
+        changedAssetPaths.add(String(asset.path));
+        return;
+      }
+      if (!remote.hash || !asset.hash || remote.hash !== normalizeHashHex(asset.hash)) {
+        updatedAssetPaths.push(String(asset.path));
+        changedAssetPaths.add(String(asset.path));
+        return;
+      }
+      if (String(remote.docId || "") !== String(asset.docId || "")) {
+        updatedAssetPaths.push(String(asset.path));
+        changedAssetPaths.add(String(asset.path));
+      }
+    });
+
+    const deletedAssetPaths = [];
+    remoteAssets.forEach((asset) => {
+      if (!localAssetMap.has(String(asset.path))) {
+        deletedAssetPaths.push(String(asset.path));
+      }
+    });
+
+    const uploadDocs = localDocs
+      .filter((doc) => changedDocIds.has(String(doc.docId)))
+      .map((doc) => ({
+        docId: String(doc.docId),
+        title: String(doc.title || ""),
+        icon: normalizeDocIconValue(doc.icon || ""),
+        hPath: String(doc.hPath || ""),
+        parentId: String(doc.parentId || ""),
+        sortIndex: Number.isFinite(Number(doc.sortIndex)) ? Number(doc.sortIndex) : 0,
+        sortOrder: Math.max(0, Math.floor(Number(doc.sortOrder) || 0)),
+        markdown: String(doc.markdown || ""),
+        contentHash: normalizeHashHex(doc.contentHash),
+        metaHash: normalizeHashHex(doc.metaHash),
+      }));
+    const uploadAssetPaths = Array.from(changedAssetPaths);
+    const uploadAssetEntries = (Array.isArray(localState?.assetEntries) ? localState.assetEntries : []).filter((entry) => {
+      const asset = entry?.asset || entry;
+      const path = normalizeAssetPath(asset?.path || "");
+      return path && changedAssetPaths.has(path);
+    });
+    const uploadAssets = localAssets
+      .filter((asset) => changedAssetPaths.has(String(asset.path)))
+      .map((asset) => ({
+        path: String(asset.path),
+        size: Math.max(0, Number(asset.size) || 0),
+        docId: String(asset.docId || ""),
+        hash: normalizeHashHex(asset.hash),
+      }));
+
+    return {
+      uploadDocs,
+      uploadAssets,
+      uploadAssetEntries,
+      uploadAssetPaths,
+      deletedDocIds,
+      deletedAssetPaths,
+      summary: {
+        baseDocs: remoteDocs.length,
+        baseAssets: remoteAssets.length,
+        totalDocs: localDocs.length,
+        totalAssets: localAssets.length,
+        addedDocs: addedDocIds.length,
+        updatedDocs: updatedDocIds.length,
+        changedDocs: uploadDocs.length,
+        addedAssets: addedAssetPaths.length,
+        updatedAssets: updatedAssetPaths.length,
+        changedAssets: uploadAssets.length,
+        deletedDocs: deletedDocIds.length,
+        deletedAssets: deletedAssetPaths.length,
+      },
+    };
+  }
+
+  buildFullUploadPlan(localState, {assumeExisting = false} = {}) {
+    const localDocs = Array.isArray(localState?.docs) ? localState.docs : [];
+    const localAssets = Array.isArray(localState?.assets) ? localState.assets : [];
+    const uploadDocs = localDocs.map((doc) => ({
+      docId: String(doc.docId),
+      title: String(doc.title || ""),
+      icon: normalizeDocIconValue(doc.icon || ""),
+      hPath: String(doc.hPath || ""),
+      parentId: String(doc.parentId || ""),
+      sortIndex: Number.isFinite(Number(doc.sortIndex)) ? Number(doc.sortIndex) : 0,
+      sortOrder: Math.max(0, Math.floor(Number(doc.sortOrder) || 0)),
+      markdown: String(doc.markdown || ""),
+      contentHash: normalizeHashHex(doc.contentHash),
+      metaHash: normalizeHashHex(doc.metaHash),
+    }));
+    const uploadAssets = localAssets.map((asset) => ({
+      path: String(asset.path),
+      size: Math.max(0, Number(asset.size) || 0),
+      docId: String(asset.docId || ""),
+      hash: normalizeHashHex(asset.hash),
+    }));
+    const existing = !!assumeExisting;
+    return {
+      uploadDocs,
+      uploadAssets,
+      uploadAssetEntries: Array.isArray(localState?.assetEntries) ? localState.assetEntries : [],
+      uploadAssetPaths: uploadAssets.map((asset) => String(asset.path)),
+      deletedDocIds: [],
+      deletedAssetPaths: [],
+      summary: {
+        baseDocs: existing ? localDocs.length : 0,
+        baseAssets: existing ? localAssets.length : 0,
+        totalDocs: localDocs.length,
+        totalAssets: localAssets.length,
+        addedDocs: existing ? 0 : localDocs.length,
+        updatedDocs: existing ? localDocs.length : 0,
+        changedDocs: localDocs.length,
+        addedAssets: existing ? 0 : localAssets.length,
+        updatedAssets: existing ? localAssets.length : 0,
+        changedAssets: localAssets.length,
+        deletedDocs: 0,
+        deletedAssets: 0,
+      },
+    };
+  }
+
+  formatIncrementSummaryDetail(summary) {
+    const t = this.t.bind(this);
+    const toCount = (value) => Math.max(0, Math.floor(Number(value) || 0));
+    const line = (title, base, added, updated, deleted) =>
+      `${title}: ${t("siyuanShare.progress.incrementStatBase")} ${toCount(base)} | ${t(
+        "siyuanShare.progress.incrementStatAdded",
+      )} ${toCount(added)} | ${t("siyuanShare.progress.incrementStatUpdated")} ${toCount(
+        updated,
+      )} | ${t("siyuanShare.progress.incrementStatDeleted")} ${toCount(deleted)}`;
+    return [
+      line(
+        t("siyuanShare.progress.incrementSectionDocs"),
+        summary?.baseDocs,
+        summary?.addedDocs,
+        summary?.updatedDocs,
+        summary?.deletedDocs,
+      ),
+      line(
+        t("siyuanShare.progress.incrementSectionAssets"),
+        summary?.baseAssets,
+        summary?.addedAssets,
+        summary?.updatedAssets,
+        summary?.deletedAssets,
+      ),
+    ].join("\n");
   }
 
   async uploadAssetsChunked(uploadId, entries, controller, progress, totalBytes = 0) {
@@ -4428,24 +5052,14 @@ class SiYuanSharePlugin extends Plugin {
         const docPayloads = [];
         const assetMap = new Map();
         const usedUploadPaths = new Set();
-        for (const [index, doc] of subtreeDocs.entries()) {
-          throwIfAborted(controller, t("siyuanShare.message.cancelled"));
-          progress.update(
-            t("siyuanShare.progress.exportingDoc", {index: index + 1, total: subtreeDocs.length}),
-          );
-          const exportRes = await this.exportDocMarkdown(doc.docId);
-          throwIfAborted(controller, t("siyuanShare.message.cancelled"));
-          progress.update(
-            t("siyuanShare.progress.preparingAssetsIndex", {
-              index: index + 1,
-              total: subtreeDocs.length,
-            }),
-          );
-          const {markdown, assets, failures} = await this.prepareMarkdownAssets(
-            exportRes.content || "",
-            controller,
-            notebookId,
-          );
+        const docResults = await this.collectDocExportResults(subtreeDocs, notebookId, {controller, progress});
+        for (const result of docResults) {
+          const doc = result.doc;
+          const index = Number(result.index) || 0;
+          const exportRes = result.exportRes || {};
+          const markdown = String(result.markdown || "");
+          const assets = Array.isArray(result.assets) ? result.assets : [];
+          const failures = Array.isArray(result.failures) ? result.failures : [];
           if (markdown) exportedMarkdowns.push(markdown);
           resourceFailures += failures.length;
           const docTitle =
@@ -4511,6 +5125,60 @@ class SiYuanSharePlugin extends Plugin {
       } else if (Number.isFinite(visitorLimit)) {
         payload.visitorLimit = Math.max(0, Math.floor(visitorLimit));
       }
+      let uploadPayload = payload;
+      let uploadAssetEntries = assetEntries;
+      let uploadAssetManifest = assetManifest;
+      const existingShare = this.getShareByDocId(docId);
+      const canUseIncremental = !!(existingShare?.id && this.supportsIncrementalShare());
+      try {
+        progress.update(t("siyuanShare.progress.analyzingIncrement"));
+        const localState = await this.buildIncrementalLocalState(payload, assetEntries, {controller, progress});
+        localState.assetEntries = assetEntries;
+        throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+        const plan = canUseIncremental
+          ? this.buildIncrementalPlan(
+              localState,
+              await this.fetchShareSnapshot(existingShare.id, {controller, progress}),
+            )
+          : this.buildFullUploadPlan(localState, {assumeExisting: !!existingShare?.id});
+        const detail = this.formatIncrementSummaryDetail(plan.summary);
+        let proceed = false;
+        progress.setBarVisible?.(false);
+        try {
+          proceed = await progress.confirm({
+            text: t("siyuanShare.progress.incrementReady"),
+            detail,
+            continueText: t("siyuanShare.action.continueUpload"),
+          });
+        } finally {
+          progress.setBarVisible?.(true);
+        }
+        if (!proceed) {
+          throw createAbortError(t("siyuanShare.message.cancelled"));
+        }
+        if (canUseIncremental) {
+          uploadPayload = {...payload};
+          delete uploadPayload.markdown;
+          delete uploadPayload.hPath;
+          delete uploadPayload.sortOrder;
+          delete uploadPayload.icon;
+          uploadPayload.docs = plan.uploadDocs;
+          uploadPayload.incremental = {
+            enabled: true,
+            deletedDocIds: plan.deletedDocIds,
+            deletedAssetPaths: plan.deletedAssetPaths,
+            ...plan.summary,
+          };
+          uploadAssetEntries = plan.uploadAssetEntries;
+          uploadAssetManifest = plan.uploadAssets;
+        }
+      } catch (err) {
+        if (isAbortError(err) || controller?.signal?.aborted) throw err;
+        console.warn("Incremental analysis failed, fallback to full update.", err);
+        uploadPayload = payload;
+        uploadAssetEntries = assetEntries;
+        uploadAssetManifest = assetManifest;
+      }
       progress.update(t("siyuanShare.progress.uploadingContent"));
       let requestError = null;
       let uploadId = "";
@@ -4518,7 +5186,7 @@ class SiYuanSharePlugin extends Plugin {
       try {
         const init = await this.remoteRequest(REMOTE_API.shareDocInit, {
           method: "POST",
-          body: {metadata: payload, assets: assetManifest},
+          body: {metadata: uploadPayload, assets: uploadAssetManifest},
           progressText: t("siyuanShare.progress.uploadingContent"),
           controller,
           progress,
@@ -4527,11 +5195,11 @@ class SiYuanSharePlugin extends Plugin {
         if (!uploadId) {
           throw new Error(t("siyuanShare.error.missingUploadId"));
         }
-        const totalBytes = assetEntries.reduce(
-          (sum, entry) => sum + (Number(entry.asset?.blob?.size) || 0),
+        const totalBytes = uploadAssetEntries.reduce(
+          (sum, entry) => sum + (Number(entry?.asset?.blob?.size) || 0),
           0,
         );
-        await this.uploadAssetsChunked(uploadId, assetEntries, controller, progress, totalBytes);
+        await this.uploadAssetsChunked(uploadId, uploadAssetEntries, controller, progress, totalBytes);
         await this.remoteRequest(REMOTE_API.shareUploadComplete, {
           method: "POST",
           body: {uploadId},
@@ -4560,6 +5228,8 @@ class SiYuanSharePlugin extends Plugin {
       } catch (err) {
         syncError = err;
       }
+      if (requestError && isAbortError(requestError)) throw requestError;
+      if (syncError && isAbortError(syncError)) throw syncError;
       if (requestError && !allowRequestError) throw requestError;
       const share = this.getShareByDocId(docId);
       if (!share) {
@@ -4622,21 +5292,14 @@ class SiYuanSharePlugin extends Plugin {
       const iconUploadMap = new Map();
       const exportedMarkdowns = [];
       let failureCount = 0;
-      for (const [index, doc] of docs.entries()) {
-        throwIfAborted(controller, t("siyuanShare.message.cancelled"));
-        progress.update(
-          t("siyuanShare.progress.exportingDoc", {index: index + 1, total: docs.length}),
-        );
-        const exportRes = await this.exportDocMarkdown(doc.docId);
-        throwIfAborted(controller, t("siyuanShare.message.cancelled"));
-        progress.update(
-          t("siyuanShare.progress.preparingAssetsIndex", {index: index + 1, total: docs.length}),
-        );
-        const {markdown, assets, failures} = await this.prepareMarkdownAssets(
-          exportRes.content || "",
-          controller,
-          notebookId,
-        );
+      const docResults = await this.collectDocExportResults(docs, notebookId, {controller, progress});
+      for (const result of docResults) {
+        const doc = result.doc;
+        const index = Number(result.index) || 0;
+        const exportRes = result.exportRes || {};
+        const markdown = String(result.markdown || "");
+        const assets = Array.isArray(result.assets) ? result.assets : [];
+        const failures = Array.isArray(result.failures) ? result.failures : [];
         if (markdown) exportedMarkdowns.push(markdown);
         failureCount += failures.length;
         const iconValue = await this.resolveIconUpload(doc?.icon, {
@@ -4697,6 +5360,55 @@ class SiYuanSharePlugin extends Plugin {
         size: Number(asset?.blob?.size) || 0,
         docId,
       }));
+      let uploadPayload = payload;
+      let uploadAssetEntries = assetEntries;
+      let uploadAssetManifest = assetManifest;
+      const existingShare = this.getShareByNotebookId(notebookId);
+      const canUseIncremental = !!(existingShare?.id && this.supportsIncrementalShare());
+      try {
+        progress.update(t("siyuanShare.progress.analyzingIncrement"));
+        const localState = await this.buildIncrementalLocalState(payload, assetEntries, {controller, progress});
+        localState.assetEntries = assetEntries;
+        throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+        const plan = canUseIncremental
+          ? this.buildIncrementalPlan(
+              localState,
+              await this.fetchShareSnapshot(existingShare.id, {controller, progress}),
+            )
+          : this.buildFullUploadPlan(localState, {assumeExisting: !!existingShare?.id});
+        const detail = this.formatIncrementSummaryDetail(plan.summary);
+        let proceed = false;
+        progress.setBarVisible?.(false);
+        try {
+          proceed = await progress.confirm({
+            text: t("siyuanShare.progress.incrementReady"),
+            detail,
+            continueText: t("siyuanShare.action.continueUpload"),
+          });
+        } finally {
+          progress.setBarVisible?.(true);
+        }
+        if (!proceed) {
+          throw createAbortError(t("siyuanShare.message.cancelled"));
+        }
+        if (canUseIncremental) {
+          uploadPayload = {...payload, docs: plan.uploadDocs};
+          uploadPayload.incremental = {
+            enabled: true,
+            deletedDocIds: plan.deletedDocIds,
+            deletedAssetPaths: plan.deletedAssetPaths,
+            ...plan.summary,
+          };
+          uploadAssetEntries = plan.uploadAssetEntries;
+          uploadAssetManifest = plan.uploadAssets;
+        }
+      } catch (err) {
+        if (isAbortError(err) || controller?.signal?.aborted) throw err;
+        console.warn("Incremental analysis failed, fallback to full update.", err);
+        uploadPayload = payload;
+        uploadAssetEntries = assetEntries;
+        uploadAssetManifest = assetManifest;
+      }
       progress.update(t("siyuanShare.progress.uploadingContent"));
       let requestError = null;
       let uploadId = "";
@@ -4704,7 +5416,7 @@ class SiYuanSharePlugin extends Plugin {
       try {
         const init = await this.remoteRequest(REMOTE_API.shareNotebookInit, {
           method: "POST",
-          body: {metadata: payload, assets: assetManifest},
+          body: {metadata: uploadPayload, assets: uploadAssetManifest},
           progressText: t("siyuanShare.progress.uploadingContent"),
           controller,
           progress,
@@ -4713,11 +5425,11 @@ class SiYuanSharePlugin extends Plugin {
         if (!uploadId) {
           throw new Error(t("siyuanShare.error.missingUploadId"));
         }
-        const totalBytes = assetEntries.reduce(
-          (sum, entry) => sum + (Number(entry.asset?.blob?.size) || 0),
+        const totalBytes = uploadAssetEntries.reduce(
+          (sum, entry) => sum + (Number(entry?.asset?.blob?.size) || 0),
           0,
         );
-        await this.uploadAssetsChunked(uploadId, assetEntries, controller, progress, totalBytes);
+        await this.uploadAssetsChunked(uploadId, uploadAssetEntries, controller, progress, totalBytes);
         await this.remoteRequest(REMOTE_API.shareUploadComplete, {
           method: "POST",
           body: {uploadId},
@@ -4746,6 +5458,8 @@ class SiYuanSharePlugin extends Plugin {
       } catch (err) {
         syncError = err;
       }
+      if (requestError && isAbortError(requestError)) throw requestError;
+      if (syncError && isAbortError(syncError)) throw syncError;
       if (requestError && !allowRequestError) throw requestError;
       const share = this.getShareByNotebookId(notebookId);
       if (!share) {
@@ -5413,7 +6127,7 @@ class SiYuanSharePlugin extends Plugin {
       return json.data;
     } catch (err) {
       if (err?.name === "AbortError") {
-        throw new Error(t("siyuanShare.message.cancelled"));
+        throw createAbortError(t("siyuanShare.message.cancelled"));
       }
       throw err;
     } finally {
@@ -5430,7 +6144,7 @@ class SiYuanSharePlugin extends Plugin {
       return null;
     }
     if (this.remoteUser && this.remoteVerifiedAt && nowTs() - this.remoteVerifiedAt < 60000) {
-      return {user: this.remoteUser};
+      return {user: this.remoteUser, limits: this.remoteUploadLimits, features: this.remoteFeatures};
     }
     const data = await this.remoteRequest(REMOTE_API.verify, {
       method: "POST",
@@ -5442,6 +6156,7 @@ class SiYuanSharePlugin extends Plugin {
     });
     this.remoteUser = this.normalizeRemoteUser(data?.user);
     this.remoteUploadLimits = this.normalizeUploadLimits(data?.limits);
+    this.remoteFeatures = this.normalizeRemoteFeatures(data?.features);
     this.remoteVerifiedAt = nowTs();
     await this.persistActiveRemoteStatus();
     this.syncSettingInputs();
@@ -5495,6 +6210,7 @@ class SiYuanSharePlugin extends Plugin {
     this.remoteUser = null;
     this.remoteVerifiedAt = 0;
     this.remoteUploadLimits = null;
+    this.remoteFeatures = null;
     await this.persistActiveRemoteStatus({clear: true});
     this.shares = [];
     if (activeSiteId) {
@@ -5688,9 +6404,26 @@ class SiYuanSharePlugin extends Plugin {
     return {blob, contentType};
   }
 
-  async prepareMarkdownAssets(markdown, controller, notebookId = "") {
+  async prepareMarkdownAssets(markdown, controller, notebookId = "", options = {}) {
     const t = this.t.bind(this);
     const cancelledMsg = t("siyuanShare.error.resourceDownloadCanceled");
+    const onProgress = typeof options?.onProgress === "function" ? options.onProgress : null;
+    const maxConcurrency = normalizePositiveInt(
+      options?.concurrency,
+      DEFAULT_MARKDOWN_ASSET_PREPARE_CONCURRENCY,
+    );
+    const reportProgress = (current, total, stage = "asset") => {
+      if (!onProgress) return;
+      try {
+        onProgress({
+          current: Math.max(0, Math.floor(Number(current) || 0)),
+          total: Math.max(0, Math.floor(Number(total) || 0)),
+          stage: String(stage || "asset"),
+        });
+      } catch {
+        // ignore
+      }
+    };
     let fixed = rewriteAssetLinks(markdown || "");
     const assets = [];
     const failures = [];
@@ -5699,35 +6432,50 @@ class SiYuanSharePlugin extends Plugin {
     const seenPaths = new Set();
     const preloadedAssets = new Map();
 
-    const emojiTokenNames = collectEmojiTokenNames(fixed);
-    if (emojiTokenNames.size > 0) {
+    const emojiTokenNames = Array.from(collectEmojiTokenNames(fixed));
+    if (emojiTokenNames.length > 0) {
       const tokenMap = new Map();
       const resolvedPathMap = new Map();
-      for (const name of emojiTokenNames) {
+      const emojiResults = new Array(emojiTokenNames.length).fill(null);
+      let emojiDone = 0;
+      reportProgress(0, emojiTokenNames.length, "emoji");
+      const emojiTasks = emojiTokenNames.map((name, index) => async () => {
         try {
           throwIfAborted(controller, t("siyuanShare.message.cancelled"));
           const basePath = normalizeEmojiAssetPath(name, true);
-          if (!basePath) continue;
+          if (!basePath) return;
           const asset = await this.fetchEmojiAssetBlob(basePath, controller, notebookId);
           const resolvedPath = normalizeAssetPath(asset?.path || "") || normalizeAssetPath(basePath);
-          if (!resolvedPath) continue;
-          let uploadPath = resolvedPathMap.get(resolvedPath);
-          if (!uploadPath) {
-            uploadPath = sanitizeAssetUploadPath(resolvedPath, usedUploadPaths) || normalizeAssetPath(resolvedPath);
-            if (!uploadPath) continue;
-            resolvedPathMap.set(resolvedPath, uploadPath);
-          }
-          if (!seenPaths.has(uploadPath)) {
-            assets.push({path: uploadPath, blob: asset.blob});
-            seenPaths.add(uploadPath);
-            preloadedAssets.set(uploadPath, asset.blob);
-          }
-          tokenMap.set(name, `![](<${uploadPath}>)`);
+          if (!resolvedPath || !asset?.blob) return;
+          emojiResults[index] = {name, resolvedPath, blob: asset.blob};
         } catch (err) {
-          if (err?.message === cancelledMsg) {
+          if (isAbortError(err) || err?.message === cancelledMsg) {
             throw err;
           }
+          emojiResults[index] = null;
+        } finally {
+          emojiDone += 1;
+          reportProgress(emojiDone, emojiTokenNames.length, "emoji");
         }
+      });
+      await runTasksWithConcurrency(
+        emojiTasks,
+        this.getPrepareAssetsConcurrency(emojiTokenNames.length, maxConcurrency),
+      );
+      for (const item of emojiResults) {
+        if (!item) continue;
+        let uploadPath = resolvedPathMap.get(item.resolvedPath);
+        if (!uploadPath) {
+          uploadPath = sanitizeAssetUploadPath(item.resolvedPath, usedUploadPaths) || normalizeAssetPath(item.resolvedPath);
+          if (!uploadPath) continue;
+          resolvedPathMap.set(item.resolvedPath, uploadPath);
+        }
+        if (!seenPaths.has(uploadPath)) {
+          assets.push({path: uploadPath, blob: item.blob});
+          seenPaths.add(uploadPath);
+          preloadedAssets.set(uploadPath, item.blob);
+        }
+        tokenMap.set(item.name, `![](<${uploadPath}>)`);
       }
       if (tokenMap.size > 0) {
         fixed = replaceCustomEmojiTokens(fixed, tokenMap);
@@ -5736,28 +6484,59 @@ class SiYuanSharePlugin extends Plugin {
 
     fixed = insertAdjacentEmojiImageSpacing(fixed);
     const assetPaths = extractAssetPaths(fixed);
+    const assetPlans = [];
     for (const path of assetPaths) {
       if (seenPaths.has(path)) continue;
       seenPaths.add(path);
+      throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+      const uploadPath = usedUploadPaths.has(path)
+        ? path
+        : sanitizeAssetUploadPath(path, usedUploadPaths) || normalizeAssetPath(path);
+      if (uploadPath && uploadPath !== path) {
+        renameMap.set(path, uploadPath);
+      }
+      assetPlans.push({
+        path,
+        uploadPath: uploadPath || normalizeAssetPath(path) || path,
+      });
+    }
+
+    const assetResults = new Array(assetPlans.length).fill(null);
+    let assetDone = 0;
+    reportProgress(0, assetPlans.length, "asset");
+    const assetTasks = assetPlans.map((plan, index) => async () => {
       try {
         throwIfAborted(controller, t("siyuanShare.message.cancelled"));
-        const uploadPath = usedUploadPaths.has(path)
-          ? path
-          : sanitizeAssetUploadPath(path, usedUploadPaths) || normalizeAssetPath(path);
-        if (uploadPath && uploadPath !== path) {
-          renameMap.set(path, uploadPath);
-        }
-        const blob = preloadedAssets.has(path)
-          ? preloadedAssets.get(path)
-          : (await this.fetchAssetBlob(path, controller, notebookId)).blob;
-        assets.push({path: uploadPath || normalizeAssetPath(path) || path, blob});
+        const blob = preloadedAssets.has(plan.path)
+          ? preloadedAssets.get(plan.path)
+          : (await this.fetchAssetBlob(plan.path, controller, notebookId)).blob;
+        assetResults[index] = {blob, uploadPath: plan.uploadPath, path: plan.path};
       } catch (err) {
-        if (err?.message === cancelledMsg) {
+        if (isAbortError(err) || err?.message === cancelledMsg) {
           throw err;
         }
-        failures.push({path, err});
+        assetResults[index] = {error: err, path: plan.path};
+      } finally {
+        assetDone += 1;
+        reportProgress(assetDone, assetPlans.length, "asset");
       }
+    });
+    await runTasksWithConcurrency(
+      assetTasks,
+      this.getPrepareAssetsConcurrency(assetPlans.length, maxConcurrency),
+    );
+    for (let i = 0; i < assetResults.length; i += 1) {
+      const item = assetResults[i];
+      const plan = assetPlans[i];
+      if (!item || !plan) continue;
+      if (item.error) {
+        failures.push({path: plan.path, err: item.error});
+        continue;
+      }
+      if (!item.blob) continue;
+      assets.push({path: item.uploadPath, blob: item.blob});
     }
+
     if (renameMap.size > 0) {
       for (const [from, to] of renameMap) {
         fixed = replaceAllText(fixed, from, to);

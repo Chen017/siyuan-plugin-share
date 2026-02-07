@@ -182,6 +182,8 @@ function migrate(PDO $pdo): void {
         markdown TEXT NOT NULL,
         sort_order INTEGER NOT NULL DEFAULT 0,
         size_bytes INTEGER NOT NULL DEFAULT 0,
+        content_hash TEXT,
+        meta_hash TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY(share_id) REFERENCES shares(id)
@@ -194,6 +196,7 @@ function migrate(PDO $pdo): void {
         asset_path TEXT NOT NULL,
         file_path TEXT NOT NULL,
         size_bytes INTEGER NOT NULL DEFAULT 0,
+        asset_hash TEXT,
         created_at TEXT NOT NULL,
         UNIQUE(share_id, asset_path),
         FOREIGN KEY(share_id) REFERENCES shares(id)
@@ -213,6 +216,8 @@ function migrate(PDO $pdo): void {
         expires_at INTEGER,
         visitor_limit INTEGER NOT NULL DEFAULT 0,
         asset_manifest TEXT,
+        upload_mode TEXT,
+        patch_manifest TEXT,
         status TEXT NOT NULL DEFAULT "pending",
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
@@ -232,6 +237,8 @@ function migrate(PDO $pdo): void {
         markdown TEXT NOT NULL,
         sort_order INTEGER NOT NULL DEFAULT 0,
         size_bytes INTEGER NOT NULL DEFAULT 0,
+        content_hash TEXT,
+        meta_hash TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     );');
@@ -388,13 +395,20 @@ function migrate(PDO $pdo): void {
     ensure_column($pdo, 'shares', 'comment_notify', 'INTEGER NOT NULL DEFAULT 0');
     ensure_column($pdo, 'share_reports', 'report_email', 'TEXT');
     ensure_column($pdo, 'share_uploads', 'visitor_limit', 'INTEGER NOT NULL DEFAULT 0');
+    ensure_column($pdo, 'share_uploads', 'upload_mode', 'TEXT');
+    ensure_column($pdo, 'share_uploads', 'patch_manifest', 'TEXT');
     ensure_column($pdo, 'share_upload_docs', 'icon', 'TEXT');
+    ensure_column($pdo, 'share_upload_docs', 'content_hash', 'TEXT');
+    ensure_column($pdo, 'share_upload_docs', 'meta_hash', 'TEXT');
     ensure_column($pdo, 'share_docs', 'size_bytes', 'INTEGER NOT NULL DEFAULT 0');
     ensure_column($pdo, 'share_docs', 'icon', 'TEXT');
     ensure_column($pdo, 'share_docs', 'sort_order', 'INTEGER NOT NULL DEFAULT 0');
     ensure_column($pdo, 'share_docs', 'parent_id', 'TEXT');
     ensure_column($pdo, 'share_docs', 'sort_index', 'INTEGER NOT NULL DEFAULT 0');
+    ensure_column($pdo, 'share_docs', 'content_hash', 'TEXT');
+    ensure_column($pdo, 'share_docs', 'meta_hash', 'TEXT');
     ensure_column($pdo, 'share_assets', 'size_bytes', 'INTEGER NOT NULL DEFAULT 0');
+    ensure_column($pdo, 'share_assets', 'asset_hash', 'TEXT');
 
     seed_default_settings($pdo);
     seed_default_admin($pdo);
@@ -4455,19 +4469,110 @@ function handle_asset_uploads(int $shareId, array $entries): int {
         if ($actualSize <= 0 && is_file($targetFile)) {
             $actualSize = (int)filesize($targetFile);
         }
+        $assetHash = '';
+        if (is_file($targetFile)) {
+            $computed = @hash_file('sha256', $targetFile);
+            $assetHash = normalize_hash_hex($computed ?: '');
+        }
         $total += $actualSize;
-        $stmt = $pdo->prepare('INSERT OR REPLACE INTO share_assets (share_id, doc_id, asset_path, file_path, size_bytes, created_at)
-            VALUES (:share_id, :doc_id, :asset_path, :file_path, :size_bytes, :created_at)');
+        $stmt = $pdo->prepare('INSERT OR REPLACE INTO share_assets (share_id, doc_id, asset_path, file_path, size_bytes, asset_hash, created_at)
+            VALUES (:share_id, :doc_id, :asset_path, :file_path, :size_bytes, :asset_hash, :created_at)');
         $stmt->execute([
             ':share_id' => $shareId,
             ':doc_id' => $docId,
             ':asset_path' => $assetPath,
             ':file_path' => 'shares/' . $shareId . '/' . $assetPath,
             ':size_bytes' => $actualSize,
+            ':asset_hash' => $assetHash !== '' ? $assetHash : null,
             ':created_at' => now(),
         ]);
     }
     return $total;
+}
+
+function normalize_hash_hex($value): string {
+    $raw = strtolower(trim((string)$value));
+    if ($raw === '' || !preg_match('/^[a-f0-9]{64}$/', $raw)) {
+        return '';
+    }
+    return $raw;
+}
+
+function normalize_sort_index_value($value): float {
+    if (!is_numeric($value)) {
+        return 0;
+    }
+    $num = (float)$value;
+    if (is_infinite($num) || is_nan($num)) {
+        return 0;
+    }
+    return round($num, 6);
+}
+
+function build_doc_meta_signature(array $row): string {
+    $payload = [
+        'title' => (string)($row['title'] ?? ''),
+        'hPath' => (string)($row['hPath'] ?? $row['hpath'] ?? ''),
+        'parentId' => (string)($row['parentId'] ?? $row['parent_id'] ?? ''),
+        'sortIndex' => normalize_sort_index_value($row['sortIndex'] ?? $row['sort_index'] ?? 0),
+        'sortOrder' => max(0, (int)($row['sortOrder'] ?? $row['sort_order'] ?? 0)),
+        'icon' => normalize_doc_icon_value($row['icon'] ?? ''),
+    ];
+    $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    return is_string($json) ? $json : '';
+}
+
+function compute_doc_content_hash(string $markdown): string {
+    return hash('sha256', $markdown);
+}
+
+function compute_doc_meta_hash(array $row): string {
+    return hash('sha256', build_doc_meta_signature($row));
+}
+
+function normalize_doc_id_list($raw): array {
+    if (!is_array($raw)) {
+        return [];
+    }
+    $out = [];
+    $seen = [];
+    foreach ($raw as $item) {
+        $docId = trim((string)$item);
+        if ($docId === '' || isset($seen[$docId])) {
+            continue;
+        }
+        $seen[$docId] = true;
+        $out[] = $docId;
+    }
+    return $out;
+}
+
+function normalize_asset_path_list($raw): array {
+    if (!is_array($raw)) {
+        return [];
+    }
+    $out = [];
+    $seen = [];
+    foreach ($raw as $item) {
+        $path = sanitize_asset_path((string)$item);
+        if ($path === '' || isset($seen[$path])) {
+            continue;
+        }
+        $seen[$path] = true;
+        $out[] = $path;
+    }
+    return $out;
+}
+
+function normalize_incremental_patch($raw): array {
+    if (!is_array($raw)) {
+        return ['enabled' => false, 'deletedDocIds' => [], 'deletedAssetPaths' => []];
+    }
+    return [
+        'enabled' => !empty($raw['enabled']),
+        'deletedDocIds' => normalize_doc_id_list($raw['deletedDocIds'] ?? []),
+        'deletedAssetPaths' => normalize_asset_path_list($raw['deletedAssetPaths'] ?? []),
+    ];
 }
 
 function normalize_asset_manifest($rawAssets): array {
@@ -4490,10 +4595,12 @@ function normalize_asset_manifest($rawAssets): array {
             $size = 0;
         }
         $docId = isset($item['docId']) ? trim((string)($item['docId'])) : null;
+        $hash = normalize_hash_hex($item['hash'] ?? '');
         $assets[] = [
             'path' => $path,
             'size' => $size,
             'docId' => $docId,
+            'hash' => $hash,
         ];
     }
     return $assets;
@@ -4617,6 +4724,8 @@ function handle_api(string $path): void {
         ], 'limits' => [
             'minChunkSize' => $minChunk,
             'maxChunkSize' => $maxChunk,
+        ], 'features' => [
+            'incrementalShare' => true,
         ]]);
     }
 
@@ -4648,6 +4757,97 @@ function handle_api(string $path): void {
             ];
         }
         api_response(200, ['shares' => $shares]);
+    }
+
+    if ($path === '/api/v1/shares/snapshot' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        $payload = parse_json_body();
+        $shareId = (int)($payload['shareId'] ?? 0);
+        if ($shareId <= 0) {
+            api_response(400, null, 'Missing share id');
+        }
+        $stmt = $pdo->prepare('SELECT * FROM shares WHERE id = :id AND user_id = :uid AND deleted_at IS NULL LIMIT 1');
+        $stmt->execute([
+            ':id' => $shareId,
+            ':uid' => $user['id'],
+        ]);
+        $share = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$share) {
+            api_response(404, null, 'Share not found');
+        }
+
+        $docs = [];
+        $docStmt = $pdo->prepare('SELECT id, doc_id, title, icon, hpath, parent_id, sort_index, sort_order, markdown, size_bytes, content_hash, meta_hash
+            FROM share_docs WHERE share_id = :sid ORDER BY sort_order ASC, id ASC');
+        $docStmt->execute([':sid' => $shareId]);
+        $docRows = $docStmt->fetchAll(PDO::FETCH_ASSOC);
+        $docHashUpdate = $pdo->prepare('UPDATE share_docs SET content_hash = :content_hash, meta_hash = :meta_hash WHERE id = :id');
+        foreach ($docRows as $row) {
+            $contentHash = normalize_hash_hex($row['content_hash'] ?? '');
+            $metaHash = normalize_hash_hex($row['meta_hash'] ?? '');
+            if ($contentHash === '') {
+                $contentHash = compute_doc_content_hash((string)($row['markdown'] ?? ''));
+            }
+            if ($metaHash === '') {
+                $metaHash = compute_doc_meta_hash($row);
+            }
+            if (($row['content_hash'] ?? '') !== $contentHash || ($row['meta_hash'] ?? '') !== $metaHash) {
+                $docHashUpdate->execute([
+                    ':content_hash' => $contentHash,
+                    ':meta_hash' => $metaHash,
+                    ':id' => (int)($row['id'] ?? 0),
+                ]);
+            }
+            $docs[] = [
+                'docId' => (string)($row['doc_id'] ?? ''),
+                'sortOrder' => max(0, (int)($row['sort_order'] ?? 0)),
+                'contentHash' => $contentHash,
+                'metaHash' => $metaHash,
+            ];
+        }
+
+        $assets = [];
+        $assetStmt = $pdo->prepare('SELECT id, asset_path, doc_id, file_path, size_bytes, asset_hash FROM share_assets
+            WHERE share_id = :sid AND asset_path NOT LIKE :prefix ORDER BY id ASC');
+        $assetStmt->execute([
+            ':sid' => $shareId,
+            ':prefix' => comment_asset_prefix() . '%',
+        ]);
+        $assetRows = $assetStmt->fetchAll(PDO::FETCH_ASSOC);
+        $assetHashUpdate = $pdo->prepare('UPDATE share_assets SET asset_hash = :asset_hash WHERE id = :id');
+        foreach ($assetRows as $row) {
+            $assetHash = normalize_hash_hex($row['asset_hash'] ?? '');
+            if ($assetHash === '') {
+                $filePath = (string)($row['file_path'] ?? '');
+                $fullPath = $config['uploads_dir'] . '/' . ltrim($filePath, '/');
+                if ($filePath !== '' && is_file($fullPath)) {
+                    $computed = @hash_file('sha256', $fullPath);
+                    $assetHash = normalize_hash_hex($computed ?: '');
+                }
+            }
+            if ($assetHash !== '' && ($row['asset_hash'] ?? '') !== $assetHash) {
+                $assetHashUpdate->execute([
+                    ':asset_hash' => $assetHash,
+                    ':id' => (int)($row['id'] ?? 0),
+                ]);
+            }
+            $assets[] = [
+                'path' => (string)($row['asset_path'] ?? ''),
+                'docId' => (string)($row['doc_id'] ?? ''),
+                'size' => max(0, (int)($row['size_bytes'] ?? 0)),
+                'hash' => $assetHash,
+            ];
+        }
+
+        api_response(200, [
+            'share' => [
+                'id' => (int)($share['id'] ?? 0),
+                'type' => (string)($share['type'] ?? ''),
+                'docId' => (string)($share['doc_id'] ?? ''),
+                'notebookId' => (string)($share['notebook_id'] ?? ''),
+            ],
+            'docs' => $docs,
+            'assets' => $assets,
+        ]);
     }
 
     if ($path === '/api/v1/shares/delete') {
@@ -4762,7 +4962,12 @@ function handle_api(string $path): void {
         $clearVisitorLimit = !empty($meta['clearVisitorLimit']);
         $docs = $meta['docs'] ?? [];
         $hasDocs = is_array($docs) && count($docs) > 0;
-        if ($docId === '' || (!$hasDocs && $markdown === '')) {
+        $incrementalPatch = normalize_incremental_patch($meta['incremental'] ?? []);
+        $stmt = $pdo->prepare('SELECT * FROM shares WHERE user_id = :uid AND type = "doc" AND doc_id = :doc_id ORDER BY id DESC LIMIT 1');
+        $stmt->execute([':uid' => $user['id'], ':doc_id' => $docId]);
+        $existing = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        $useIncremental = !empty($incrementalPatch['enabled']) && !!$existing;
+        if ($docId === '' || (!$hasDocs && $markdown === '' && !$useIncremental)) {
             api_response(400, null, 'Missing document content');
         }
         $bannedWords = get_banned_words();
@@ -4808,6 +5013,21 @@ function handle_api(string $path): void {
                     continue;
                 }
                 $size = strlen($rowMarkdown);
+                $rowContentHash = normalize_hash_hex($doc['contentHash'] ?? '');
+                if ($rowContentHash === '') {
+                    $rowContentHash = compute_doc_content_hash($rowMarkdown);
+                }
+                $rowMetaHash = normalize_hash_hex($doc['metaHash'] ?? '');
+                if ($rowMetaHash === '') {
+                    $rowMetaHash = compute_doc_meta_hash([
+                        'title' => $rowTitle ?: $rowDocId,
+                        'icon' => $rowIcon,
+                        'hPath' => $rowHpath,
+                        'parentId' => $rowParent,
+                        'sortIndex' => $rowSortIndex,
+                        'sortOrder' => $rowSort,
+                    ]);
+                }
                 $docSizeTotal += $size;
                 $docRows[] = [
                     'docId' => $rowDocId,
@@ -4819,14 +5039,31 @@ function handle_api(string $path): void {
                     'markdown' => $rowMarkdown,
                     'sortOrder' => $rowSort,
                     'size' => $size,
+                    'contentHash' => $rowContentHash,
+                    'metaHash' => $rowMetaHash,
                 ];
             }
-            if (empty($docRows)) {
+            if (empty($docRows) && !$useIncremental) {
                 api_response(400, null, 'Missing document content');
             }
-        } else {
+        } elseif ($markdown !== '') {
             $docSizeTotal = strlen($markdown);
             $docIcon = trim((string)($meta['icon'] ?? ''));
+            $docContentHash = normalize_hash_hex($meta['contentHash'] ?? '');
+            if ($docContentHash === '') {
+                $docContentHash = compute_doc_content_hash($markdown);
+            }
+            $docMetaHash = normalize_hash_hex($meta['metaHash'] ?? '');
+            if ($docMetaHash === '') {
+                $docMetaHash = compute_doc_meta_hash([
+                    'title' => $title ?: $docId,
+                    'icon' => $docIcon,
+                    'hPath' => $hPath,
+                    'parentId' => '',
+                    'sortIndex' => 0,
+                    'sortOrder' => $sortOrder,
+                ]);
+            }
             $docRows[] = [
                 'docId' => $docId,
                 'title' => $title ?: $docId,
@@ -4837,12 +5074,14 @@ function handle_api(string $path): void {
                 'markdown' => $markdown,
                 'sortOrder' => $sortOrder,
                 'size' => $docSizeTotal,
+                'contentHash' => $docContentHash,
+                'metaHash' => $docMetaHash,
             ];
         }
+        if (empty($docRows) && !$useIncremental) {
+            api_response(400, null, 'Missing document content');
+        }
         $baseShareSize = $docSizeTotal + $assetSize;
-        $stmt = $pdo->prepare('SELECT * FROM shares WHERE user_id = :uid AND type = "doc" AND doc_id = :doc_id ORDER BY id DESC LIMIT 1');
-        $stmt->execute([':uid' => $user['id'], ':doc_id' => $docId]);
-        $existing = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
         $existingSize = $existing ? (int)($existing['size_bytes'] ?? 0) : 0;
         $commentSize = $existing ? share_comment_size((int)$existing['id']) : 0;
         $commentAssetSize = $existing ? share_comment_asset_size((int)$existing['id']) : 0;
@@ -4850,7 +5089,7 @@ function handle_api(string $path): void {
         $used = recalculate_user_storage((int)$user['id']);
         $limit = get_user_limit_bytes($user);
         $usedWithout = max(0, $used - $existingSize);
-        if ($limit > 0 && ($usedWithout + $newShareSize) > $limit) {
+        if (!$useIncremental && $limit > 0 && ($usedWithout + $newShareSize) > $limit) {
             api_response(413, null, 'Storage limit reached');
         }
 
@@ -4905,9 +5144,16 @@ function handle_api(string $path): void {
         }
 
         $finalTitle = $title ?: ($existing['title'] ?? $docId);
+        $uploadMode = $useIncremental ? 'incremental' : 'full';
+        $patchManifest = json_encode(
+            $useIncremental
+                ? $incrementalPatch
+                : ['enabled' => false, 'deletedDocIds' => [], 'deletedAssetPaths' => []],
+            JSON_UNESCAPED_SLASHES
+        );
         $uploadId = generate_upload_id();
-        $stmt = $pdo->prepare('INSERT INTO share_uploads (upload_id, user_id, share_id, type, doc_id, slug, title, password_hash, expires_at, visitor_limit, asset_manifest, status, created_at, updated_at)
-            VALUES (:upload_id, :user_id, :share_id, "doc", :doc_id, :slug, :title, :password_hash, :expires_at, :visitor_limit, :asset_manifest, "pending", :created_at, :updated_at)');
+        $stmt = $pdo->prepare('INSERT INTO share_uploads (upload_id, user_id, share_id, type, doc_id, slug, title, password_hash, expires_at, visitor_limit, asset_manifest, upload_mode, patch_manifest, status, created_at, updated_at)
+            VALUES (:upload_id, :user_id, :share_id, "doc", :doc_id, :slug, :title, :password_hash, :expires_at, :visitor_limit, :asset_manifest, :upload_mode, :patch_manifest, "pending", :created_at, :updated_at)');
         $stmt->execute([
             ':upload_id' => $uploadId,
             ':user_id' => $user['id'],
@@ -4919,11 +5165,13 @@ function handle_api(string $path): void {
             ':expires_at' => $expiresValue,
             ':visitor_limit' => $visitorValue,
             ':asset_manifest' => json_encode($assets, JSON_UNESCAPED_SLASHES),
+            ':upload_mode' => $uploadMode,
+            ':patch_manifest' => $patchManifest,
             ':created_at' => now(),
             ':updated_at' => now(),
         ]);
-        $insertDoc = $pdo->prepare('INSERT INTO share_upload_docs (upload_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, created_at, updated_at)
-            VALUES (:upload_id, :doc_id, :title, :icon, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :created_at, :updated_at)');
+        $insertDoc = $pdo->prepare('INSERT INTO share_upload_docs (upload_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, content_hash, meta_hash, created_at, updated_at)
+            VALUES (:upload_id, :doc_id, :title, :icon, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :content_hash, :meta_hash, :created_at, :updated_at)');
         foreach ($docRows as $row) {
             $insertDoc->execute([
                 ':upload_id' => $uploadId,
@@ -4936,6 +5184,8 @@ function handle_api(string $path): void {
                 ':markdown' => $row['markdown'],
                 ':sort_order' => $row['sortOrder'],
                 ':size_bytes' => $row['size'],
+                ':content_hash' => normalize_hash_hex($row['contentHash'] ?? ''),
+                ':meta_hash' => normalize_hash_hex($row['metaHash'] ?? ''),
                 ':created_at' => now(),
                 ':updated_at' => now(),
             ]);
@@ -4958,7 +5208,12 @@ function handle_api(string $path): void {
         $clearExpires = !empty($meta['clearExpires']);
         $visitorLimit = parse_visitor_limit($meta['visitorLimit'] ?? null);
         $clearVisitorLimit = !empty($meta['clearVisitorLimit']);
-        if ($notebookId === '' || !is_array($docs) || count($docs) === 0) {
+        $incrementalPatch = normalize_incremental_patch($meta['incremental'] ?? []);
+        $stmt = $pdo->prepare('SELECT * FROM shares WHERE user_id = :uid AND type = "notebook" AND notebook_id = :nid ORDER BY id DESC LIMIT 1');
+        $stmt->execute([':uid' => $user['id'], ':nid' => $notebookId]);
+        $existing = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        $useIncremental = !empty($incrementalPatch['enabled']) && !!$existing;
+        if ($notebookId === '' || !is_array($docs) || (count($docs) === 0 && !$useIncremental)) {
             api_response(400, null, 'Missing notebook or documents');
         }
         $bannedWords = get_banned_words();
@@ -4996,6 +5251,21 @@ function handle_api(string $path): void {
                 continue;
             }
             $size = strlen($docMarkdown);
+            $docContentHash = normalize_hash_hex($doc['contentHash'] ?? '');
+            if ($docContentHash === '') {
+                $docContentHash = compute_doc_content_hash($docMarkdown);
+            }
+            $docMetaHash = normalize_hash_hex($doc['metaHash'] ?? '');
+            if ($docMetaHash === '') {
+                $docMetaHash = compute_doc_meta_hash([
+                    'title' => $docTitle ?: $docId,
+                    'icon' => $docIcon,
+                    'hPath' => $docHpath,
+                    'parentId' => $docParent,
+                    'sortIndex' => $docSortIndex,
+                    'sortOrder' => $docSort,
+                ]);
+            }
             $docSizeTotal += $size;
             $docRows[] = [
                 'docId' => $docId,
@@ -5007,15 +5277,14 @@ function handle_api(string $path): void {
                 'markdown' => $docMarkdown,
                 'sortOrder' => $docSort,
                 'size' => $size,
+                'contentHash' => $docContentHash,
+                'metaHash' => $docMetaHash,
             ];
         }
-        if (empty($docRows)) {
+        if (empty($docRows) && !$useIncremental) {
             api_response(400, null, 'No documents to share');
         }
         $baseShareSize = $docSizeTotal + $assetSize;
-        $stmt = $pdo->prepare('SELECT * FROM shares WHERE user_id = :uid AND type = "notebook" AND notebook_id = :nid ORDER BY id DESC LIMIT 1');
-        $stmt->execute([':uid' => $user['id'], ':nid' => $notebookId]);
-        $existing = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
         $existingSize = $existing ? (int)($existing['size_bytes'] ?? 0) : 0;
         $commentSize = $existing ? share_comment_size((int)$existing['id']) : 0;
         $commentAssetSize = $existing ? share_comment_asset_size((int)$existing['id']) : 0;
@@ -5023,7 +5292,7 @@ function handle_api(string $path): void {
         $used = recalculate_user_storage((int)$user['id']);
         $limit = get_user_limit_bytes($user);
         $usedWithout = max(0, $used - $existingSize);
-        if ($limit > 0 && ($usedWithout + $newShareSize) > $limit) {
+        if (!$useIncremental && $limit > 0 && ($usedWithout + $newShareSize) > $limit) {
             api_response(413, null, 'Storage limit reached');
         }
 
@@ -5078,9 +5347,16 @@ function handle_api(string $path): void {
         }
 
         $finalTitle = $title ?: ($existing['title'] ?? $notebookId);
+        $uploadMode = $useIncremental ? 'incremental' : 'full';
+        $patchManifest = json_encode(
+            $useIncremental
+                ? $incrementalPatch
+                : ['enabled' => false, 'deletedDocIds' => [], 'deletedAssetPaths' => []],
+            JSON_UNESCAPED_SLASHES
+        );
         $uploadId = generate_upload_id();
-        $stmt = $pdo->prepare('INSERT INTO share_uploads (upload_id, user_id, share_id, type, notebook_id, slug, title, password_hash, expires_at, visitor_limit, asset_manifest, status, created_at, updated_at)
-            VALUES (:upload_id, :user_id, :share_id, "notebook", :notebook_id, :slug, :title, :password_hash, :expires_at, :visitor_limit, :asset_manifest, "pending", :created_at, :updated_at)');
+        $stmt = $pdo->prepare('INSERT INTO share_uploads (upload_id, user_id, share_id, type, notebook_id, slug, title, password_hash, expires_at, visitor_limit, asset_manifest, upload_mode, patch_manifest, status, created_at, updated_at)
+            VALUES (:upload_id, :user_id, :share_id, "notebook", :notebook_id, :slug, :title, :password_hash, :expires_at, :visitor_limit, :asset_manifest, :upload_mode, :patch_manifest, "pending", :created_at, :updated_at)');
         $stmt->execute([
             ':upload_id' => $uploadId,
             ':user_id' => $user['id'],
@@ -5092,11 +5368,13 @@ function handle_api(string $path): void {
             ':expires_at' => $expiresValue,
             ':visitor_limit' => $visitorValue,
             ':asset_manifest' => json_encode($assets, JSON_UNESCAPED_SLASHES),
+            ':upload_mode' => $uploadMode,
+            ':patch_manifest' => $patchManifest,
             ':created_at' => now(),
             ':updated_at' => now(),
         ]);
-        $stmt = $pdo->prepare('INSERT INTO share_upload_docs (upload_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, created_at, updated_at)
-            VALUES (:upload_id, :doc_id, :title, :icon, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :created_at, :updated_at)');
+        $stmt = $pdo->prepare('INSERT INTO share_upload_docs (upload_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, content_hash, meta_hash, created_at, updated_at)
+            VALUES (:upload_id, :doc_id, :title, :icon, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :content_hash, :meta_hash, :created_at, :updated_at)');
         foreach ($docRows as $row) {
             $stmt->execute([
                 ':upload_id' => $uploadId,
@@ -5109,6 +5387,8 @@ function handle_api(string $path): void {
                 ':markdown' => $row['markdown'],
                 ':sort_order' => $row['sortOrder'],
                 ':size_bytes' => $row['size'],
+                ':content_hash' => normalize_hash_hex($row['contentHash'] ?? ''),
+                ':meta_hash' => normalize_hash_hex($row['metaHash'] ?? ''),
                 ':created_at' => now(),
                 ':updated_at' => now(),
             ]);
@@ -5240,13 +5520,47 @@ function handle_api(string $path): void {
 
         $docStmt = $pdo->prepare('SELECT * FROM share_upload_docs WHERE upload_id = :upload_id ORDER BY id ASC');
         $docStmt->execute([':upload_id' => $uploadId]);
-        $docRows = $docStmt->fetchAll(PDO::FETCH_ASSOC);
-        if (empty($docRows)) {
-            api_response(400, null, 'Missing documents');
-        }
+        $docRowsRaw = $docStmt->fetchAll(PDO::FETCH_ASSOC);
+        $docRows = [];
         $docSizeTotal = 0;
-        foreach ($docRows as $row) {
-            $docSizeTotal += (int)($row['size_bytes'] ?? 0);
+        foreach ($docRowsRaw as $row) {
+            $docMarkdown = (string)($row['markdown'] ?? '');
+            $docTitle = (string)($row['title'] ?? '');
+            $docIcon = (string)($row['icon'] ?? '');
+            $docHpath = (string)($row['hpath'] ?? '');
+            $docParent = (string)($row['parent_id'] ?? '');
+            $docSortIndex = normalize_sort_index_value($row['sort_index'] ?? 0);
+            $docSortOrder = max(0, (int)($row['sort_order'] ?? 0));
+            $docContentHash = normalize_hash_hex($row['content_hash'] ?? '');
+            if ($docContentHash === '') {
+                $docContentHash = compute_doc_content_hash($docMarkdown);
+            }
+            $docMetaHash = normalize_hash_hex($row['meta_hash'] ?? '');
+            if ($docMetaHash === '') {
+                $docMetaHash = compute_doc_meta_hash([
+                    'title' => $docTitle,
+                    'icon' => $docIcon,
+                    'hPath' => $docHpath,
+                    'parentId' => $docParent,
+                    'sortIndex' => $docSortIndex,
+                    'sortOrder' => $docSortOrder,
+                ]);
+            }
+            $rowSize = (int)($row['size_bytes'] ?? strlen($docMarkdown));
+            $docRows[] = [
+                'doc_id' => (string)($row['doc_id'] ?? ''),
+                'title' => $docTitle,
+                'icon' => $docIcon,
+                'hpath' => $docHpath,
+                'parent_id' => $docParent !== '' ? $docParent : null,
+                'sort_index' => $docSortIndex,
+                'markdown' => $docMarkdown,
+                'sort_order' => $docSortOrder,
+                'size_bytes' => $rowSize,
+                'content_hash' => $docContentHash,
+                'meta_hash' => $docMetaHash,
+            ];
+            $docSizeTotal += $rowSize;
         }
 
         $manifest = json_decode((string)($upload['asset_manifest'] ?? ''), true);
@@ -5265,10 +5579,16 @@ function handle_api(string $path): void {
             }
             $size = (int)filesize($full);
             $assetSizeTotal += $size;
+            $assetHash = normalize_hash_hex($item['hash'] ?? '');
+            if ($assetHash === '') {
+                $computed = @hash_file('sha256', $full);
+                $assetHash = normalize_hash_hex($computed ?: '');
+            }
             $manifestEntries[] = [
                 'path' => $path,
                 'docId' => isset($item['docId']) ? trim((string)$item['docId']) : null,
                 'size' => $size,
+                'hash' => $assetHash,
             ];
         }
 
@@ -5286,16 +5606,110 @@ function handle_api(string $path): void {
             }
         }
 
-            $baseShareSize = $docSizeTotal + $assetSizeTotal;
-            $commentSize = share_comment_size($shareId);
-            $commentAssetSize = share_comment_asset_size($shareId);
-            $newShareSize = $baseShareSize + $commentSize + $commentAssetSize;
+        $uploadMode = strtolower(trim((string)($upload['upload_mode'] ?? '')));
+        $uploadMode = $uploadMode === 'incremental' ? 'incremental' : 'full';
+        if ($uploadMode === 'incremental' && !$share) {
+            $uploadMode = 'full';
+        }
+        if ($uploadMode === 'full' && empty($docRows)) {
+            api_response(400, null, 'Missing documents');
+        }
+        $patchManifest = normalize_incremental_patch(json_decode((string)($upload['patch_manifest'] ?? ''), true));
+        $changedDocSet = [];
+        foreach ($docRows as $row) {
+            $docKey = trim((string)($row['doc_id'] ?? ''));
+            if ($docKey !== '') {
+                $changedDocSet[$docKey] = true;
+            }
+        }
+        $changedAssetSet = [];
+        foreach ($manifestEntries as $entry) {
+            $assetKey = sanitize_asset_path((string)($entry['path'] ?? ''));
+            if ($assetKey !== '') {
+                $changedAssetSet[$assetKey] = true;
+            }
+        }
+        $deletedDocIds = [];
+        foreach (($patchManifest['deletedDocIds'] ?? []) as $docKey) {
+            $docKey = trim((string)$docKey);
+            if ($docKey === '' || isset($changedDocSet[$docKey])) {
+                continue;
+            }
+            $deletedDocIds[] = $docKey;
+        }
+        $deletedAssetPaths = [];
+        foreach (($patchManifest['deletedAssetPaths'] ?? []) as $assetPath) {
+            $assetPath = sanitize_asset_path((string)$assetPath);
+            if ($assetPath === '' || str_starts_with($assetPath, comment_asset_prefix()) || isset($changedAssetSet[$assetPath])) {
+                continue;
+            }
+            $deletedAssetPaths[] = $assetPath;
+        }
+
+        $baseShareSize = $docSizeTotal + $assetSizeTotal;
+        $commentSize = share_comment_size($shareId);
+        $commentAssetSize = share_comment_asset_size($shareId);
+        $newShareSize = $baseShareSize + $commentSize + $commentAssetSize;
         $existingSize = $share ? (int)($share['size_bytes'] ?? 0) : 0;
         $used = recalculate_user_storage((int)$user['id']);
         $limit = get_user_limit_bytes($user);
         $usedWithout = max(0, $used - $existingSize);
-        if ($limit > 0 && ($usedWithout + $newShareSize) > $limit) {
-            api_response(413, null, 'Storage limit reached');
+        if ($uploadMode === 'full') {
+            if ($limit > 0 && ($usedWithout + $newShareSize) > $limit) {
+                api_response(413, null, 'Storage limit reached');
+            }
+        } elseif ($share) {
+            $oldDocSizes = [];
+            $stmt = $pdo->prepare('SELECT doc_id, size_bytes FROM share_docs WHERE share_id = :sid');
+            $stmt->execute([':sid' => (int)$share['id']]);
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $oldDocSizes[(string)($row['doc_id'] ?? '')] = (int)($row['size_bytes'] ?? 0);
+            }
+            $oldAssetSizes = [];
+            $stmt = $pdo->prepare('SELECT asset_path, size_bytes FROM share_assets WHERE share_id = :sid AND asset_path NOT LIKE :prefix');
+            $stmt->execute([
+                ':sid' => (int)$share['id'],
+                ':prefix' => comment_asset_prefix() . '%',
+            ]);
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $oldAssetSizes[(string)($row['asset_path'] ?? '')] = (int)($row['size_bytes'] ?? 0);
+            }
+            $docDelta = 0;
+            foreach ($docRows as $row) {
+                $key = (string)($row['doc_id'] ?? '');
+                if ($key === '') {
+                    continue;
+                }
+                $docDelta += (int)($row['size_bytes'] ?? 0);
+                if (isset($oldDocSizes[$key])) {
+                    $docDelta -= (int)$oldDocSizes[$key];
+                }
+            }
+            foreach ($deletedDocIds as $key) {
+                if (isset($oldDocSizes[$key])) {
+                    $docDelta -= (int)$oldDocSizes[$key];
+                }
+            }
+            $assetDelta = 0;
+            foreach ($manifestEntries as $entry) {
+                $key = (string)($entry['path'] ?? '');
+                if ($key === '') {
+                    continue;
+                }
+                $assetDelta += (int)($entry['size'] ?? 0);
+                if (isset($oldAssetSizes[$key])) {
+                    $assetDelta -= (int)$oldAssetSizes[$key];
+                }
+            }
+            foreach ($deletedAssetPaths as $key) {
+                if (isset($oldAssetSizes[$key])) {
+                    $assetDelta -= (int)$oldAssetSizes[$key];
+                }
+            }
+            $projectedSize = max(0, $existingSize + $docDelta + $assetDelta);
+            if ($limit > 0 && ($usedWithout + $projectedSize) > $limit) {
+                api_response(413, null, 'Storage limit reached');
+            }
         }
 
         $slug = sanitize_slug((string)($upload['slug'] ?? ''));
@@ -5339,9 +5753,11 @@ function handle_api(string $path): void {
                     ':id' => $share['id'],
                 ]);
                 $shareId = (int)$share['id'];
-                purge_share_assets($shareId, true);
-                purge_share_chunks($shareId);
-                $pdo->prepare('DELETE FROM share_docs WHERE share_id = :share_id')->execute([':share_id' => $shareId]);
+                if ($uploadMode === 'full') {
+                    purge_share_assets($shareId, true);
+                    purge_share_chunks($shareId);
+                    $pdo->prepare('DELETE FROM share_docs WHERE share_id = :share_id')->execute([':share_id' => $shareId]);
+                }
             } else {
                 $shareId = allocate_share_id($pdo);
                 if ($shareId > 0) {
@@ -5381,53 +5797,147 @@ function handle_api(string $path): void {
                 }
             }
 
-            $insertDoc = $pdo->prepare('INSERT INTO share_docs (share_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, created_at, updated_at)
-                VALUES (:share_id, :doc_id, :title, :icon, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :created_at, :updated_at)');
-            foreach ($docRows as $row) {
-                $insertDoc->execute([
-                    ':share_id' => $shareId,
-                    ':doc_id' => $row['doc_id'],
-                    ':title' => $row['title'],
-                    ':icon' => isset($row['icon']) && trim((string)$row['icon']) !== '' ? $row['icon'] : null,
-                    ':hpath' => $row['hpath'],
-                    ':parent_id' => $row['parent_id'] ?? null,
-                    ':sort_index' => $row['sort_index'] ?? 0,
-                    ':markdown' => $row['markdown'],
-                    ':sort_order' => $row['sort_order'] ?? 0,
-                    ':size_bytes' => $row['size_bytes'] ?? 0,
-                    ':created_at' => now(),
-                    ':updated_at' => now(),
-                ]);
-            }
-
             $targetDir = $config['uploads_dir'] . '/shares/' . $shareId;
-            if (is_dir($stagingDir)) {
-                move_dir($stagingDir, $targetDir);
-            } else {
-                ensure_dir($targetDir);
-            }
-
-            if (!empty($manifestEntries)) {
-                $assetStmt = $pdo->prepare('INSERT OR REPLACE INTO share_assets (share_id, doc_id, asset_path, file_path, size_bytes, created_at)
-                    VALUES (:share_id, :doc_id, :asset_path, :file_path, :size_bytes, :created_at)');
-                foreach ($manifestEntries as $entry) {
-                    $assetStmt->execute([
+            ensure_dir($targetDir);
+            if ($uploadMode === 'full') {
+                $insertDoc = $pdo->prepare('INSERT INTO share_docs (share_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, content_hash, meta_hash, created_at, updated_at)
+                    VALUES (:share_id, :doc_id, :title, :icon, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :content_hash, :meta_hash, :created_at, :updated_at)');
+                foreach ($docRows as $row) {
+                    $insertDoc->execute([
                         ':share_id' => $shareId,
-                        ':doc_id' => $entry['docId'] !== '' ? $entry['docId'] : null,
-                        ':asset_path' => $entry['path'],
-                        ':file_path' => 'shares/' . $shareId . '/' . $entry['path'],
-                        ':size_bytes' => $entry['size'],
+                        ':doc_id' => $row['doc_id'],
+                        ':title' => $row['title'],
+                        ':icon' => isset($row['icon']) && trim((string)$row['icon']) !== '' ? $row['icon'] : null,
+                        ':hpath' => $row['hpath'],
+                        ':parent_id' => $row['parent_id'] ?? null,
+                        ':sort_index' => $row['sort_index'] ?? 0,
+                        ':markdown' => $row['markdown'],
+                        ':sort_order' => $row['sort_order'] ?? 0,
+                        ':size_bytes' => $row['size_bytes'] ?? 0,
+                        ':content_hash' => normalize_hash_hex($row['content_hash'] ?? ''),
+                        ':meta_hash' => normalize_hash_hex($row['meta_hash'] ?? ''),
                         ':created_at' => now(),
+                        ':updated_at' => now(),
                     ]);
                 }
-            }
+                if (is_dir($stagingDir)) {
+                    move_dir($stagingDir, $targetDir);
+                }
+                if (!empty($manifestEntries)) {
+                    $assetStmt = $pdo->prepare('INSERT OR REPLACE INTO share_assets (share_id, doc_id, asset_path, file_path, size_bytes, asset_hash, created_at)
+                        VALUES (:share_id, :doc_id, :asset_path, :file_path, :size_bytes, :asset_hash, :created_at)');
+                    foreach ($manifestEntries as $entry) {
+                        $assetStmt->execute([
+                            ':share_id' => $shareId,
+                            ':doc_id' => $entry['docId'] !== '' ? $entry['docId'] : null,
+                            ':asset_path' => $entry['path'],
+                            ':file_path' => 'shares/' . $shareId . '/' . $entry['path'],
+                            ':size_bytes' => $entry['size'],
+                            ':asset_hash' => normalize_hash_hex($entry['hash'] ?? ''),
+                            ':created_at' => now(),
+                        ]);
+                    }
+                }
+                $updateSize = $pdo->prepare('UPDATE shares SET size_bytes = :size_bytes, updated_at = :updated_at WHERE id = :id');
+                $updateSize->execute([
+                    ':size_bytes' => $newShareSize,
+                    ':updated_at' => now(),
+                    ':id' => $shareId,
+                ]);
+            } else {
+                if (!empty($deletedDocIds)) {
+                    $placeholders = implode(',', array_fill(0, count($deletedDocIds), '?'));
+                    $params = $deletedDocIds;
+                    array_unshift($params, $shareId);
+                    $stmt = $pdo->prepare('DELETE FROM share_docs WHERE share_id = ? AND doc_id IN (' . $placeholders . ')');
+                    $stmt->execute($params);
+                }
 
-            $updateSize = $pdo->prepare('UPDATE shares SET size_bytes = :size_bytes, updated_at = :updated_at WHERE id = :id');
-            $updateSize->execute([
-                ':size_bytes' => $newShareSize,
-                ':updated_at' => now(),
-                ':id' => $shareId,
-            ]);
+                $findDoc = $pdo->prepare('SELECT id FROM share_docs WHERE share_id = :share_id AND doc_id = :doc_id LIMIT 1');
+                $updateDoc = $pdo->prepare('UPDATE share_docs SET title = :title, icon = :icon, hpath = :hpath, parent_id = :parent_id, sort_index = :sort_index, markdown = :markdown, sort_order = :sort_order, size_bytes = :size_bytes, content_hash = :content_hash, meta_hash = :meta_hash, updated_at = :updated_at WHERE id = :id');
+                $insertDoc = $pdo->prepare('INSERT INTO share_docs (share_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, content_hash, meta_hash, created_at, updated_at)
+                    VALUES (:share_id, :doc_id, :title, :icon, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :content_hash, :meta_hash, :created_at, :updated_at)');
+                foreach ($docRows as $row) {
+                    $docKey = trim((string)($row['doc_id'] ?? ''));
+                    if ($docKey === '') {
+                        continue;
+                    }
+                    $findDoc->execute([
+                        ':share_id' => $shareId,
+                        ':doc_id' => $docKey,
+                    ]);
+                    $docRowId = (int)($findDoc->fetchColumn() ?: 0);
+                    $bind = [
+                        ':title' => $row['title'],
+                        ':icon' => isset($row['icon']) && trim((string)$row['icon']) !== '' ? $row['icon'] : null,
+                        ':hpath' => $row['hpath'],
+                        ':parent_id' => $row['parent_id'] ?? null,
+                        ':sort_index' => $row['sort_index'] ?? 0,
+                        ':markdown' => $row['markdown'],
+                        ':sort_order' => $row['sort_order'] ?? 0,
+                        ':size_bytes' => $row['size_bytes'] ?? 0,
+                        ':content_hash' => normalize_hash_hex($row['content_hash'] ?? ''),
+                        ':meta_hash' => normalize_hash_hex($row['meta_hash'] ?? ''),
+                        ':updated_at' => now(),
+                    ];
+                    if ($docRowId > 0) {
+                        $bind[':id'] = $docRowId;
+                        $updateDoc->execute($bind);
+                    } else {
+                        $insertDoc->execute(array_merge($bind, [
+                            ':share_id' => $shareId,
+                            ':doc_id' => $docKey,
+                            ':created_at' => now(),
+                        ]));
+                    }
+                }
+
+                if (!empty($deletedAssetPaths)) {
+                    $placeholders = implode(',', array_fill(0, count($deletedAssetPaths), '?'));
+                    $params = $deletedAssetPaths;
+                    array_unshift($params, $shareId);
+                    $select = $pdo->prepare('SELECT file_path FROM share_assets WHERE share_id = ? AND asset_path IN (' . $placeholders . ')');
+                    $select->execute($params);
+                    $files = $select->fetchAll(PDO::FETCH_COLUMN);
+                    foreach ($files as $filePath) {
+                        $fullPath = $config['uploads_dir'] . '/' . ltrim((string)$filePath, '/');
+                        if ($fullPath !== '' && is_file($fullPath)) {
+                            @unlink($fullPath);
+                        }
+                    }
+                    $deleteAsset = $pdo->prepare('DELETE FROM share_assets WHERE share_id = ? AND asset_path IN (' . $placeholders . ')');
+                    $deleteAsset->execute($params);
+                }
+
+                if (!empty($manifestEntries)) {
+                    $assetStmt = $pdo->prepare('INSERT OR REPLACE INTO share_assets (share_id, doc_id, asset_path, file_path, size_bytes, asset_hash, created_at)
+                        VALUES (:share_id, :doc_id, :asset_path, :file_path, :size_bytes, :asset_hash, :created_at)');
+                    foreach ($manifestEntries as $entry) {
+                        $source = $stagingDir . '/' . $entry['path'];
+                        if (!is_file($source)) {
+                            continue;
+                        }
+                        $targetFile = $targetDir . '/' . $entry['path'];
+                        ensure_dir(dirname($targetFile));
+                        if (!@rename($source, $targetFile)) {
+                            if (!@copy($source, $targetFile)) {
+                                continue;
+                            }
+                            @unlink($source);
+                        }
+                        $assetStmt->execute([
+                            ':share_id' => $shareId,
+                            ':doc_id' => $entry['docId'] !== '' ? $entry['docId'] : null,
+                            ':asset_path' => $entry['path'],
+                            ':file_path' => 'shares/' . $shareId . '/' . $entry['path'],
+                            ':size_bytes' => $entry['size'],
+                            ':asset_hash' => normalize_hash_hex($entry['hash'] ?? ''),
+                            ':created_at' => now(),
+                        ]);
+                    }
+                }
+                recalculate_share_size($shareId);
+            }
 
             $pdo->prepare('DELETE FROM share_upload_docs WHERE upload_id = :upload_id')->execute([':upload_id' => $uploadId]);
             $pdo->prepare('DELETE FROM share_uploads WHERE upload_id = :upload_id')->execute([':upload_id' => $uploadId]);
@@ -5546,6 +6056,15 @@ function handle_api(string $path): void {
                     continue;
                 }
                 $size = strlen($rowMarkdown);
+                $rowContentHash = compute_doc_content_hash($rowMarkdown);
+                $rowMetaHash = compute_doc_meta_hash([
+                    'title' => $rowTitle ?: $rowDocId,
+                    'icon' => $rowIcon,
+                    'hPath' => $rowHpath,
+                    'parentId' => $rowParent,
+                    'sortIndex' => $rowSortIndex,
+                    'sortOrder' => $rowSort,
+                ]);
                 $docSizeTotal += $size;
                 $docRows[] = [
                     'docId' => $rowDocId,
@@ -5557,6 +6076,8 @@ function handle_api(string $path): void {
                     'markdown' => $rowMarkdown,
                     'sortOrder' => $rowSort,
                     'size' => $size,
+                    'contentHash' => $rowContentHash,
+                    'metaHash' => $rowMetaHash,
                 ];
             }
             if (empty($docRows)) {
@@ -5565,6 +6086,15 @@ function handle_api(string $path): void {
         } else {
             $docSizeTotal = strlen($markdown);
             $docIcon = trim((string)($meta['icon'] ?? ''));
+            $docContentHash = compute_doc_content_hash($markdown);
+            $docMetaHash = compute_doc_meta_hash([
+                'title' => $title ?: $docId,
+                'icon' => $docIcon,
+                'hPath' => $hPath,
+                'parentId' => '',
+                'sortIndex' => 0,
+                'sortOrder' => $sortOrder,
+            ]);
             $docRows[] = [
                 'docId' => $docId,
                 'title' => $title ?: $docId,
@@ -5575,6 +6105,8 @@ function handle_api(string $path): void {
                 'markdown' => $markdown,
                 'sortOrder' => $sortOrder,
                 'size' => $docSizeTotal,
+                'contentHash' => $docContentHash,
+                'metaHash' => $docMetaHash,
             ];
         }
         $baseShareSize = $docSizeTotal + $assetSize;
@@ -5690,8 +6222,8 @@ function handle_api(string $path): void {
             seed_share_visitors_from_logs($shareId);
         }
         $pdo->prepare('DELETE FROM share_docs WHERE share_id = :share_id')->execute([':share_id' => $shareId]);
-        $insertDoc = $pdo->prepare('INSERT INTO share_docs (share_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, created_at, updated_at)
-            VALUES (:share_id, :doc_id, :title, :icon, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :created_at, :updated_at)');
+        $insertDoc = $pdo->prepare('INSERT INTO share_docs (share_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, content_hash, meta_hash, created_at, updated_at)
+            VALUES (:share_id, :doc_id, :title, :icon, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :content_hash, :meta_hash, :created_at, :updated_at)');
         foreach ($docRows as $row) {
             $insertDoc->execute([
                 ':share_id' => $shareId,
@@ -5704,6 +6236,8 @@ function handle_api(string $path): void {
                 ':markdown' => $row['markdown'],
                 ':sort_order' => $row['sortOrder'],
                 ':size_bytes' => $row['size'],
+                ':content_hash' => normalize_hash_hex($row['contentHash'] ?? ''),
+                ':meta_hash' => normalize_hash_hex($row['metaHash'] ?? ''),
                 ':created_at' => now(),
                 ':updated_at' => now(),
             ]);
@@ -5789,6 +6323,15 @@ function handle_api(string $path): void {
                 continue;
             }
             $size = strlen($docMarkdown);
+            $docContentHash = compute_doc_content_hash($docMarkdown);
+            $docMetaHash = compute_doc_meta_hash([
+                'title' => $docTitle ?: $docId,
+                'icon' => $docIcon,
+                'hPath' => $docHpath,
+                'parentId' => $docParent,
+                'sortIndex' => $docSortIndex,
+                'sortOrder' => $docSort,
+            ]);
             $docSizeTotal += $size;
             $docRows[] = [
                 'docId' => $docId,
@@ -5800,6 +6343,8 @@ function handle_api(string $path): void {
                 'markdown' => $docMarkdown,
                 'sortOrder' => $docSort,
                 'size' => $size,
+                'contentHash' => $docContentHash,
+                'metaHash' => $docMetaHash,
             ];
         }
         if (empty($docRows)) {
@@ -5918,8 +6463,8 @@ function handle_api(string $path): void {
             seed_share_visitors_from_logs($shareId);
         }
         $pdo->prepare('DELETE FROM share_docs WHERE share_id = :share_id')->execute([':share_id' => $shareId]);
-        $stmt = $pdo->prepare('INSERT INTO share_docs (share_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, created_at, updated_at)
-            VALUES (:share_id, :doc_id, :title, :icon, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :created_at, :updated_at)');
+        $stmt = $pdo->prepare('INSERT INTO share_docs (share_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, content_hash, meta_hash, created_at, updated_at)
+            VALUES (:share_id, :doc_id, :title, :icon, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :content_hash, :meta_hash, :created_at, :updated_at)');
         foreach ($docRows as $row) {
             $stmt->execute([
                 ':share_id' => $shareId,
@@ -5932,6 +6477,8 @@ function handle_api(string $path): void {
                 ':markdown' => $row['markdown'],
                 ':sort_order' => (int)$row['sortOrder'],
                 ':size_bytes' => $row['size'],
+                ':content_hash' => normalize_hash_hex($row['contentHash'] ?? ''),
+                ':meta_hash' => normalize_hash_hex($row['metaHash'] ?? ''),
                 ':created_at' => now(),
                 ':updated_at' => now(),
             ]);
