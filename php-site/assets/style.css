@@ -4647,7 +4647,7 @@ body.image-viewer-open {
   body.layout-share .kb-sidebar,
   body.layout-share .share-toc {
     background: var(--panel-bg);
-    box-shadow: 0 -24px 0 0 var(--panel-bg), 0 24px 0 0 var(--panel-bg);
+    box-shadow: 0 -24px 0 0 var(--panel-bg);
   }
 
   body.layout-share .share-nav-title {
@@ -5053,12 +5053,6 @@ body.image-viewer-open {
   body.layout-public .home-hero__meta { color: var(--muted); }
   body.layout-public .home-version { color: var(--primary-700); background: rgba(134,173,255,0.12); }
   body.layout-public .button.primary { background: linear-gradient(135deg, #4a6ee0, #5a7bff); color: #fff; }
-  /*Share page override, fix the color discontinuity problem at the bottom of the document tree*/
   body.layout-share .announcement-item { background: var(--surface-muted); }
   body.layout-app .announcement-item { background: var(--surface-muted); }
-}
-@media (prefers-color-scheme: dark) and (min-width: 961px) {
-  body.layout-app .app-shell {
-    background: linear-gradient(to right, var(--panel-bg) 247px, var(--border) 247px, var(--border) 248px, transparent 248px);
-  }
 }
