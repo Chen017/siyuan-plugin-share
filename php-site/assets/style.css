@@ -5021,9 +5021,11 @@ body.image-viewer-open {
   body.layout-app .range-toggle { background: var(--surface-muted); }
   body.layout-app .range-btn.is-active { background: var(--surface); }
   body.layout-app .topbar-version { color: var(--muted); }
+  body.layout-app .topbar-version.is-update { color: #ff6535; }
   body.layout-app .admin-governance__value { color: var(--text); }
   body.layout-app .admin-governance__meta { color: var(--muted); }
   body.layout-app input[type="checkbox"] { accent-color: var(--primary); }
+  body.layout-app input[type="checkbox"]:disabled { opacity: .70; }
   body.layout-app .notice { background: #635a44; border-color: #8f7e5c; color: var(--muted); }
   body.layout-app .toast { background: var(--surface); border-color: var(--border); color: var(--primary); }
   body.layout-app .toast.error { background: #6b4f4f; border-color: #9e6a6a; color: var(--danger); }
