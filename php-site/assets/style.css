@@ -1123,12 +1123,6 @@ body.app-side-open {
   margin-right: auto;
 }
 
-@media (prefers-color-scheme: dark) {
-  .share-footer {
-    background: var(--surface);
-  }
-}
-
 .share-shell--single + .share-footer {
   max-width: 1400px;
   background: var(--surface);
@@ -4671,10 +4665,6 @@ body.image-viewer-open {
     background: var(--surface);
   }
 
-  body.layout-share .share-footer {
-    background: var(--surface);
-  }
-
   body.layout-share .comment-card {
     border-bottom-color: var(--border);
   }
@@ -5065,11 +5055,10 @@ body.image-viewer-open {
   body.layout-public .button.primary { background: linear-gradient(135deg, #4a6ee0, #5a7bff); color: #fff; }
   /*Share page override, fix the color discontinuity problem at the bottom of the document tree*/
   body.layout-share .announcement-item { background: var(--surface-muted); }
-  body.layout-share .modal-card { background: var(--surface); }
+  body.layout-app .announcement-item { background: var(--surface-muted); }
 }
 @media (prefers-color-scheme: dark) and (min-width: 961px) {
   body.layout-app .app-shell {
     background: linear-gradient(to right, var(--panel-bg) 247px, var(--border) 247px, var(--border) 248px, transparent 248px);
   }
-  body.layout-app .app-sidebar { border-right-color: var(--border); }
 }
