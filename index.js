@@ -25,6 +25,7 @@ const STORAGE_SHARES = "shares";
 const STORAGE_SITE_SHARES = "sharesBySite";
 const STORAGE_SHARE_OPTIONS = "shareOptions";
 const STORAGE_INCREMENTAL_CURSOR = "incrementalCursorBySite";
+const STORAGE_EXPORT_RETRY_CACHE_INDEX = "exportRetryCacheIndexBySite";
 const DOCK_TYPE = "siyuan-plugin-share-dock";
 const MB = 1024 * 1024;
 const UPLOAD_CHUNK_MIN_SIZE = 256 * 1024;
@@ -41,6 +42,8 @@ const UPLOAD_RETRY_LIMIT = 5;
 const UPLOAD_RETRY_BASE_DELAY = 400;
 const UPLOAD_RETRY_MAX_DELAY = 2000;
 const UPLOAD_MISSING_CHUNK_RETRY_LIMIT = 3;
+const EXPORT_RETRY_CACHE_DIR_NAME = "export-retry-cache";
+const EXPORT_RETRY_CACHE_VERSION = 1;
 
 const REMOTE_API = {
   verify: "/api/v1/auth/verify",
@@ -704,7 +707,7 @@ function extractAssetPaths(markdown) {
   if (typeof markdown !== "string" || !markdown) return [];
   const out = new Set();
   const patterns = [
-    /\((\/?(?:assets|emojis)\/[^)\s]+)(?:\s+[^)]*)?\)/g,
+    /\((?:<)?(\/?(?:assets|emojis)\/[^)\s>]+)(?:>)?(?:\s+[^)]*)?\)/g,
     /src=["'](\/?(?:assets|emojis)\/[^"']+)["']/g,
     /href=["'](\/?(?:assets|emojis)\/[^"']+)["']/g,
   ];
@@ -1622,6 +1625,7 @@ class SiYuanSharePlugin extends Plugin {
     this.siteShares = {};
     this.shareOptions = {};
     this.incrementalCursorBySite = {};
+    this.exportRetryCacheIndexBySite = {};
     this.refQuerySchema = null;
     this.dockElement = null;
     this.workspaceDir = "";
@@ -1674,7 +1678,11 @@ class SiYuanSharePlugin extends Plugin {
 
   onload() {
     setGlobalI18nProvider(this.t.bind(this));
-    this.loadState().catch((err) => {
+    const bootstrap = async () => {
+      await this.clearExportRetryCacheOnStartup();
+      await this.loadState();
+    };
+    bootstrap().catch((err) => {
       console.error(err);
       this.notify(this.t("siyuanShare.message.pluginInitFailed", {error: err.message || err}));
     });
@@ -1751,6 +1759,8 @@ class SiYuanSharePlugin extends Plugin {
     await this.removeData(STORAGE_SHARES);
     await this.removeData(STORAGE_SITE_SHARES);
     await this.removeData(STORAGE_INCREMENTAL_CURSOR);
+    await this.removeData(STORAGE_EXPORT_RETRY_CACHE_INDEX);
+    await this.clearExportRetryCacheFiles();
   }
 
   onSwitchProtyle = ({detail}) => {
@@ -2998,6 +3008,37 @@ class SiYuanSharePlugin extends Plugin {
     return Array.from(updated);
   }
 
+  async queryDocUpdatedMap(docIds, {controller = null} = {}) {
+    const t = this.t.bind(this);
+    const scope = Array.from(
+      new Set((Array.isArray(docIds) ? docIds : []).map((id) => String(id || "").trim()).filter((id) => isValidDocId(id))),
+    );
+    if (!scope.length) return new Map();
+    const map = new Map();
+    let failed = false;
+    for (const part of chunkArray(scope, 200)) {
+      throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+      const quoted = part.map((id) => `'${escapeSqlString(id)}'`).join(",");
+      const rows = await this.querySqlRows(`SELECT id, updated FROM blocks WHERE type='d' AND id IN (${quoted})`);
+      if (!Array.isArray(rows)) {
+        failed = true;
+        continue;
+      }
+      rows.forEach((row) => {
+        const docId = String(row?.id || "").trim();
+        if (!isValidDocId(docId)) return;
+        map.set(docId, normalizeDocUpdatedStamp(row?.updated));
+      });
+    }
+    if (failed) return null;
+    scope.forEach((docId) => {
+      if (!map.has(docId)) {
+        map.set(docId, "");
+      }
+    });
+    return map;
+  }
+
   async queryRefImpactedDocsSince(scopeDocIds, sinceStamp) {
     const normalizedSince = normalizeDocUpdatedStamp(sinceStamp);
     const scope = Array.from(
@@ -3520,6 +3561,7 @@ class SiYuanSharePlugin extends Plugin {
     const siteSharesRaw = (await this.loadData(STORAGE_SITE_SHARES)) || {};
     const shareOptionsRaw = (await this.loadData(STORAGE_SHARE_OPTIONS)) || {};
     const incrementalCursorRaw = (await this.loadData(STORAGE_INCREMENTAL_CURSOR)) || {};
+    const exportRetryCacheIndexRaw = (await this.loadData(STORAGE_EXPORT_RETRY_CACHE_INDEX)) || {};
     const siteShares =
       siteSharesRaw && typeof siteSharesRaw === "object" && !Array.isArray(siteSharesRaw) ? siteSharesRaw : {};
     const shareOptions =
@@ -3527,6 +3569,7 @@ class SiYuanSharePlugin extends Plugin {
         ? shareOptionsRaw
         : {};
     const incrementalCursorBySite = this.normalizeIncrementalCursorBySite(incrementalCursorRaw);
+    const exportRetryCacheIndexBySite = this.normalizeExportRetryCacheIndexBySite(exportRetryCacheIndexRaw);
     let sites = this.normalizeSiteList(settings.sites);
     let activeSiteId = String(settings.activeSiteId || "");
     let persistSettings = false;
@@ -3558,6 +3601,7 @@ class SiYuanSharePlugin extends Plugin {
     this.siteShares = siteShares;
     this.shareOptions = shareOptions;
     this.incrementalCursorBySite = incrementalCursorBySite;
+    this.exportRetryCacheIndexBySite = exportRetryCacheIndexBySite;
     this.settings = {
       siteUrl: activeSite?.siteUrl || "",
       apiKey: activeSite?.apiKey || "",
@@ -3900,6 +3944,810 @@ class SiYuanSharePlugin extends Plugin {
     }
     this.incrementalCursorBySite = store;
     await this.saveData(STORAGE_INCREMENTAL_CURSOR, store);
+  }
+
+  normalizeExportRetryCacheIndexBySite(raw) {
+    const out = {};
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+    Object.entries(raw).forEach(([siteIdRaw, scopeMapRaw]) => {
+      const siteId = String(siteIdRaw || "").trim();
+      if (!siteId) return;
+      if (!scopeMapRaw || typeof scopeMapRaw !== "object" || Array.isArray(scopeMapRaw)) return;
+      const scopeMap = {};
+      Object.entries(scopeMapRaw).forEach(([scopeKeyRaw, itemRaw]) => {
+        const scopeKey = String(scopeKeyRaw || "").trim();
+        if (!scopeKey) return;
+        if (!itemRaw || typeof itemRaw !== "object" || Array.isArray(itemRaw)) return;
+        const cacheKey = String(itemRaw.cacheKey || "").trim();
+        if (!cacheKey) return;
+        const scopeDigest = normalizeHashHex(itemRaw.scopeDigest);
+        const exportStamp = normalizeDocUpdatedStamp(itemRaw.exportStamp);
+        const savedAt = Math.max(0, Math.floor(Number(itemRaw.savedAt) || 0));
+        const bytes = Math.max(0, Math.floor(Number(itemRaw.bytes) || 0));
+        scopeMap[scopeKey] = {
+          cacheKey,
+          scopeDigest,
+          exportStamp,
+          savedAt,
+          bytes,
+          type: String(itemRaw.type || "").trim(),
+          targetId: String(itemRaw.targetId || "").trim(),
+          includeChildren: !!itemRaw.includeChildren,
+        };
+      });
+      if (Object.keys(scopeMap).length) {
+        out[siteId] = scopeMap;
+      }
+    });
+    return out;
+  }
+
+  async persistExportRetryCacheIndex() {
+    const normalized = this.normalizeExportRetryCacheIndexBySite(this.exportRetryCacheIndexBySite || {});
+    this.exportRetryCacheIndexBySite = normalized;
+    await this.saveData(STORAGE_EXPORT_RETRY_CACHE_INDEX, normalized);
+  }
+
+  async getExportRetryCacheDirPath() {
+    if (!this.hasNodeFs) return "";
+    const wsDir = await this.ensureWorkspaceDir();
+    if (!wsDir) return "";
+    const pluginName = String(this.name || "siyuan-plugin-share").trim() || "siyuan-plugin-share";
+    return joinFsPath(wsDir, "data", "storage", "petal", pluginName, EXPORT_RETRY_CACHE_DIR_NAME);
+  }
+
+  async clearExportRetryCacheFiles() {
+    if (!this.hasNodeFs) return;
+    const cacheDir = await this.getExportRetryCacheDirPath();
+    if (!cacheDir) return;
+    await safeRm(cacheDir).catch(() => {});
+  }
+
+  async clearExportRetryCacheOnStartup() {
+    this.exportRetryCacheIndexBySite = {};
+    await this.removeData(STORAGE_EXPORT_RETRY_CACHE_INDEX).catch(() => {});
+    await this.clearExportRetryCacheFiles();
+  }
+
+  buildExportRetryScopeKey({type = "", targetId = "", includeChildren = false} = {}) {
+    return `${String(type || "").trim()}:${String(targetId || "").trim()}:${includeChildren ? "1" : "0"}`;
+  }
+
+  buildExportRetryScopeMeta({type = "", targetId = "", includeChildren = false} = {}) {
+    const normalizedType = String(type || "").trim();
+    const normalizedTarget = String(targetId || "").trim();
+    const normalizedChildren = !!includeChildren;
+    return {
+      siteId: this.getActiveSiteId(),
+      type: normalizedType,
+      targetId: normalizedTarget,
+      includeChildren: normalizedChildren,
+      scopeKey: this.buildExportRetryScopeKey({
+        type: normalizedType,
+        targetId: normalizedTarget,
+        includeChildren: normalizedChildren,
+      }),
+    };
+  }
+
+  getExportRetryCacheRecord(scopeMeta) {
+    const siteId = String(scopeMeta?.siteId || "").trim();
+    const scopeKey = String(scopeMeta?.scopeKey || "").trim();
+    if (!siteId || !scopeKey) return null;
+    const siteMap = this.exportRetryCacheIndexBySite?.[siteId];
+    if (!siteMap || typeof siteMap !== "object") return null;
+    const record = siteMap[scopeKey];
+    if (!record || typeof record !== "object") return null;
+    const cacheKey = String(record.cacheKey || "").trim();
+    if (!cacheKey) return null;
+    return {
+      cacheKey,
+      scopeDigest: normalizeHashHex(record.scopeDigest),
+      exportStamp: normalizeDocUpdatedStamp(record.exportStamp),
+      savedAt: Math.max(0, Math.floor(Number(record.savedAt) || 0)),
+      bytes: Math.max(0, Math.floor(Number(record.bytes) || 0)),
+      type: String(record.type || "").trim(),
+      targetId: String(record.targetId || "").trim(),
+      includeChildren: !!record.includeChildren,
+    };
+  }
+
+  async setExportRetryCacheRecord(scopeMeta, record) {
+    const siteId = String(scopeMeta?.siteId || "").trim();
+    const scopeKey = String(scopeMeta?.scopeKey || "").trim();
+    if (!siteId || !scopeKey) return;
+    const normalized = this.normalizeExportRetryCacheIndexBySite(this.exportRetryCacheIndexBySite || {});
+    const siteMap = {...(normalized[siteId] || {})};
+    siteMap[scopeKey] = {
+      cacheKey: String(record?.cacheKey || "").trim(),
+      scopeDigest: normalizeHashHex(record?.scopeDigest),
+      exportStamp: normalizeDocUpdatedStamp(record?.exportStamp),
+      savedAt: Math.max(0, Math.floor(Number(record?.savedAt) || 0)),
+      bytes: Math.max(0, Math.floor(Number(record?.bytes) || 0)),
+      type: String(record?.type || "").trim(),
+      targetId: String(record?.targetId || "").trim(),
+      includeChildren: !!record?.includeChildren,
+    };
+    normalized[siteId] = siteMap;
+    this.exportRetryCacheIndexBySite = normalized;
+    await this.persistExportRetryCacheIndex();
+  }
+
+  async deleteExportRetryCacheRecord(scopeMeta, {persist = true} = {}) {
+    const siteId = String(scopeMeta?.siteId || "").trim();
+    const scopeKey = String(scopeMeta?.scopeKey || "").trim();
+    if (!siteId || !scopeKey) return null;
+    const normalized = this.normalizeExportRetryCacheIndexBySite(this.exportRetryCacheIndexBySite || {});
+    const siteMap = {...(normalized[siteId] || {})};
+    const existing = siteMap[scopeKey];
+    if (!existing) return null;
+    delete siteMap[scopeKey];
+    if (Object.keys(siteMap).length) {
+      normalized[siteId] = siteMap;
+    } else {
+      delete normalized[siteId];
+    }
+    this.exportRetryCacheIndexBySite = normalized;
+    if (persist) {
+      await this.persistExportRetryCacheIndex();
+    }
+    return existing;
+  }
+
+  async buildExportRetryCacheKey(scopeMeta) {
+    const siteId = String(scopeMeta?.siteId || "").trim();
+    const scopeKey = String(scopeMeta?.scopeKey || "").trim();
+    const seed = `${siteId}|${scopeKey}`;
+    const hash = normalizeHashHex(await hashTextSha256(seed));
+    if (hash) return `retry-${hash.slice(0, 24)}`;
+    const fallback = seed.replace(/[^0-9a-zA-Z_-]/g, "-").replace(/-+/g, "-").replace(/^-+|-+$/g, "");
+    return (fallback || "retry").slice(0, 64);
+  }
+
+  getExportRetryCachePaths(cacheKey, cacheDir = "") {
+    const base = String(cacheDir || "").trim();
+    const key = String(cacheKey || "").trim();
+    if (!base || !key) {
+      return {metaPath: "", docDir: "", assetDir: ""};
+    }
+    return {
+      metaPath: joinFsPath(base, `${key}.json`),
+      docDir: joinFsPath(base, `${key}.docs`),
+      assetDir: joinFsPath(base, `${key}.assets`),
+    };
+  }
+
+  async removeExportRetryCacheFilesByKey(cacheKey) {
+    if (!this.hasNodeFs) return;
+    const key = String(cacheKey || "").trim();
+    if (!key) return;
+    const cacheDir = await this.getExportRetryCacheDirPath();
+    if (!cacheDir) return;
+    const {metaPath, docDir, assetDir} = this.getExportRetryCachePaths(key, cacheDir);
+    if (metaPath) {
+      await fs.promises.unlink(metaPath).catch(() => {});
+    }
+    if (docDir) {
+      await safeRm(docDir).catch(() => {});
+    }
+    if (assetDir) {
+      await safeRm(assetDir).catch(() => {});
+    }
+  }
+
+  async removeExportRetryCacheForScope(scopeMeta, {persist = true} = {}) {
+    const record = this.getExportRetryCacheRecord(scopeMeta);
+    if (record?.cacheKey) {
+      await this.removeExportRetryCacheFilesByKey(record.cacheKey);
+    }
+    await this.deleteExportRetryCacheRecord(scopeMeta, {persist});
+  }
+
+  async removeExportRetryCacheForTarget({type = "", targetId = "", siteId = ""} = {}) {
+    const targetType = String(type || "").trim();
+    const target = String(targetId || "").trim();
+    const siteLimit = String(siteId || "").trim();
+    if (!targetType || !target) return;
+    const normalized = this.normalizeExportRetryCacheIndexBySite(this.exportRetryCacheIndexBySite || {});
+    let changed = false;
+    for (const [siteKey, scopeMapRaw] of Object.entries(normalized)) {
+      if (siteLimit && siteKey !== siteLimit) continue;
+      const scopeMap = {...(scopeMapRaw || {})};
+      let siteChanged = false;
+      for (const [scopeKey, item] of Object.entries(scopeMap)) {
+        if (String(item?.type || "").trim() !== targetType || String(item?.targetId || "").trim() !== target) {
+          continue;
+        }
+        siteChanged = true;
+        changed = true;
+        delete scopeMap[scopeKey];
+        await this.removeExportRetryCacheFilesByKey(item?.cacheKey);
+      }
+      if (!siteChanged) continue;
+      if (Object.keys(scopeMap).length) {
+        normalized[siteKey] = scopeMap;
+      } else {
+        delete normalized[siteKey];
+      }
+    }
+    if (!changed) return;
+    this.exportRetryCacheIndexBySite = normalized;
+    await this.persistExportRetryCacheIndex();
+  }
+
+  normalizeExportRetryDocs(rows) {
+    if (!Array.isArray(rows)) return [];
+    const out = [];
+    rows.forEach((row, index) => {
+      const docId = String(row?.docId || "").trim();
+      if (!isValidDocId(docId)) return;
+      const normalized = {
+        docId,
+        title: String(row?.title || ""),
+        hPath: String(row?.hPath || ""),
+        parentId: String(row?.parentId || ""),
+        sortIndex: Number.isFinite(Number(row?.sortIndex)) ? Number(row.sortIndex) : index,
+        sortOrder: Math.max(0, Math.floor(Number(row?.sortOrder) || index)),
+        markdown: String(row?.markdown || ""),
+      };
+      const icon = normalizeDocIconValue(row?.icon || "");
+      if (icon) {
+        normalized.icon = icon;
+      }
+      out.push(normalized);
+    });
+    return out;
+  }
+
+  normalizeExportRetryAssetEntries(rows) {
+    if (!Array.isArray(rows)) return [];
+    const out = [];
+    const seen = new Set();
+    rows.forEach((row) => {
+      const asset = row?.asset || row;
+      const assetPath = normalizeAssetPath(asset?.path || "");
+      const blob = asset?.blob || null;
+      if (!assetPath || !blob || seen.has(assetPath)) return;
+      seen.add(assetPath);
+      out.push({
+        docId: String(row?.docId || "").trim(),
+        asset: {
+          path: assetPath,
+          blob,
+        },
+      });
+    });
+    return out;
+  }
+
+  collectRequiredAssetPathsFromExportDocs(docs) {
+    const required = new Set();
+    const rows = Array.isArray(docs) ? docs : [];
+    rows.forEach((doc) => {
+      const markdown = String(doc?.markdown || "");
+      extractAssetPaths(markdown).forEach((assetPath) => {
+        const normalized = normalizeAssetPath(assetPath);
+        if (normalized) required.add(normalized);
+      });
+      const icon = normalizeDocIconValue(doc?.icon || "");
+      if (getDocIconKind(icon) === "asset") {
+        const iconPath = normalizeAssetPath(normalizeDocIconAssetPath(icon));
+        if (iconPath) required.add(iconPath);
+      }
+    });
+    return required;
+  }
+
+  collectStructChangedDocIdsForExportRetry(scopeDocs, cachedDocs) {
+    const scope = Array.isArray(scopeDocs) ? scopeDocs : [];
+    const cachedMap = new Map(
+      this.normalizeExportRetryDocs(cachedDocs || [])
+        .map((doc) => [String(doc?.docId || "").trim(), doc]),
+    );
+    const changed = new Set();
+    scope.forEach((doc, index) => {
+      const docId = String(doc?.docId || "").trim();
+      if (!isValidDocId(docId)) return;
+      const cached = cachedMap.get(docId);
+      if (!cached) {
+        changed.add(docId);
+        return;
+      }
+      const nextTitle = String(doc?.title || "");
+      const prevTitle = String(cached?.title || "");
+      const nextIcon = normalizeDocIconValue(doc?.icon || "");
+      const prevIcon = normalizeDocIconValue(cached?.icon || "");
+      const nextParentId = String(doc?.parentId || "");
+      const prevParentId = String(cached?.parentId || "");
+      const nextSortIndex = normalizeSortIndexForHash(doc?.sortIndex ?? index);
+      const prevSortIndex = normalizeSortIndexForHash(cached?.sortIndex ?? index);
+      const nextSortOrder = Math.max(0, Math.floor(Number(doc?.sortOrder) || index));
+      const prevSortOrder = Math.max(0, Math.floor(Number(cached?.sortOrder) || index));
+      if (
+        nextTitle !== prevTitle ||
+        nextIcon !== prevIcon ||
+        nextParentId !== prevParentId ||
+        nextSortIndex !== prevSortIndex ||
+        nextSortOrder !== prevSortOrder
+      ) {
+        changed.add(docId);
+      }
+    });
+    return Array.from(changed);
+  }
+
+  collectMissingAssetDocIdsFromExportRetryCache(cachedDocs, cachedAssetEntries) {
+    const docs = this.normalizeExportRetryDocs(cachedDocs || []);
+    const assetPathSet = new Set(
+      this.normalizeExportRetryAssetEntries(cachedAssetEntries || [])
+        .map((entry) => normalizeAssetPath((entry?.asset || entry)?.path || ""))
+        .filter(Boolean),
+    );
+    const missingDocIds = new Set();
+    docs.forEach((doc) => {
+      const docId = String(doc?.docId || "").trim();
+      if (!isValidDocId(docId)) return;
+      const required = new Set();
+      const markdown = String(doc?.markdown || "");
+      extractAssetPaths(markdown).forEach((assetPath) => {
+        const normalized = normalizeAssetPath(assetPath);
+        if (normalized) required.add(normalized);
+      });
+      const icon = normalizeDocIconValue(doc?.icon || "");
+      if (getDocIconKind(icon) === "asset") {
+        const iconPath = normalizeAssetPath(normalizeDocIconAssetPath(icon));
+        if (iconPath) required.add(iconPath);
+      }
+      for (const assetPath of required) {
+        if (!assetPathSet.has(assetPath)) {
+          missingDocIds.add(docId);
+          break;
+        }
+      }
+    });
+    return Array.from(missingDocIds);
+  }
+
+  async collectExportRetryChangedDocIds(
+    scopeDocs,
+    cachedDocs,
+    sinceStamp,
+    {cachedAssetEntries = [], controller = null, progress = null} = {},
+  ) {
+    const t = this.t.bind(this);
+    const scope = Array.isArray(scopeDocs) ? scopeDocs : [];
+    const scopeIds = Array.from(
+      new Set(scope.map((doc) => String(doc?.docId || "").trim()).filter((id) => isValidDocId(id))),
+    );
+    if (!scopeIds.length) return [];
+    const scopeSet = new Set(scopeIds);
+    const changed = new Set();
+    this.collectStructChangedDocIdsForExportRetry(scope, cachedDocs || []).forEach((docId) => {
+      if (scopeSet.has(docId)) changed.add(docId);
+    });
+    this.collectMissingAssetDocIdsFromExportRetryCache(cachedDocs || [], cachedAssetEntries || []).forEach((docId) => {
+      if (scopeSet.has(docId)) changed.add(docId);
+    });
+    const normalizedSince = normalizeDocUpdatedStamp(sinceStamp);
+    if (!normalizedSince) return scopeIds;
+    throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+    const directDocIds = await this.queryDocsUpdatedSince(scopeIds, normalizedSince);
+    if (!Array.isArray(directDocIds)) {
+      throw new Error("Export cache precheck failed while querying changed docs");
+    }
+    directDocIds.forEach((docId) => {
+      if (scopeSet.has(docId)) changed.add(docId);
+    });
+    throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+    const impactedDocIds = await this.queryRefImpactedDocsSince(scopeIds, normalizedSince);
+    if (!Array.isArray(impactedDocIds)) {
+      throw new Error("Export cache precheck failed while querying references");
+    }
+    impactedDocIds.forEach((docId) => {
+      if (scopeSet.has(docId)) changed.add(docId);
+    });
+    const changedDocIds = Array.from(changed);
+    progress?.update?.({
+      text: t("siyuanShare.progress.analyzingIncrement"),
+      detail: t("siyuanShare.progress.analyzingDocs", {
+        index: changedDocIds.length,
+        total: scopeIds.length,
+      }),
+    });
+    return changedDocIds;
+  }
+
+  async blobToNodeBuffer(blob) {
+    if (typeof Buffer !== "undefined" && Buffer.isBuffer(blob)) return blob;
+    if (blob && typeof blob.arrayBuffer === "function") {
+      const buf = await blob.arrayBuffer();
+      if (typeof Buffer !== "undefined") {
+        return Buffer.from(buf);
+      }
+      return new Uint8Array(buf);
+    }
+    const text = String(blob || "");
+    if (typeof Buffer !== "undefined") {
+      return Buffer.from(text, "utf8");
+    }
+    return encodeUtf8Bytes(text);
+  }
+
+  async computeExportRetryScopeDigest(scopeMeta, scopeDocs) {
+    const rows = (Array.isArray(scopeDocs) ? scopeDocs : [])
+      .map((doc, index) => ({
+        docId: String(doc?.docId || "").trim(),
+        title: String(doc?.title || ""),
+        icon: normalizeDocIconValue(doc?.icon || ""),
+        parentId: String(doc?.parentId || ""),
+        sortIndex: normalizeSortIndexForHash(doc?.sortIndex ?? index),
+        sortOrder: Math.max(0, Math.floor(Number(doc?.sortOrder) || index)),
+      }))
+      .filter((doc) => isValidDocId(doc.docId))
+      .sort((a, b) => {
+        if (a.sortOrder === b.sortOrder) return a.docId.localeCompare(b.docId);
+        return a.sortOrder - b.sortOrder;
+      });
+    const payload = {
+      type: String(scopeMeta?.type || ""),
+      targetId: String(scopeMeta?.targetId || ""),
+      includeChildren: !!scopeMeta?.includeChildren,
+      docs: rows,
+    };
+    return normalizeHashHex(await hashTextSha256(JSON.stringify(payload)));
+  }
+
+  async loadExportRetryCacheEntry(record) {
+    if (!this.hasNodeFs) return null;
+    const cacheKey = String(record?.cacheKey || "").trim();
+    if (!cacheKey) return null;
+    const cacheDir = await this.getExportRetryCacheDirPath();
+    if (!cacheDir) return null;
+    const {metaPath, docDir, assetDir} = this.getExportRetryCachePaths(cacheKey, cacheDir);
+    if (!metaPath || !docDir || !assetDir) return null;
+    const raw = await fs.promises.readFile(metaPath, "utf8");
+    const meta = JSON.parse(raw);
+    if (!meta || typeof meta !== "object") return null;
+    const version = Math.max(0, Math.floor(Number(meta.version) || 0));
+    if (version !== EXPORT_RETRY_CACHE_VERSION) return null;
+    const docs = [];
+    const docsMeta = Array.isArray(meta.docs) ? meta.docs : [];
+    for (const row of docsMeta) {
+      const fileName = String(row?.file || "").trim();
+      if (!fileName || /[\\/]/.test(fileName) || fileName.includes("..")) continue;
+      const docRaw = await fs.promises.readFile(joinFsPath(docDir, fileName), "utf8");
+      const parsedDoc = JSON.parse(docRaw);
+      const normalizedDoc = this.normalizeExportRetryDocs([parsedDoc])[0];
+      if (normalizedDoc) {
+        docs.push(normalizedDoc);
+      }
+    }
+    const assetEntriesRaw = [];
+    const assetsMeta = Array.isArray(meta.assets) ? meta.assets : [];
+    for (const row of assetsMeta) {
+      const assetPath = normalizeAssetPath(row?.path || "");
+      const fileName = String(row?.file || "").trim();
+      if (!assetPath || !fileName || /[\\/]/.test(fileName) || fileName.includes("..")) continue;
+      const buf = await fs.promises.readFile(joinFsPath(assetDir, fileName));
+      assetEntriesRaw.push({
+        docId: String(row?.docId || "").trim(),
+        asset: {
+          path: assetPath,
+          blob: new Blob([buf]),
+        },
+      });
+    }
+    return {
+      scopeDigest: normalizeHashHex(meta.scopeDigest || record?.scopeDigest),
+      exportStamp: normalizeDocUpdatedStamp(meta.exportStamp || record?.exportStamp),
+      savedAt: Math.max(0, Math.floor(Number(meta.savedAt) || 0)),
+      docs,
+      assetEntries: this.normalizeExportRetryAssetEntries(assetEntriesRaw),
+    };
+  }
+
+  async resolveExportRetryCacheForScope(scopeMeta, scopeDocs, {controller = null, progress = null} = {}) {
+    const docs = Array.isArray(scopeDocs) ? scopeDocs : [];
+    const scopeDocIds = Array.from(
+      new Set(docs.map((doc) => String(doc?.docId || "").trim()).filter((id) => isValidDocId(id))),
+    );
+    const scopeDigest = await this.computeExportRetryScopeDigest(scopeMeta, docs);
+    if (!this.hasNodeFs || !scopeDocIds.length) {
+      return {scopeDigest, cache: null, changedDocIds: scopeDocIds};
+    }
+    const record = this.getExportRetryCacheRecord(scopeMeta);
+    if (!record) {
+      return {scopeDigest, cache: null, changedDocIds: scopeDocIds};
+    }
+    let cache = null;
+    try {
+      cache = await this.loadExportRetryCacheEntry(record);
+    } catch (err) {
+      console.warn("loadExportRetryCacheEntry failed", err);
+      cache = null;
+    }
+    if (!cache) {
+      await this.removeExportRetryCacheForScope(scopeMeta);
+      return {scopeDigest, cache: null, changedDocIds: scopeDocIds};
+    }
+    cache = {
+      ...cache,
+      docs: this.normalizeExportRetryDocs(cache.docs || []),
+      assetEntries: this.normalizeExportRetryAssetEntries(cache.assetEntries || []),
+    };
+    let changedDocIds = scopeDocIds;
+    try {
+      changedDocIds = await this.collectExportRetryChangedDocIds(
+        docs,
+        cache.docs || [],
+        cache.exportStamp || record.exportStamp,
+        {cachedAssetEntries: cache.assetEntries || [], controller, progress},
+      );
+    } catch (err) {
+      console.warn("collectExportRetryChangedDocIds failed", err);
+      changedDocIds = scopeDocIds;
+    }
+    return {
+      scopeDigest,
+      cache,
+      changedDocIds: Array.from(
+        new Set((Array.isArray(changedDocIds) ? changedDocIds : []).map((id) => String(id || "").trim())),
+      ).filter((id) => isValidDocId(id)),
+    };
+  }
+
+  mergeExportRetryData(scopeDocs, cachedData, freshData) {
+    const scope = Array.isArray(scopeDocs) ? scopeDocs : [];
+    const cachedDocs = this.normalizeExportRetryDocs(cachedData?.docs || []);
+    const freshDocs = this.normalizeExportRetryDocs(freshData?.docs || []);
+    const scopeDocSet = new Set(
+      scope
+        .map((doc) => String(doc?.docId || "").trim())
+        .filter((docId) => isValidDocId(docId)),
+    );
+    const cachedMap = new Map(cachedDocs.map((doc) => [String(doc.docId), doc]));
+    const freshMap = new Map(freshDocs.map((doc) => [String(doc.docId), doc]));
+    const mergedDocs = [];
+    scope.forEach((scopeDoc, index) => {
+      const docId = String(scopeDoc?.docId || "").trim();
+      if (!isValidDocId(docId)) return;
+      const freshPicked = freshMap.get(docId) || null;
+      const cachedPicked = cachedMap.get(docId) || null;
+      const picked = freshPicked || cachedPicked;
+      if (!picked) return;
+      const scopeTitle = String(scopeDoc?.title || "");
+      const scopeIcon = normalizeDocIconValue(scopeDoc?.icon || "");
+      const scopeParentId = String(scopeDoc?.parentId || "");
+      const scopeSortIndex = normalizeSortIndexForHash(scopeDoc?.sortIndex ?? index);
+      const scopeSortOrder = Math.max(0, Math.floor(Number(scopeDoc?.sortOrder) || index));
+      const merged = {
+        ...picked,
+        docId,
+        title: scopeTitle || String(picked?.title || ""),
+        parentId: scopeParentId,
+        sortIndex: scopeSortIndex,
+        sortOrder: scopeSortOrder,
+      };
+      const freshIcon = normalizeDocIconValue(freshPicked?.icon || "");
+      const cachedIcon = normalizeDocIconValue(cachedPicked?.icon || "");
+      if (freshIcon) {
+        merged.icon = freshIcon;
+      } else if (cachedIcon) {
+        merged.icon = cachedIcon;
+      } else if (scopeIcon) {
+        merged.icon = scopeIcon;
+      } else {
+        delete merged.icon;
+      }
+      mergedDocs.push(merged);
+    });
+    const mergedDocMap = new Map(
+      mergedDocs
+        .map((doc) => [String(doc?.docId || "").trim(), doc])
+        .filter(([docId]) => isValidDocId(docId)),
+    );
+    const resolveDocIconAssetPath = (doc) => {
+      const icon = normalizeDocIconValue(doc?.icon || "");
+      if (getDocIconKind(icon) !== "asset") return "";
+      return normalizeAssetPath(normalizeDocIconAssetPath(icon));
+    };
+    const activeIconAssetPaths = new Set();
+    mergedDocs.forEach((doc) => {
+      const iconPath = resolveDocIconAssetPath(doc);
+      if (iconPath) activeIconAssetPaths.add(iconPath);
+    });
+    const collectDocRequiredAssetPaths = (doc) => {
+      const required = new Set();
+      const markdown = String(doc?.markdown || "");
+      extractAssetPaths(markdown).forEach((assetPath) => {
+        const normalized = normalizeAssetPath(assetPath);
+        if (normalized) required.add(normalized);
+      });
+      const iconPath = resolveDocIconAssetPath(doc);
+      if (iconPath) required.add(iconPath);
+      return required;
+    };
+    const freshDocIdSet = new Set(
+      freshDocs
+        .map((doc) => String(doc?.docId || "").trim())
+        .filter((docId) => isValidDocId(docId) && scopeDocSet.has(docId)),
+    );
+    const removedAssetPathsFromChangedDocs = new Set();
+    freshDocIdSet.forEach((docId) => {
+      const oldDoc = cachedMap.get(docId) || null;
+      const newDoc = freshMap.get(docId) || null;
+      if (!oldDoc || !newDoc) return;
+      const oldRequired = collectDocRequiredAssetPaths(oldDoc);
+      const newRequired = collectDocRequiredAssetPaths(newDoc);
+      oldRequired.forEach((assetPath) => {
+        if (!newRequired.has(assetPath)) {
+          removedAssetPathsFromChangedDocs.add(assetPath);
+        }
+      });
+    });
+    const requiredAssetPathsAfterMerge = this.collectRequiredAssetPathsFromExportDocs(mergedDocs);
+    const freshAssetPathSet = new Set(
+      this.normalizeExportRetryAssetEntries(freshData?.assetEntries || [])
+        .map((entry) => normalizeAssetPath((entry?.asset || entry)?.path || ""))
+        .filter(Boolean),
+    );
+    const staleGeneratedIconPaths = new Set();
+    cachedDocs.forEach((doc) => {
+      const docId = String(doc?.docId || "").trim();
+      if (!scopeDocSet.has(docId)) return;
+      const oldIconPath = resolveDocIconAssetPath(doc);
+      if (!oldIconPath || !oldIconPath.startsWith("assets/share-icons/")) return;
+      const nextDoc = mergedDocMap.get(docId);
+      const nextIconPath = resolveDocIconAssetPath(nextDoc);
+      if (oldIconPath === nextIconPath) return;
+      if (freshAssetPathSet.has(oldIconPath)) return;
+      if (activeIconAssetPaths.has(oldIconPath)) return;
+      staleGeneratedIconPaths.add(oldIconPath);
+    });
+    const staleAssetPaths = new Set(staleGeneratedIconPaths);
+    removedAssetPathsFromChangedDocs.forEach((assetPath) => {
+      if (!assetPath) return;
+      if (freshAssetPathSet.has(assetPath)) return;
+      if (activeIconAssetPaths.has(assetPath)) return;
+      if (requiredAssetPathsAfterMerge.has(assetPath)) return;
+      staleAssetPaths.add(assetPath);
+    });
+    const normalizeEntry = (entry) => {
+      const asset = entry?.asset || entry;
+      const assetPath = normalizeAssetPath(asset?.path || "");
+      const blob = asset?.blob || null;
+      if (!assetPath || !blob) return null;
+      return {
+        docId: String(entry?.docId || "").trim(),
+        asset: {
+          path: assetPath,
+          blob,
+        },
+      };
+    };
+    const mergedAssetMap = new Map();
+    const putAsset = (entry, {override = false} = {}) => {
+      if (!entry) return;
+      const assetPath = String(entry?.asset?.path || "").trim();
+      if (!assetPath) return;
+      if (!override && mergedAssetMap.has(assetPath)) return;
+      mergedAssetMap.set(assetPath, entry);
+    };
+    this.normalizeExportRetryAssetEntries(cachedData?.assetEntries || []).forEach((entry) => {
+      const normalized = normalizeEntry(entry);
+      if (!normalized) return;
+      putAsset(normalized);
+    });
+    this.normalizeExportRetryAssetEntries(freshData?.assetEntries || []).forEach((entry) => {
+      const normalized = normalizeEntry(entry);
+      if (!normalized) return;
+      putAsset(normalized, {override: true});
+    });
+    const mergedAssets = Array.from(mergedAssetMap.values()).filter((entry) => {
+      const entryDocId = String(entry?.docId || "").trim();
+      const assetPath = normalizeAssetPath((entry?.asset || entry)?.path || "");
+      if (!assetPath) return false;
+      if (staleAssetPaths.has(assetPath)) return false;
+      if (!entryDocId) return true;
+      return scopeDocSet.has(entryDocId);
+    });
+    return {
+      docs: mergedDocs,
+      assetEntries: mergedAssets,
+    };
+  }
+
+  async saveExportRetryCacheForScope(scopeMeta, {scopeDigest = "", exportStamp = "", docs = [], assetEntries = []} = {}) {
+    if (!this.hasNodeFs) return;
+    const siteId = String(scopeMeta?.siteId || "").trim();
+    const scopeKey = String(scopeMeta?.scopeKey || "").trim();
+    if (!siteId || !scopeKey) return;
+    const cacheDir = await this.getExportRetryCacheDirPath();
+    if (!cacheDir) return;
+    await fs.promises.mkdir(cacheDir, {recursive: true});
+    const cacheKey = await this.buildExportRetryCacheKey(scopeMeta);
+    const finalPaths = this.getExportRetryCachePaths(cacheKey, cacheDir);
+    if (!finalPaths.metaPath || !finalPaths.docDir || !finalPaths.assetDir) return;
+    const tempSuffix = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+    const tempKey = `${cacheKey}.tmp-${tempSuffix}`;
+    const tempPaths = this.getExportRetryCachePaths(tempKey, cacheDir);
+    const normalizedDocs = this.normalizeExportRetryDocs(docs);
+    const normalizedAssets = this.normalizeExportRetryAssetEntries(assetEntries);
+    const normalizedDigest = normalizeHashHex(scopeDigest);
+    const normalizedExportStamp = normalizeDocUpdatedStamp(exportStamp) || formatDocUpdatedStampFromMs(nowTs());
+    let totalBytes = 0;
+    try {
+      await safeRm(tempPaths.docDir).catch(() => {});
+      await safeRm(tempPaths.assetDir).catch(() => {});
+      await fs.promises.mkdir(tempPaths.docDir, {recursive: true});
+      await fs.promises.mkdir(tempPaths.assetDir, {recursive: true});
+      const docsMeta = [];
+      let docSeq = 0;
+      for (const doc of normalizedDocs) {
+        const fileName = `${String(docSeq).padStart(6, "0")}.json`;
+        docSeq += 1;
+        const text = JSON.stringify(doc);
+        await fs.promises.writeFile(joinFsPath(tempPaths.docDir, fileName), text);
+        const bytes =
+          typeof Buffer !== "undefined"
+            ? Buffer.byteLength(text, "utf8")
+            : encodeUtf8Bytes(text).length;
+        totalBytes += Math.max(0, Number(bytes) || 0);
+        docsMeta.push({
+          docId: String(doc?.docId || "").trim(),
+          file: fileName,
+        });
+      }
+      const assetsMeta = [];
+      let assetSeq = 0;
+      for (const entry of normalizedAssets) {
+        const asset = entry?.asset || entry;
+        const assetPath = normalizeAssetPath(asset?.path || "");
+        const blob = asset?.blob || null;
+        if (!assetPath || !blob) continue;
+        const fileName = `${String(assetSeq).padStart(6, "0")}.bin`;
+        assetSeq += 1;
+        const buf = await this.blobToNodeBuffer(blob);
+        await fs.promises.writeFile(joinFsPath(tempPaths.assetDir, fileName), buf);
+        const size = Math.max(0, Number(buf?.length || buf?.byteLength || 0));
+        totalBytes += size;
+        assetsMeta.push({
+          path: assetPath,
+          docId: String(entry?.docId || "").trim(),
+          file: fileName,
+          size,
+        });
+      }
+      const payload = {
+        version: EXPORT_RETRY_CACHE_VERSION,
+        savedAt: nowTs(),
+        exportStamp: normalizedExportStamp,
+        scopeDigest: normalizedDigest,
+        docs: docsMeta,
+        assets: assetsMeta,
+      };
+      await fs.promises.writeFile(tempPaths.metaPath, JSON.stringify(payload));
+      await fs.promises.unlink(finalPaths.metaPath).catch(() => {});
+      await safeRm(finalPaths.docDir).catch(() => {});
+      await safeRm(finalPaths.assetDir).catch(() => {});
+      await fs.promises.rename(tempPaths.metaPath, finalPaths.metaPath);
+      await fs.promises.rename(tempPaths.docDir, finalPaths.docDir);
+      await fs.promises.rename(tempPaths.assetDir, finalPaths.assetDir);
+      await this.setExportRetryCacheRecord(scopeMeta, {
+        cacheKey,
+        scopeDigest: normalizedDigest,
+        exportStamp: normalizedExportStamp,
+        savedAt: nowTs(),
+        bytes: totalBytes,
+        type: String(scopeMeta?.type || ""),
+        targetId: String(scopeMeta?.targetId || ""),
+        includeChildren: !!scopeMeta?.includeChildren,
+      });
+    } finally {
+      await fs.promises.unlink(tempPaths.metaPath).catch(() => {});
+      await safeRm(tempPaths.docDir).catch(() => {});
+      await safeRm(tempPaths.assetDir).catch(() => {});
+    }
   }
 
   getActiveSite() {
@@ -5693,46 +6541,109 @@ class SiYuanSharePlugin extends Plugin {
         : scopeDocs.slice();
 
       let resourceFailures = 0;
-      const docPayloads = [];
-      const assetMap = new Map();
-      const usedUploadPaths = new Set();
-      const docResults = await this.collectDocExportResults(docsToExport, notebookId, {controller, progress});
-      for (const result of docResults) {
-        const doc = result.doc || {};
-        const index = Number(result.index) || 0;
-        const exportRes = result.exportRes || {};
-        const markdown = String(result.markdown || "");
-        const assets = Array.isArray(result.assets) ? result.assets : [];
-        const failures = Array.isArray(result.failures) ? result.failures : [];
-        if (markdown) exportedMarkdowns.push(markdown);
-        resourceFailures += failures.length;
-        const docIdValue = String(doc?.docId || "").trim();
-        const docTitle =
-          String(doc?.title || "").trim() || (docIdValue === docId ? title : t("siyuanShare.label.untitled"));
-        const iconValue = await this.resolveIconUpload(doc?.icon, {
-          docId: docIdValue,
-          notebookId,
-          usedUploadPaths,
-          assetMap,
-          iconUploadMap,
-          controller,
-        });
-        docPayloads.push({
-          docId: docIdValue,
-          title: docTitle,
-          hPath: exportRes.hPath || "",
-          parentId: useChildren ? (docIdValue === docId ? "" : String(doc?.parentId || "")) : "",
-          sortIndex: Number.isFinite(Number(doc?.sortIndex)) ? Number(doc.sortIndex) : index,
-          sortOrder: Number.isFinite(Number(doc?.sortOrder)) ? Number(doc.sortOrder) : index,
-          markdown,
-          ...(iconValue ? {icon: iconValue} : {}),
-        });
-        for (const asset of assets) {
-          if (!asset?.path || assetMap.has(asset.path)) continue;
-          assetMap.set(asset.path, {asset, docId: docIdValue});
-          usedUploadPaths.add(asset.path);
+      let docPayloads = [];
+      let assetEntries = [];
+      const allowRetryCache = !useIncremental;
+      const exportScopeMeta = allowRetryCache
+        ? this.buildExportRetryScopeMeta({
+            type: SHARE_TYPES.DOC,
+            targetId: docId,
+            includeChildren: useChildren,
+          })
+        : null;
+      let exportScopeDigest = "";
+      let cachedExport = null;
+      let changedDocIds = [];
+      if (allowRetryCache && exportScopeMeta && docsToExport.length > 0) {
+        try {
+          const cacheState = await this.resolveExportRetryCacheForScope(exportScopeMeta, docsToExport, {
+            controller,
+            progress,
+          });
+          exportScopeDigest = cacheState.scopeDigest;
+          cachedExport = cacheState.cache;
+          changedDocIds = Array.isArray(cacheState.changedDocIds) ? cacheState.changedDocIds : [];
+        } catch (err) {
+          console.warn("resolveExportRetryCacheForScope failed", err);
         }
       }
+      const changedSet = new Set(changedDocIds.map((id) => String(id || "").trim()).filter((id) => isValidDocId(id)));
+      if (allowRetryCache && cachedExport && changedSet.size === 0) {
+        docPayloads = this.normalizeExportRetryDocs(cachedExport.docs || []);
+        assetEntries = this.normalizeExportRetryAssetEntries(cachedExport.assetEntries || []);
+      } else {
+        let docsForFreshExport = docsToExport.slice();
+        let cachedForMerge = null;
+        if (allowRetryCache && cachedExport && changedSet.size > 0 && changedSet.size < docsToExport.length) {
+          docsForFreshExport = docsToExport.filter((doc) => changedSet.has(String(doc?.docId || "").trim()));
+          cachedForMerge = cachedExport;
+        }
+        const freshDocPayloads = [];
+        const assetMap = new Map();
+        const usedUploadPaths = new Set();
+        const docResults = await this.collectDocExportResults(docsForFreshExport, notebookId, {controller, progress});
+        for (const result of docResults) {
+          const doc = result.doc || {};
+          const index = Number(result.index) || 0;
+          const exportRes = result.exportRes || {};
+          const markdown = String(result.markdown || "");
+          const assets = Array.isArray(result.assets) ? result.assets : [];
+          const failures = Array.isArray(result.failures) ? result.failures : [];
+          resourceFailures += failures.length;
+          const docIdValue = String(doc?.docId || "").trim();
+          const docTitle =
+            String(doc?.title || "").trim() || (docIdValue === docId ? title : t("siyuanShare.label.untitled"));
+          const iconValue = await this.resolveIconUpload(doc?.icon, {
+            docId: docIdValue,
+            notebookId,
+            usedUploadPaths,
+            assetMap,
+            iconUploadMap,
+            controller,
+          });
+          freshDocPayloads.push({
+            docId: docIdValue,
+            title: docTitle,
+            hPath: exportRes.hPath || "",
+            parentId: useChildren ? (docIdValue === docId ? "" : String(doc?.parentId || "")) : "",
+            sortIndex: Number.isFinite(Number(doc?.sortIndex)) ? Number(doc.sortIndex) : index,
+            sortOrder: Number.isFinite(Number(doc?.sortOrder)) ? Number(doc.sortOrder) : index,
+            markdown,
+            ...(iconValue ? {icon: iconValue} : {}),
+          });
+          for (const asset of assets) {
+            if (!asset?.path || assetMap.has(asset.path)) continue;
+            assetMap.set(asset.path, {asset, docId: docIdValue});
+            usedUploadPaths.add(asset.path);
+          }
+        }
+        const freshAssetEntries = Array.from(assetMap.values());
+        if (cachedForMerge) {
+          const merged = this.mergeExportRetryData(docsToExport, cachedForMerge, {
+            docs: freshDocPayloads,
+            assetEntries: freshAssetEntries,
+          });
+          docPayloads = merged.docs;
+          assetEntries = merged.assetEntries;
+        } else {
+          docPayloads = freshDocPayloads;
+          assetEntries = freshAssetEntries;
+        }
+        if (allowRetryCache && exportScopeMeta) {
+          await this.saveExportRetryCacheForScope(exportScopeMeta, {
+            scopeDigest: exportScopeDigest,
+            exportStamp: incrementalCursorStamp,
+            docs: docPayloads,
+            assetEntries,
+          }).catch((err) => {
+            console.warn("saveExportRetryCacheForScope failed", err);
+          });
+        }
+      }
+      docPayloads.forEach((row) => {
+        const markdown = String(row?.markdown || "");
+        if (markdown) exportedMarkdowns.push(markdown);
+      });
       if (resourceFailures > 0) {
         console.warn("Some assets failed to download.", resourceFailures);
       }
@@ -5778,7 +6689,6 @@ class SiYuanSharePlugin extends Plugin {
       } else if (Number.isFinite(visitorLimit)) {
         payload.visitorLimit = Math.max(0, Math.floor(visitorLimit));
       }
-      const assetEntries = Array.from(assetMap.values());
       const assetManifest = assetEntries.map(({asset, docId: entryDocId}) => ({
         path: asset.path,
         size: Number(asset?.blob?.size) || 0,
@@ -6010,47 +6920,110 @@ class SiYuanSharePlugin extends Plugin {
         ? scopeDocs.filter((doc) => candidateSet.has(String(doc?.docId || "").trim()))
         : scopeDocs.slice();
 
-      const docPayloads = [];
-      const assetMap = new Map();
-      const usedUploadPaths = new Set();
-      const iconUploadMap = new Map();
+      let docPayloads = [];
+      let assetEntries = [];
       const exportedMarkdowns = [];
       let failureCount = 0;
-      const docResults = await this.collectDocExportResults(docsToExport, notebookId, {controller, progress});
-      for (const result of docResults) {
-        const doc = result.doc || {};
-        const index = Number(result.index) || 0;
-        const exportRes = result.exportRes || {};
-        const markdown = String(result.markdown || "");
-        const assets = Array.isArray(result.assets) ? result.assets : [];
-        const failures = Array.isArray(result.failures) ? result.failures : [];
-        if (markdown) exportedMarkdowns.push(markdown);
-        failureCount += failures.length;
-        const docIdValue = String(doc?.docId || "").trim();
-        const iconValue = await this.resolveIconUpload(doc?.icon, {
-          docId: docIdValue,
-          notebookId,
-          usedUploadPaths,
-          assetMap,
-          iconUploadMap,
-          controller,
-        });
-        docPayloads.push({
-          docId: docIdValue,
-          title: doc.title || t("siyuanShare.label.untitled"),
-          hPath: exportRes.hPath || "",
-          markdown,
-          parentId: doc.parentId || "",
-          sortIndex: Number.isFinite(doc.sortIndex) ? doc.sortIndex : index,
-          sortOrder: Number.isFinite(doc.sortOrder) ? doc.sortOrder : index,
-          ...(iconValue ? {icon: iconValue} : {}),
-        });
-        for (const asset of assets) {
-          if (!asset?.path || assetMap.has(asset.path)) continue;
-          assetMap.set(asset.path, {asset, docId: docIdValue});
-          usedUploadPaths.add(asset.path);
+      const iconUploadMap = new Map();
+      const allowRetryCache = !useIncremental;
+      const exportScopeMeta = allowRetryCache
+        ? this.buildExportRetryScopeMeta({
+            type: SHARE_TYPES.NOTEBOOK,
+            targetId: notebookId,
+            includeChildren: true,
+          })
+        : null;
+      let exportScopeDigest = "";
+      let cachedExport = null;
+      let changedDocIds = [];
+      if (allowRetryCache && exportScopeMeta && docsToExport.length > 0) {
+        try {
+          const cacheState = await this.resolveExportRetryCacheForScope(exportScopeMeta, docsToExport, {
+            controller,
+            progress,
+          });
+          exportScopeDigest = cacheState.scopeDigest;
+          cachedExport = cacheState.cache;
+          changedDocIds = Array.isArray(cacheState.changedDocIds) ? cacheState.changedDocIds : [];
+        } catch (err) {
+          console.warn("resolveExportRetryCacheForScope failed", err);
         }
       }
+      const changedSet = new Set(changedDocIds.map((id) => String(id || "").trim()).filter((id) => isValidDocId(id)));
+      if (allowRetryCache && cachedExport && changedSet.size === 0) {
+        docPayloads = this.normalizeExportRetryDocs(cachedExport.docs || []);
+        assetEntries = this.normalizeExportRetryAssetEntries(cachedExport.assetEntries || []);
+      } else {
+        let docsForFreshExport = docsToExport.slice();
+        let cachedForMerge = null;
+        if (allowRetryCache && cachedExport && changedSet.size > 0 && changedSet.size < docsToExport.length) {
+          docsForFreshExport = docsToExport.filter((doc) => changedSet.has(String(doc?.docId || "").trim()));
+          cachedForMerge = cachedExport;
+        }
+        const freshDocPayloads = [];
+        const assetMap = new Map();
+        const usedUploadPaths = new Set();
+        const docResults = await this.collectDocExportResults(docsForFreshExport, notebookId, {controller, progress});
+        for (const result of docResults) {
+          const doc = result.doc || {};
+          const index = Number(result.index) || 0;
+          const exportRes = result.exportRes || {};
+          const markdown = String(result.markdown || "");
+          const assets = Array.isArray(result.assets) ? result.assets : [];
+          const failures = Array.isArray(result.failures) ? result.failures : [];
+          failureCount += failures.length;
+          const docIdValue = String(doc?.docId || "").trim();
+          const iconValue = await this.resolveIconUpload(doc?.icon, {
+            docId: docIdValue,
+            notebookId,
+            usedUploadPaths,
+            assetMap,
+            iconUploadMap,
+            controller,
+          });
+          freshDocPayloads.push({
+            docId: docIdValue,
+            title: doc.title || t("siyuanShare.label.untitled"),
+            hPath: exportRes.hPath || "",
+            markdown,
+            parentId: doc.parentId || "",
+            sortIndex: Number.isFinite(doc.sortIndex) ? doc.sortIndex : index,
+            sortOrder: Number.isFinite(doc.sortOrder) ? doc.sortOrder : index,
+            ...(iconValue ? {icon: iconValue} : {}),
+          });
+          for (const asset of assets) {
+            if (!asset?.path || assetMap.has(asset.path)) continue;
+            assetMap.set(asset.path, {asset, docId: docIdValue});
+            usedUploadPaths.add(asset.path);
+          }
+        }
+        const freshAssetEntries = Array.from(assetMap.values());
+        if (cachedForMerge) {
+          const merged = this.mergeExportRetryData(docsToExport, cachedForMerge, {
+            docs: freshDocPayloads,
+            assetEntries: freshAssetEntries,
+          });
+          docPayloads = merged.docs;
+          assetEntries = merged.assetEntries;
+        } else {
+          docPayloads = freshDocPayloads;
+          assetEntries = freshAssetEntries;
+        }
+        if (allowRetryCache && exportScopeMeta) {
+          await this.saveExportRetryCacheForScope(exportScopeMeta, {
+            scopeDigest: exportScopeDigest,
+            exportStamp: incrementalCursorStamp,
+            docs: docPayloads,
+            assetEntries,
+          }).catch((err) => {
+            console.warn("saveExportRetryCacheForScope failed", err);
+          });
+        }
+      }
+      docPayloads.forEach((row) => {
+        const markdown = String(row?.markdown || "");
+        if (markdown) exportedMarkdowns.push(markdown);
+      });
       if (failureCount > 0) {
         console.warn("Some assets failed to download.", failureCount);
       }
@@ -6079,7 +7052,6 @@ class SiYuanSharePlugin extends Plugin {
       } else if (Number.isFinite(visitorLimit)) {
         payload.visitorLimit = Math.max(0, Math.floor(visitorLimit));
       }
-      const assetEntries = Array.from(assetMap.values());
       const assetManifest = assetEntries.map(({asset, docId}) => ({
         path: asset.path,
         size: Number(asset?.blob?.size) || 0,
@@ -6659,6 +7631,19 @@ class SiYuanSharePlugin extends Plugin {
       }
       if (key) {
         await this.clearIncrementalCursor(key);
+      }
+      if (existing?.type === SHARE_TYPES.DOC && isValidDocId(existing?.docId)) {
+        await this.removeExportRetryCacheForTarget({
+          type: SHARE_TYPES.DOC,
+          targetId: String(existing.docId || ""),
+          siteId: this.getActiveSiteId(),
+        });
+      } else if (existing?.type === SHARE_TYPES.NOTEBOOK && isValidNotebookId(existing?.notebookId)) {
+        await this.removeExportRetryCacheForTarget({
+          type: SHARE_TYPES.NOTEBOOK,
+          targetId: String(existing.notebookId || ""),
+          siteId: this.getActiveSiteId(),
+        });
       }
       this.renderSettingCurrent();
       this.notify(t("siyuanShare.message.deleteSuccess"));
