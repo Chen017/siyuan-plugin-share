@@ -219,6 +219,7 @@ function migrate(PDO $pdo): void {
         expires_at INTEGER,
         visitor_limit INTEGER NOT NULL DEFAULT 0,
         asset_manifest TEXT,
+        doc_manifest TEXT,
         upload_mode TEXT,
         patch_manifest TEXT,
         status TEXT NOT NULL DEFAULT "pending",
@@ -400,6 +401,7 @@ function migrate(PDO $pdo): void {
     ensure_column($pdo, 'share_uploads', 'visitor_limit', 'INTEGER NOT NULL DEFAULT 0');
     ensure_column($pdo, 'share_uploads', 'upload_mode', 'TEXT');
     ensure_column($pdo, 'share_uploads', 'patch_manifest', 'TEXT');
+    ensure_column($pdo, 'share_uploads', 'doc_manifest', 'TEXT');
     ensure_column($pdo, 'share_upload_docs', 'icon', 'TEXT');
     ensure_column($pdo, 'share_upload_docs', 'content_hash', 'TEXT');
     ensure_column($pdo, 'share_upload_docs', 'meta_hash', 'TEXT');
@@ -4671,6 +4673,49 @@ function normalize_asset_manifest($rawAssets): array {
     return $assets;
 }
 
+function doc_chunk_prefix(): string {
+    return '__sps_docs/';
+}
+
+function is_doc_chunk_path(string $path): bool {
+    return str_starts_with($path, doc_chunk_prefix());
+}
+
+function normalize_doc_manifest($rawDocs): array {
+    $docs = [];
+    $seenPath = [];
+    $seenDoc = [];
+    if (!is_array($rawDocs)) {
+        return $docs;
+    }
+    foreach ($rawDocs as $item) {
+        if (!is_array($item)) {
+            continue;
+        }
+        $docId = trim((string)($item['docId'] ?? ''));
+        $path = sanitize_asset_path((string)($item['path'] ?? ''));
+        if ($docId === '' || $path === '' || !is_doc_chunk_path($path)) {
+            continue;
+        }
+        if (isset($seenPath[$path]) || isset($seenDoc[$docId])) {
+            continue;
+        }
+        $seenPath[$path] = true;
+        $seenDoc[$docId] = true;
+        $size = (int)($item['size'] ?? 0);
+        if ($size < 0) {
+            $size = 0;
+        }
+        $docs[] = [
+            'docId' => $docId,
+            'path' => $path,
+            'size' => $size,
+            'hash' => normalize_hash_hex($item['hash'] ?? ''),
+        ];
+    }
+    return $docs;
+}
+
 function share_chunks_dir(int $shareId): string {
     global $config;
     return $config['uploads_dir'] . '/chunks/' . $shareId;
@@ -4791,6 +4836,7 @@ function handle_api(string $path): void {
             'maxChunkSize' => $maxChunk,
         ], 'features' => [
             'incrementalShare' => true,
+            'docChunkUpload' => true,
         ]]);
     }
 
@@ -4864,6 +4910,11 @@ function handle_api(string $path): void {
             }
             $docs[] = [
                 'docId' => (string)($row['doc_id'] ?? ''),
+                'title' => (string)($row['title'] ?? ''),
+                'icon' => (string)($row['icon'] ?? ''),
+                'hPath' => (string)($row['hpath'] ?? ''),
+                'parentId' => (string)($row['parent_id'] ?? ''),
+                'sortIndex' => (float)($row['sort_index'] ?? 0),
                 'sortOrder' => max(0, (int)($row['sort_order'] ?? 0)),
                 'contentHash' => $contentHash,
                 'metaHash' => $metaHash,
@@ -5028,11 +5079,17 @@ function handle_api(string $path): void {
         $docs = $meta['docs'] ?? [];
         $hasDocs = is_array($docs) && count($docs) > 0;
         $incrementalPatch = normalize_incremental_patch($meta['incremental'] ?? []);
+        $docChunks = normalize_doc_manifest($payload['docChunks'] ?? []);
+        $docChunkById = [];
+        foreach ($docChunks as $item) {
+            $docChunkById[(string)($item['docId'] ?? '')] = $item;
+        }
+        $hasDocChunks = !empty($docChunkById);
         $stmt = $pdo->prepare('SELECT * FROM shares WHERE user_id = :uid AND type = "doc" AND doc_id = :doc_id ORDER BY id DESC LIMIT 1');
         $stmt->execute([':uid' => $user['id'], ':doc_id' => $docId]);
         $existing = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
         $useIncremental = !empty($incrementalPatch['enabled']) && !!$existing;
-        if ($docId === '' || (!$hasDocs && $markdown === '' && !$useIncremental)) {
+        if ($docId === '' || (!$hasDocs && $markdown === '' && !$hasDocChunks && !$useIncremental)) {
             api_response(400, null, 'Missing document content');
         }
         $bannedWords = get_banned_words();
@@ -5077,10 +5134,19 @@ function handle_api(string $path): void {
                 if ($rowDocId === '') {
                     continue;
                 }
+                $chunkMeta = $docChunkById[$rowDocId] ?? null;
                 $size = strlen($rowMarkdown);
+                if ($size === 0 && $chunkMeta) {
+                    $size = max(0, (int)($chunkMeta['size'] ?? 0));
+                }
                 $rowContentHash = normalize_hash_hex($doc['contentHash'] ?? '');
+                if ($rowContentHash === '' && $chunkMeta) {
+                    $rowContentHash = normalize_hash_hex($chunkMeta['hash'] ?? '');
+                }
                 if ($rowContentHash === '') {
-                    $rowContentHash = compute_doc_content_hash($rowMarkdown);
+                    $rowContentHash = ($rowMarkdown !== '' || !$chunkMeta)
+                        ? compute_doc_content_hash($rowMarkdown)
+                        : '';
                 }
                 $rowMetaHash = normalize_hash_hex($doc['metaHash'] ?? '');
                 if ($rowMetaHash === '') {
@@ -5137,6 +5203,38 @@ function handle_api(string $path): void {
                 'parentId' => null,
                 'sortIndex' => 0,
                 'markdown' => $markdown,
+                'sortOrder' => $sortOrder,
+                'size' => $docSizeTotal,
+                'contentHash' => $docContentHash,
+                'metaHash' => $docMetaHash,
+            ];
+        } elseif ($hasDocChunks && isset($docChunkById[$docId])) {
+            $docIcon = trim((string)($meta['icon'] ?? ''));
+            $chunkMeta = $docChunkById[$docId];
+            $docContentHash = normalize_hash_hex($meta['contentHash'] ?? '');
+            if ($docContentHash === '') {
+                $docContentHash = normalize_hash_hex($chunkMeta['hash'] ?? '');
+            }
+            $docMetaHash = normalize_hash_hex($meta['metaHash'] ?? '');
+            if ($docMetaHash === '') {
+                $docMetaHash = compute_doc_meta_hash([
+                    'title' => $title ?: $docId,
+                    'icon' => $docIcon,
+                    'hPath' => $hPath,
+                    'parentId' => '',
+                    'sortIndex' => 0,
+                    'sortOrder' => $sortOrder,
+                ]);
+            }
+            $docSizeTotal = max(0, (int)($chunkMeta['size'] ?? 0));
+            $docRows[] = [
+                'docId' => $docId,
+                'title' => $title ?: $docId,
+                'icon' => $docIcon,
+                'hPath' => $hPath,
+                'parentId' => null,
+                'sortIndex' => 0,
+                'markdown' => '',
                 'sortOrder' => $sortOrder,
                 'size' => $docSizeTotal,
                 'contentHash' => $docContentHash,
@@ -5217,8 +5315,8 @@ function handle_api(string $path): void {
             JSON_UNESCAPED_SLASHES
         );
         $uploadId = generate_upload_id();
-        $stmt = $pdo->prepare('INSERT INTO share_uploads (upload_id, user_id, share_id, type, doc_id, slug, title, password_hash, expires_at, visitor_limit, asset_manifest, upload_mode, patch_manifest, status, created_at, updated_at)
-            VALUES (:upload_id, :user_id, :share_id, "doc", :doc_id, :slug, :title, :password_hash, :expires_at, :visitor_limit, :asset_manifest, :upload_mode, :patch_manifest, "pending", :created_at, :updated_at)');
+        $stmt = $pdo->prepare('INSERT INTO share_uploads (upload_id, user_id, share_id, type, doc_id, slug, title, password_hash, expires_at, visitor_limit, asset_manifest, doc_manifest, upload_mode, patch_manifest, status, created_at, updated_at)
+            VALUES (:upload_id, :user_id, :share_id, "doc", :doc_id, :slug, :title, :password_hash, :expires_at, :visitor_limit, :asset_manifest, :doc_manifest, :upload_mode, :patch_manifest, "pending", :created_at, :updated_at)');
         $stmt->execute([
             ':upload_id' => $uploadId,
             ':user_id' => $user['id'],
@@ -5230,6 +5328,7 @@ function handle_api(string $path): void {
             ':expires_at' => $expiresValue,
             ':visitor_limit' => $visitorValue,
             ':asset_manifest' => json_encode($assets, JSON_UNESCAPED_SLASHES),
+            ':doc_manifest' => json_encode($docChunks, JSON_UNESCAPED_SLASHES),
             ':upload_mode' => $uploadMode,
             ':patch_manifest' => $patchManifest,
             ':created_at' => now(),
@@ -5274,6 +5373,11 @@ function handle_api(string $path): void {
         $visitorLimit = parse_visitor_limit($meta['visitorLimit'] ?? null);
         $clearVisitorLimit = !empty($meta['clearVisitorLimit']);
         $incrementalPatch = normalize_incremental_patch($meta['incremental'] ?? []);
+        $docChunks = normalize_doc_manifest($payload['docChunks'] ?? []);
+        $docChunkById = [];
+        foreach ($docChunks as $item) {
+            $docChunkById[(string)($item['docId'] ?? '')] = $item;
+        }
         $stmt = $pdo->prepare('SELECT * FROM shares WHERE user_id = :uid AND type = "notebook" AND notebook_id = :nid ORDER BY id DESC LIMIT 1');
         $stmt->execute([':uid' => $user['id'], ':nid' => $notebookId]);
         $existing = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
@@ -5315,10 +5419,19 @@ function handle_api(string $path): void {
             if ($docId === '') {
                 continue;
             }
+            $chunkMeta = $docChunkById[$docId] ?? null;
             $size = strlen($docMarkdown);
+            if ($size === 0 && $chunkMeta) {
+                $size = max(0, (int)($chunkMeta['size'] ?? 0));
+            }
             $docContentHash = normalize_hash_hex($doc['contentHash'] ?? '');
+            if ($docContentHash === '' && $chunkMeta) {
+                $docContentHash = normalize_hash_hex($chunkMeta['hash'] ?? '');
+            }
             if ($docContentHash === '') {
-                $docContentHash = compute_doc_content_hash($docMarkdown);
+                $docContentHash = ($docMarkdown !== '' || !$chunkMeta)
+                    ? compute_doc_content_hash($docMarkdown)
+                    : '';
             }
             $docMetaHash = normalize_hash_hex($doc['metaHash'] ?? '');
             if ($docMetaHash === '') {
@@ -5420,8 +5533,8 @@ function handle_api(string $path): void {
             JSON_UNESCAPED_SLASHES
         );
         $uploadId = generate_upload_id();
-        $stmt = $pdo->prepare('INSERT INTO share_uploads (upload_id, user_id, share_id, type, notebook_id, slug, title, password_hash, expires_at, visitor_limit, asset_manifest, upload_mode, patch_manifest, status, created_at, updated_at)
-            VALUES (:upload_id, :user_id, :share_id, "notebook", :notebook_id, :slug, :title, :password_hash, :expires_at, :visitor_limit, :asset_manifest, :upload_mode, :patch_manifest, "pending", :created_at, :updated_at)');
+        $stmt = $pdo->prepare('INSERT INTO share_uploads (upload_id, user_id, share_id, type, notebook_id, slug, title, password_hash, expires_at, visitor_limit, asset_manifest, doc_manifest, upload_mode, patch_manifest, status, created_at, updated_at)
+            VALUES (:upload_id, :user_id, :share_id, "notebook", :notebook_id, :slug, :title, :password_hash, :expires_at, :visitor_limit, :asset_manifest, :doc_manifest, :upload_mode, :patch_manifest, "pending", :created_at, :updated_at)');
         $stmt->execute([
             ':upload_id' => $uploadId,
             ':user_id' => $user['id'],
@@ -5433,6 +5546,7 @@ function handle_api(string $path): void {
             ':expires_at' => $expiresValue,
             ':visitor_limit' => $visitorValue,
             ':asset_manifest' => json_encode($assets, JSON_UNESCAPED_SLASHES),
+            ':doc_manifest' => json_encode($docChunks, JSON_UNESCAPED_SLASHES),
             ':upload_mode' => $uploadMode,
             ':patch_manifest' => $patchManifest,
             ':created_at' => now(),
@@ -5479,9 +5593,10 @@ function handle_api(string $path): void {
         if (!$upload) {
             api_response(404, null, 'Upload not found');
         }
-        $manifest = json_decode((string)($upload['asset_manifest'] ?? ''), true);
-        $manifest = is_array($manifest) ? $manifest : [];
+        $manifest = normalize_asset_manifest(json_decode((string)($upload['asset_manifest'] ?? ''), true));
+        $docManifest = normalize_doc_manifest(json_decode((string)($upload['doc_manifest'] ?? ''), true));
         $manifestItem = null;
+        $isDocChunk = false;
         foreach ($manifest as $item) {
             $path = sanitize_asset_path((string)($item['path'] ?? ''));
             if ($path !== '' && $path === $assetPath) {
@@ -5490,7 +5605,23 @@ function handle_api(string $path): void {
             }
         }
         if (!$manifestItem) {
+            foreach ($docManifest as $item) {
+                $path = sanitize_asset_path((string)($item['path'] ?? ''));
+                if ($path !== '' && $path === $assetPath) {
+                    $manifestItem = $item;
+                    $isDocChunk = true;
+                    break;
+                }
+            }
+        }
+        if (!$manifestItem) {
             api_response(400, null, 'Asset not allowed');
+        }
+        if ($isDocChunk) {
+            $expectedDocId = trim((string)($manifestItem['docId'] ?? ''));
+            if ($expectedDocId !== '' && $docId !== '' && $expectedDocId !== $docId) {
+                api_response(400, null, 'Document chunk mismatch');
+            }
         }
         if (empty($_FILES['chunk'])) {
             api_response(400, null, 'Missing chunk file');
@@ -5583,12 +5714,20 @@ function handle_api(string $path): void {
             api_response(404, null, 'Upload not found');
         }
 
+        $stagingDir = upload_staging_dir($uploadId);
+        $docManifest = normalize_doc_manifest(json_decode((string)($upload['doc_manifest'] ?? ''), true));
+        $docChunkById = [];
+        foreach ($docManifest as $item) {
+            $docChunkById[(string)($item['docId'] ?? '')] = $item;
+        }
+
         $docStmt = $pdo->prepare('SELECT * FROM share_upload_docs WHERE upload_id = :upload_id ORDER BY id ASC');
         $docStmt->execute([':upload_id' => $uploadId]);
         $docRowsRaw = $docStmt->fetchAll(PDO::FETCH_ASSOC);
         $docRows = [];
         $docSizeTotal = 0;
         foreach ($docRowsRaw as $row) {
+            $docIdKey = trim((string)($row['doc_id'] ?? ''));
             $docMarkdown = (string)($row['markdown'] ?? '');
             $docTitle = (string)($row['title'] ?? '');
             $docIcon = (string)($row['icon'] ?? '');
@@ -5596,7 +5735,41 @@ function handle_api(string $path): void {
             $docParent = (string)($row['parent_id'] ?? '');
             $docSortIndex = normalize_sort_index_value($row['sort_index'] ?? 0);
             $docSortOrder = max(0, (int)($row['sort_order'] ?? 0));
+            $docChunk = $docIdKey !== '' ? ($docChunkById[$docIdKey] ?? null) : null;
+            $chunkHash = '';
+            $chunkSize = -1;
+            if ($docChunk) {
+                $chunkPath = sanitize_asset_path((string)($docChunk['path'] ?? ''));
+                $fullChunkPath = $chunkPath !== '' ? ($stagingDir . '/' . $chunkPath) : '';
+                if ($fullChunkPath === '' || !is_file($fullChunkPath)) {
+                    api_response(400, null, 'Missing document: ' . $docIdKey);
+                }
+                $chunkContent = @file_get_contents($fullChunkPath);
+                if ($chunkContent === false) {
+                    api_response(500, null, 'Failed to read document: ' . $docIdKey);
+                }
+                $docMarkdown = (string)$chunkContent;
+                $chunkSize = (int)filesize($fullChunkPath);
+                if ($chunkSize < 0) {
+                    $chunkSize = strlen($docMarkdown);
+                }
+                $expectedSize = max(0, (int)($docChunk['size'] ?? 0));
+                if ($expectedSize > 0 && $chunkSize !== $expectedSize) {
+                    api_response(400, null, 'Document size mismatch: ' . $docIdKey);
+                }
+                $chunkHash = normalize_hash_hex($docChunk['hash'] ?? '');
+                if ($chunkHash !== '') {
+                    $computedChunkHash = compute_doc_content_hash($docMarkdown);
+                    if ($computedChunkHash !== $chunkHash) {
+                        api_response(400, null, 'Document hash mismatch: ' . $docIdKey);
+                    }
+                }
+                @unlink($fullChunkPath);
+            }
             $docContentHash = normalize_hash_hex($row['content_hash'] ?? '');
+            if ($chunkHash !== '') {
+                $docContentHash = $chunkHash;
+            }
             if ($docContentHash === '') {
                 $docContentHash = compute_doc_content_hash($docMarkdown);
             }
@@ -5611,9 +5784,14 @@ function handle_api(string $path): void {
                     'sortOrder' => $docSortOrder,
                 ]);
             }
-            $rowSize = (int)($row['size_bytes'] ?? strlen($docMarkdown));
+            $rowSize = (int)($row['size_bytes'] ?? 0);
+            if ($chunkSize >= 0) {
+                $rowSize = $chunkSize;
+            } elseif ($rowSize <= 0) {
+                $rowSize = strlen($docMarkdown);
+            }
             $docRows[] = [
-                'doc_id' => (string)($row['doc_id'] ?? ''),
+                'doc_id' => $docIdKey,
                 'title' => $docTitle,
                 'icon' => $docIcon,
                 'hpath' => $docHpath,
@@ -5627,11 +5805,27 @@ function handle_api(string $path): void {
             ];
             $docSizeTotal += $rowSize;
         }
+        $bannedWords = get_banned_words();
+        if (!empty($bannedWords)) {
+            foreach ($docRows as $row) {
+                $docMarkdown = (string)($row['markdown'] ?? '');
+                if ($docMarkdown === '') {
+                    continue;
+                }
+                $hit = find_banned_word($docMarkdown, $bannedWords);
+                if ($hit) {
+                    $docTitle = trim((string)($row['title'] ?? '')) ?: trim((string)($row['doc_id'] ?? ''));
+                    api_response(400, null, 'Banned word detected: ' . $hit['word'] . ' (doc: ' . $docTitle . ')');
+                }
+            }
+        }
+        $docChunkDir = $stagingDir . '/' . rtrim(doc_chunk_prefix(), '/');
+        if (!empty($docManifest) && is_dir($docChunkDir)) {
+            remove_dir($docChunkDir);
+        }
 
-        $manifest = json_decode((string)($upload['asset_manifest'] ?? ''), true);
-        $manifest = is_array($manifest) ? $manifest : [];
+        $manifest = normalize_asset_manifest(json_decode((string)($upload['asset_manifest'] ?? ''), true));
         $assetSizeTotal = 0;
-        $stagingDir = upload_staging_dir($uploadId);
         $manifestEntries = [];
         foreach ($manifest as $item) {
             $path = sanitize_asset_path((string)($item['path'] ?? ''));
