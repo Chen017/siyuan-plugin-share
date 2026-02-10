@@ -9845,7 +9845,6 @@ if ($path === '/admin') {
         $smtpEnabled = false;
         $siteIcp = '';
         $siteBaseUrl = '';
-        $siteHeadHtml = '';
         $bannedWordsRaw = '';
     }
     $scanKeep = ((string)($_GET['scan_keep'] ?? '')) === '1';
@@ -10041,12 +10040,12 @@ if ($path === '/admin') {
         $content .= '<textarea class="input" name="banned_words" rows="2" placeholder="示例：词1|词2|词3">' . htmlspecialchars($bannedWordsRaw) . '</textarea>';
         $content .= '<div class="muted">用户分享和分享页评论命中任意违禁词将拒绝分享和评论，并在扫描结果中标记。</div>';
         $content .= '</div>';
-        $content .= '<div style="margin-top:12px">';
-        $content .= '<label>HTML Head 插入内容</label>';
-        $content .= '<textarea class="input" name="site_head_html" rows="4" placeholder="例如：&lt;script src=&quot;https://example.com/xxx.js&quot;&gt;&lt;/script&gt;">' . htmlspecialchars((string)$siteHeadHtml) . '</textarea>';
-        $content .= '<div class="muted">会插入到页面 &lt;head&gt; 中，可用于统计脚本。</div>';
-        $content .= '</div>';
     }
+    $content .= '<div style="margin-top:12px">';
+    $content .= '<label>HTML Head 插入内容</label>';
+    $content .= '<textarea class="input" name="site_head_html" rows="4" placeholder="例如：&lt;script src=&quot;https://example.com/xxx.js&quot;&gt;&lt;/script&gt;">' . htmlspecialchars((string)$siteHeadHtml) . '</textarea>';
+    $content .= '<div class="muted">会插入到页面 &lt;head&gt; 中，可用于统计脚本。</div>';
+    $content .= '</div>';
     $content .= '<div class="grid" style="margin-top:12px">';
     if (!$liteMode) {
         $content .= '<label><input type="checkbox" name="captcha_enabled" value="1"' . ($captchaEnabled ? ' checked' : '') . '> 启用验证码</label>';
@@ -10801,7 +10800,6 @@ if ($path === '/admin/settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $smtpEnabled = '0';
         $siteIcp = '';
         $siteBaseUrl = '';
-        $siteHeadHtml = '';
         $bannedWords = '';
         $smtpHost = '';
         $smtpPort = '587';
