@@ -478,6 +478,7 @@ function seed_default_settings(PDO $pdo): void {
     ensure_setting($pdo, 'site_icp', '');
     ensure_setting($pdo, 'site_contact_email', '');
     ensure_setting($pdo, 'site_base_url', '');
+    ensure_setting($pdo, 'site_head_html', '');
     ensure_setting($pdo, 'access_stats_default_enabled', '1');
     ensure_setting($pdo, 'access_stats_default_retention_days', '7');
 }
@@ -1200,6 +1201,10 @@ function render_page(string $title, string $content, ?array $user = null, string
         echo "<link rel='stylesheet' href='{$base}/assets/vendor/highlight.min.css'>";
     }
     echo "<link rel='stylesheet' href='{$base}/assets/style.css'>";
+    $siteHeadHtml = (string)get_setting('site_head_html', '');
+    if ($siteHeadHtml !== '') {
+        echo $siteHeadHtml;
+    }
     echo "</head>";
     echo "<body class='{$layoutClass}'>";
 
@@ -9833,12 +9838,14 @@ if ($path === '/admin') {
     $siteIcp = get_setting('site_icp', '');
     $siteContactEmail = get_setting('site_contact_email', '');
     $siteBaseUrl = get_setting('site_base_url', '');
+    $siteHeadHtml = get_setting('site_head_html', '');
     $bannedWordsRaw = get_banned_words_raw();
     if ($liteMode) {
         $emailVerifyEnabled = false;
         $smtpEnabled = false;
         $siteIcp = '';
         $siteBaseUrl = '';
+        $siteHeadHtml = '';
         $bannedWordsRaw = '';
     }
     $scanKeep = ((string)($_GET['scan_keep'] ?? '')) === '1';
@@ -10033,6 +10040,11 @@ if ($path === '/admin') {
         $content .= '<label>违禁词（用 | 分隔）</label>';
         $content .= '<textarea class="input" name="banned_words" rows="2" placeholder="示例：词1|词2|词3">' . htmlspecialchars($bannedWordsRaw) . '</textarea>';
         $content .= '<div class="muted">用户分享和分享页评论命中任意违禁词将拒绝分享和评论，并在扫描结果中标记。</div>';
+        $content .= '</div>';
+        $content .= '<div style="margin-top:12px">';
+        $content .= '<label>HTML Head 插入内容</label>';
+        $content .= '<textarea class="input" name="site_head_html" rows="4" placeholder="例如：&lt;script src=&quot;https://example.com/xxx.js&quot;&gt;&lt;/script&gt;">' . htmlspecialchars((string)$siteHeadHtml) . '</textarea>';
+        $content .= '<div class="muted">会插入到页面 &lt;head&gt; 中，可用于统计脚本。</div>';
         $content .= '</div>';
     }
     $content .= '<div class="grid" style="margin-top:12px">';
@@ -10772,6 +10784,7 @@ if ($path === '/admin/settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $siteIcp = trim((string)($_POST['site_icp'] ?? ''));
     $siteContactEmail = trim((string)($_POST['site_contact_email'] ?? ''));
     $siteBaseUrl = trim((string)($_POST['site_base_url'] ?? ''));
+    $siteHeadHtml = trim((string)($_POST['site_head_html'] ?? ''));
     $smtpHost = trim((string)($_POST['smtp_host'] ?? ''));
     $smtpPort = trim((string)($_POST['smtp_port'] ?? ''));
     $smtpSecure = trim((string)($_POST['smtp_secure'] ?? ''));
@@ -10788,6 +10801,7 @@ if ($path === '/admin/settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $smtpEnabled = '0';
         $siteIcp = '';
         $siteBaseUrl = '';
+        $siteHeadHtml = '';
         $bannedWords = '';
         $smtpHost = '';
         $smtpPort = '587';
@@ -10808,6 +10822,7 @@ if ($path === '/admin/settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     set_setting('site_icp', $siteIcp);
     set_setting('site_contact_email', $siteContactEmail);
     set_setting('site_base_url', $siteBaseUrl);
+    set_setting('site_head_html', $siteHeadHtml);
     set_setting('smtp_host', $smtpHost);
     set_setting('smtp_port', $smtpPort !== '' ? $smtpPort : '587');
     set_setting('smtp_secure', $smtpSecure !== '' ? $smtpSecure : 'tls');
