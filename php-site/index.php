@@ -10115,9 +10115,6 @@ if ($path === '/admin') {
     $admin = require_admin();
     $pdo = db();
     $liteMode = lite_mode_enabled();
-    if ($liteMode) {
-        redirect('/admin-home');
-    }
     $info = flash('info');
     $error = flash('error');
     $createForm = $_SESSION['user_create_form'] ?? [];
