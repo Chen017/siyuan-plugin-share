@@ -9853,178 +9853,6 @@ if ($path === '/admin-home') {
     $content .= render_kpi_card('总访问', number_format($totalAccess), '访客数(UV) 总计 ' . number_format($totalUv), $iconAccess);
     $content .= render_kpi_card('存储占用/剩余', htmlspecialchars($storageValue), htmlspecialchars($storageMeta), $iconStorage, $storageProgress);
     $content .= '</div>';
-    if ($liteMode && is_array($accessSummary)) {
-        $content .= '<div class="card" id="access-stats"><h2>访问概况</h2>';
-        $content .= '<form method="post" action="' . base_path() . '/admin-home/access-update" class="stats-settings">';
-        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
-        $content .= '<div class="grid">';
-        $content .= '<div><label>访问统计</label><label class="checkbox stats-toggle"><input type="checkbox" name="access_enabled" value="1"' . ($liteAccessEnabled ? ' checked' : '') . '> 开启</label></div>';
-        $content .= '<div><label>保留天数</label><input class="input" type="number" name="access_retention_days" min="1" max="365" value="' . (int)$liteAccessRetention . '"></div>';
-        $content .= '</div>';
-        $content .= '<div class="muted stats-note">访客数(UV) 按浏览器 Cookie 去重（按天），访问记录计入账号存储空间，默认保留最近 7 天（当前 ' . (int)$liteAccessRetention . ' 天），可在此调整；存储不足会自动关闭并清空统计。</div>';
-        $content .= '<div style="margin-top:12px"><button class="button" type="submit">保存设置</button></div>';
-        $content .= '</form>';
-        $liteFilterQuery = $_GET;
-        unset($liteFilterQuery['lite_access_share'], $liteFilterQuery['lite_access_page'], $liteFilterQuery['lite_source_page']);
-        $content .= '<form method="get" action="' . base_path() . '/admin-home" class="filter-form">';
-        $content .= render_hidden_inputs($liteFilterQuery);
-        $content .= '<div class="grid">';
-        $content .= '<div><label>笔记筛选</label><select class="input" name="lite_access_share">';
-        $content .= '<option value="all"' . ($liteAccessShareId <= 0 ? ' selected' : '') . '>全部</option>';
-        foreach ($liteShareOptions as $option) {
-            $optionId = (int)($option['id'] ?? 0);
-            $optionTitle = (string)($option['title'] ?? '');
-            $optionSlug = (string)($option['slug'] ?? '');
-            $optLabel = $optionTitle !== '' ? $optionTitle : $optionSlug;
-            if ($optionSlug !== '') {
-                $optLabel .= ' /s/' . $optionSlug;
-            }
-            $selected = $liteAccessShareId === $optionId ? ' selected' : '';
-            $content .= '<option value="' . $optionId . '"' . $selected . '>' . htmlspecialchars($optLabel) . '</option>';
-        }
-        $content .= '</select></div>';
-        $content .= '</div>';
-        $content .= '<div style="margin-top:12px"><button class="button" type="submit">筛选</button></div>';
-        $content .= '</form>';
-        $content .= '<table class="table stats-table"><thead><tr><th></th><th>浏览量(PV)</th><th>访客数(UV)</th><th>IP 数量</th></tr></thead><tbody>';
-        $content .= '<tr><td>今日</td><td>' . $accessSummary['pv_today'] . '</td><td>' . $accessSummary['uv_today'] . '</td><td>' . $accessSummary['ip_today'] . '</td></tr>';
-        $content .= '<tr><td>昨日</td><td>' . $accessSummary['pv_yesterday'] . '</td><td>' . $accessSummary['uv_yesterday'] . '</td><td>' . $accessSummary['ip_yesterday'] . '</td></tr>';
-        $content .= '<tr><td>总计</td><td>' . $accessSummary['pv_total'] . '</td><td>' . $accessSummary['uv_total'] . '</td><td>' . $accessSummary['ip_total'] . '</td></tr>';
-        $content .= '</tbody></table>';
-        $content .= '</div>';
-
-        $content .= '<div class="card"><h2>来源页</h2>';
-        if (empty($liteAccessSources)) {
-            $content .= '<p class="muted">暂无来源数据。</p>';
-        } else {
-            $content .= '<table class="table stats-table"><thead><tr><th>排名</th><th>次数</th><th>来源地址</th></tr></thead><tbody>';
-            $rank = ($liteSourcePage - 1) * $liteSourceSize + 1;
-            foreach ($liteAccessSources as $row) {
-                $referer = (string)($row['referer'] ?? '');
-                $total = (int)($row['total'] ?? 0);
-                $content .= '<tr><td>' . $rank . '</td><td>' . $total . '</td><td class="stats-source">' . htmlspecialchars($referer) . '</td></tr>';
-                $rank++;
-            }
-            $content .= '</tbody></table>';
-        }
-        $content .= '<div class="pagination">';
-        $content .= '<a class="button ghost" href="' . build_admin_home_query_url(['lite_source_page' => max(1, $liteSourcePage - 1)]) . '">上一页</a>';
-        $content .= '<div class="pagination-info">第 ' . $liteSourcePage . ' / ' . $liteSourcePages . ' 页，共 ' . $liteSourceTotal . ' 条来源</div>';
-        $content .= '<a class="button ghost" href="' . build_admin_home_query_url(['lite_source_page' => min($liteSourcePages, $liteSourcePage + 1)]) . '">下一页</a>';
-        $content .= '<form method="get" action="' . base_path() . '/admin-home" class="pagination-form">';
-        $liteSourceQuery = $_GET;
-        unset($liteSourceQuery['lite_source_page'], $liteSourceQuery['lite_source_size']);
-        $content .= render_hidden_inputs($liteSourceQuery);
-        $content .= '<label>每页</label><select class="input" name="lite_source_size">';
-        foreach ([10, 50, 200, 1000] as $size) {
-            $selected = $liteSourceSize === $size ? ' selected' : '';
-            $content .= '<option value="' . $size . '"' . $selected . '>' . $size . '</option>';
-        }
-        $content .= '</select>';
-        $content .= '<label>页码</label><input class="input small" type="number" name="lite_source_page" min="1" max="' . $liteSourcePages . '" value="' . $liteSourcePage . '">';
-        $content .= '<button class="button" type="submit">跳转</button>';
-        $content .= '</form>';
-        $content .= '</div>';
-        $content .= '</div>';
-
-        $content .= '<div class="card"><h2>访客地域分析</h2>';
-        $content .= '<div class="stats-charts">';
-        $content .= '<div class="stats-chart">';
-        $content .= '<div class="stats-subtitle">国内</div>';
-        if (empty($liteAccessRegionsCn)) {
-            $content .= '<p class="muted">暂无数据。</p>';
-        } else {
-            $content .= '<div class="stats-chart-list">';
-            foreach ($liteAccessRegionsCn as $row) {
-                $label = (string)($row['label'] ?? '');
-                $total = (int)($row['total'] ?? 0);
-                $percent = $liteAccessCnMax > 0 ? round(($total / $liteAccessCnMax) * 100, 1) : 0;
-                $content .= '<div class="stats-chart-row"><div class="stats-label">' . htmlspecialchars($label) . '</div><div class="stats-bar-track"><div class="stats-bar" style="width:' . $percent . '%"></div></div><div class="stats-value">' . $total . '</div></div>';
-            }
-            $content .= '</div>';
-        }
-        $content .= '</div>';
-        $content .= '<div class="stats-chart">';
-        $content .= '<div class="stats-subtitle">国际</div>';
-        if (empty($liteAccessRegionsIntl)) {
-            $content .= '<p class="muted">暂无数据。</p>';
-        } else {
-            $content .= '<div class="stats-chart-list">';
-            foreach ($liteAccessRegionsIntl as $row) {
-                $label = normalize_region_stats_label((string)($row['label'] ?? ''));
-                $total = (int)($row['total'] ?? 0);
-                $percent = $liteAccessIntlMax > 0 ? round(($total / $liteAccessIntlMax) * 100, 1) : 0;
-                $content .= '<div class="stats-chart-row"><div class="stats-label">' . htmlspecialchars($label) . '</div><div class="stats-bar-track"><div class="stats-bar" style="width:' . $percent . '%"></div></div><div class="stats-value">' . $total . '</div></div>';
-            }
-            $content .= '</div>';
-        }
-        $content .= '</div>';
-        $content .= '</div>';
-        $content .= '</div>';
-
-        $content .= '<div class="card"><h2>访问记录</h2>';
-        $content .= '<div class="table-actions stats-actions">';
-        $content .= '<form id="lite-access-batch-form" method="post" action="' . base_path() . '/admin-home/access-delete" class="inline-form" data-batch-form="lite-access">';
-        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
-        $content .= '<label class="checkbox"><input type="checkbox" data-check-all="lite-access"> 全选</label>';
-        $content .= '<button class="button danger" type="submit">批量删除</button>';
-        $content .= '</form>';
-        $content .= '<form method="post" action="' . base_path() . '/admin-home/access-delete-all" class="inline-form" data-confirm-message="确定删除全部访问记录吗？该操作不可恢复。">';
-        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
-        $content .= '<button class="button danger" type="submit">删除全部（占用 ' . $liteAccessLogTotalLabel . '）</button>';
-        $content .= '</form>';
-        $content .= '</div>';
-        if (empty($liteAccessLogs)) {
-            $content .= '<p class="muted">暂无访问记录。</p>';
-        } else {
-            $content .= '<table class="table stats-table"><thead><tr><th><input type="checkbox" data-check-all="lite-access" form="lite-access-batch-form"></th><th>标题</th><th>IP</th><th>IP归属地</th><th>访问日期</th></tr></thead><tbody>';
-            foreach ($liteAccessLogs as $log) {
-                $logTitle = trim((string)($log['doc_title'] ?? ''));
-                if ($logTitle === '') {
-                    $logTitle = (string)($log['share_title'] ?? '');
-                }
-                if ($logTitle === '') {
-                    $logTitle = '未命名';
-                }
-                $ip = trim((string)($log['ip'] ?? ''));
-                if ($ip === '') {
-                    $ip = '-';
-                }
-                $location = format_ip_location([
-                    'country' => $log['ip_country'] ?? '',
-                    'country_code' => $log['ip_country_code'] ?? '',
-                    'region' => $log['ip_region'] ?? '',
-                    'city' => $log['ip_city'] ?? '',
-                ]);
-                if ($location === '') {
-                    $location = '-';
-                }
-                $content .= '<tr>';
-                $content .= '<td><input type="checkbox" name="access_ids[]" value="' . (int)$log['id'] . '" data-check-item="lite-access" form="lite-access-batch-form"></td>';
-                $content .= '<td>' . htmlspecialchars($logTitle) . '</td><td>' . htmlspecialchars($ip) . '</td><td>' . htmlspecialchars($location) . '</td><td>' . htmlspecialchars((string)($log['created_at'] ?? '-')) . '</td></tr>';
-            }
-            $content .= '</tbody></table>';
-        }
-        $content .= '<div class="pagination">';
-        $content .= '<a class="button ghost" href="' . build_admin_home_query_url(['lite_access_page' => max(1, $liteAccessPage - 1)]) . '">上一页</a>';
-        $content .= '<div class="pagination-info">第 ' . $liteAccessPage . ' / ' . $liteAccessPages . ' 页，共 ' . $liteAccessTotal . ' 条访问</div>';
-        $content .= '<a class="button ghost" href="' . build_admin_home_query_url(['lite_access_page' => min($liteAccessPages, $liteAccessPage + 1)]) . '">下一页</a>';
-        $content .= '<form method="get" action="' . base_path() . '/admin-home" class="pagination-form">';
-        $liteAccessQuery = $_GET;
-        unset($liteAccessQuery['lite_access_page'], $liteAccessQuery['lite_access_size']);
-        $content .= render_hidden_inputs($liteAccessQuery);
-        $content .= '<label>每页</label><select class="input" name="lite_access_size">';
-        foreach ([10, 50, 200, 1000] as $size) {
-            $selected = $liteAccessSize === $size ? ' selected' : '';
-            $content .= '<option value="' . $size . '"' . $selected . '>' . $size . '</option>';
-        }
-        $content .= '</select>';
-        $content .= '<label>页码</label><input class="input small" type="number" name="lite_access_page" min="1" max="' . $liteAccessPages . '" value="' . $liteAccessPage . '">';
-        $content .= '<button class="button" type="submit">跳转</button>';
-        $content .= '</form>';
-        $content .= '</div>';
-        $content .= '</div>';
-    }
 
     $pvUvRangeSource = htmlspecialchars(json_encode([
         'labels' => $range30,
@@ -10156,6 +9984,186 @@ if ($path === '/admin-home') {
         $content .= '<div class="admin-governance__value">' . number_format($reportTotal) . '</div>';
         $content .= '<div class="admin-governance__meta">待处理 ' . number_format($reportPending) . '</div>';
         $content .= '</div>';
+        $content .= '</div>';
+    }
+    if ($liteMode && is_array($accessSummary)) {
+        $content .= '<div class="card" id="access-stats"><h2>访问统计</h2>';
+        $content .= '<form method="post" action="' . base_path() . '/admin-home/access-update" class="stats-settings">';
+        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+        $content .= '<div class="grid">';
+        $content .= '<div><label>访问统计</label><label class="checkbox stats-toggle"><input type="checkbox" name="access_enabled" value="1"' . ($liteAccessEnabled ? ' checked' : '') . '> 开启</label></div>';
+        $content .= '<div><label>保留天数</label><input class="input" type="number" name="access_retention_days" min="1" max="365" value="' . (int)$liteAccessRetention . '"></div>';
+        $content .= '</div>';
+        $content .= '<div class="muted stats-note">访客数(UV) 按浏览器 Cookie 去重（按天），访问记录计入账号存储空间，默认保留最近 7 天（当前 ' . (int)$liteAccessRetention . ' 天），可在此调整；存储不足会自动关闭并清空统计。</div>';
+        $content .= '<div style="margin-top:12px"><button class="button" type="submit">保存设置</button></div>';
+        $content .= '</form>';
+        $liteFilterQuery = $_GET;
+        unset($liteFilterQuery['lite_access_share'], $liteFilterQuery['lite_access_page'], $liteFilterQuery['lite_source_page']);
+        $content .= '<form method="get" action="' . base_path() . '/admin-home" class="filter-form">';
+        $content .= render_hidden_inputs($liteFilterQuery);
+        $content .= '<div class="grid">';
+        $content .= '<div><label>笔记筛选</label><select class="input" name="lite_access_share">';
+        $content .= '<option value="all"' . ($liteAccessShareId <= 0 ? ' selected' : '') . '>全部</option>';
+        foreach ($liteShareOptions as $option) {
+            $optionId = (int)($option['id'] ?? 0);
+            $optionTitle = (string)($option['title'] ?? '');
+            $optionSlug = (string)($option['slug'] ?? '');
+            $optLabel = $optionTitle !== '' ? $optionTitle : $optionSlug;
+            if ($optionSlug !== '') {
+                $optLabel .= ' /s/' . $optionSlug;
+            }
+            $selected = $liteAccessShareId === $optionId ? ' selected' : '';
+            $content .= '<option value="' . $optionId . '"' . $selected . '>' . htmlspecialchars($optLabel) . '</option>';
+        }
+        $content .= '</select></div>';
+        $content .= '</div>';
+        $content .= '<div style="margin-top:12px"><button class="button" type="submit">筛选</button></div>';
+        $content .= '</form>';
+
+        $content .= '<div class="stats-block">';
+        $content .= '<div class="stats-title">访问概况</div>';
+        $content .= '<table class="table stats-table"><thead><tr><th></th><th>浏览量(PV)</th><th>访客数(UV)</th><th>IP 数量</th></tr></thead><tbody>';
+        $content .= '<tr><td>今日</td><td>' . $accessSummary['pv_today'] . '</td><td>' . $accessSummary['uv_today'] . '</td><td>' . $accessSummary['ip_today'] . '</td></tr>';
+        $content .= '<tr><td>昨日</td><td>' . $accessSummary['pv_yesterday'] . '</td><td>' . $accessSummary['uv_yesterday'] . '</td><td>' . $accessSummary['ip_yesterday'] . '</td></tr>';
+        $content .= '<tr><td>总计</td><td>' . $accessSummary['pv_total'] . '</td><td>' . $accessSummary['uv_total'] . '</td><td>' . $accessSummary['ip_total'] . '</td></tr>';
+        $content .= '</tbody></table>';
+        $content .= '</div>';
+
+        $content .= '<div class="stats-block">';
+        $content .= '<div class="stats-title">来源页</div>';
+        if (empty($liteAccessSources)) {
+            $content .= '<p class="muted">暂无来源数据。</p>';
+        } else {
+            $content .= '<table class="table stats-table"><thead><tr><th>排名</th><th>次数</th><th>来源地址</th></tr></thead><tbody>';
+            $rank = ($liteSourcePage - 1) * $liteSourceSize + 1;
+            foreach ($liteAccessSources as $row) {
+                $referer = (string)($row['referer'] ?? '');
+                $total = (int)($row['total'] ?? 0);
+                $content .= '<tr><td>' . $rank . '</td><td>' . $total . '</td><td class="stats-source">' . htmlspecialchars($referer) . '</td></tr>';
+                $rank++;
+            }
+            $content .= '</tbody></table>';
+            $content .= '<div class="pagination">';
+            $content .= '<a class="button ghost" href="' . build_admin_home_query_url(['lite_source_page' => max(1, $liteSourcePage - 1)]) . '">上一页</a>';
+            $content .= '<div class="pagination-info">第 ' . $liteSourcePage . ' / ' . $liteSourcePages . ' 页，共 ' . $liteSourceTotal . ' 条来源</div>';
+            $content .= '<a class="button ghost" href="' . build_admin_home_query_url(['lite_source_page' => min($liteSourcePages, $liteSourcePage + 1)]) . '">下一页</a>';
+            $content .= '<form method="get" action="' . base_path() . '/admin-home" class="pagination-form">';
+            $liteSourceQuery = $_GET;
+            unset($liteSourceQuery['lite_source_page'], $liteSourceQuery['lite_source_size']);
+            $content .= render_hidden_inputs($liteSourceQuery);
+            $content .= '<label>每页</label><select class="input" name="lite_source_size">';
+            foreach ([10, 50, 200, 1000] as $size) {
+                $selected = $liteSourceSize === $size ? ' selected' : '';
+                $content .= '<option value="' . $size . '"' . $selected . '>' . $size . '</option>';
+            }
+            $content .= '</select>';
+            $content .= '<label>页码</label><input class="input small" type="number" name="lite_source_page" min="1" max="' . $liteSourcePages . '" value="' . $liteSourcePage . '">';
+            $content .= '<button class="button" type="submit">跳转</button>';
+            $content .= '</form>';
+            $content .= '</div>';
+        }
+        $content .= '</div>';
+
+        $content .= '<div class="stats-block">';
+        $content .= '<div class="stats-title">访客地域分析</div>';
+        $content .= '<div class="stats-charts">';
+        $content .= '<div class="stats-chart">';
+        $content .= '<div class="stats-subtitle">国内</div>';
+        if (empty($liteAccessRegionsCn)) {
+            $content .= '<p class="muted">暂无数据。</p>';
+        } else {
+            $content .= '<div class="stats-chart-list">';
+            foreach ($liteAccessRegionsCn as $row) {
+                $label = (string)($row['label'] ?? '');
+                $total = (int)($row['total'] ?? 0);
+                $percent = $liteAccessCnMax > 0 ? round(($total / $liteAccessCnMax) * 100, 1) : 0;
+                $content .= '<div class="stats-chart-row"><div class="stats-label">' . htmlspecialchars($label) . '</div><div class="stats-bar-track"><div class="stats-bar" style="width:' . $percent . '%"></div></div><div class="stats-value">' . $total . '</div></div>';
+            }
+            $content .= '</div>';
+        }
+        $content .= '</div>';
+        $content .= '<div class="stats-chart">';
+        $content .= '<div class="stats-subtitle">国际</div>';
+        if (empty($liteAccessRegionsIntl)) {
+            $content .= '<p class="muted">暂无数据。</p>';
+        } else {
+            $content .= '<div class="stats-chart-list">';
+            foreach ($liteAccessRegionsIntl as $row) {
+                $label = normalize_region_stats_label((string)($row['label'] ?? ''));
+                $total = (int)($row['total'] ?? 0);
+                $percent = $liteAccessIntlMax > 0 ? round(($total / $liteAccessIntlMax) * 100, 1) : 0;
+                $content .= '<div class="stats-chart-row"><div class="stats-label">' . htmlspecialchars($label) . '</div><div class="stats-bar-track"><div class="stats-bar" style="width:' . $percent . '%"></div></div><div class="stats-value">' . $total . '</div></div>';
+            }
+            $content .= '</div>';
+        }
+        $content .= '</div>';
+        $content .= '</div>';
+        $content .= '</div>';
+
+        $content .= '<div class="stats-block">';
+        $content .= '<div class="stats-title">访问记录</div>';
+        $content .= '<div class="table-actions stats-actions">';
+        $content .= '<form id="lite-access-batch-form" method="post" action="' . base_path() . '/admin-home/access-delete" class="inline-form" data-batch-form="lite-access">';
+        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+        $content .= '<label class="checkbox"><input type="checkbox" data-check-all="lite-access"> 全选</label>';
+        $content .= '<button class="button danger" type="submit">批量删除</button>';
+        $content .= '</form>';
+        $content .= '<form method="post" action="' . base_path() . '/admin-home/access-delete-all" class="inline-form" data-confirm-message="确定删除全部访问记录吗？该操作不可恢复。">';
+        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+        $content .= '<button class="button danger" type="submit">删除全部（占用 ' . $liteAccessLogTotalLabel . '）</button>';
+        $content .= '</form>';
+        $content .= '</div>';
+        if (empty($liteAccessLogs)) {
+            $content .= '<p class="muted">暂无访问记录。</p>';
+        } else {
+            $content .= '<table class="table stats-table"><thead><tr><th><input type="checkbox" data-check-all="lite-access" form="lite-access-batch-form"></th><th>标题</th><th>IP</th><th>IP归属地</th><th>访问日期</th></tr></thead><tbody>';
+            foreach ($liteAccessLogs as $log) {
+                $logTitle = trim((string)($log['doc_title'] ?? ''));
+                if ($logTitle === '') {
+                    $logTitle = (string)($log['share_title'] ?? '');
+                }
+                if ($logTitle === '') {
+                    $logTitle = '未命名';
+                }
+                $ip = trim((string)($log['ip'] ?? ''));
+                if ($ip === '') {
+                    $ip = '-';
+                }
+                $location = format_ip_location([
+                    'country' => $log['ip_country'] ?? '',
+                    'country_code' => $log['ip_country_code'] ?? '',
+                    'region' => $log['ip_region'] ?? '',
+                    'city' => $log['ip_city'] ?? '',
+                ]);
+                if ($location === '') {
+                    $location = '-';
+                }
+                $content .= '<tr>';
+                $content .= '<td><input type="checkbox" name="access_ids[]" value="' . (int)$log['id'] . '" data-check-item="lite-access" form="lite-access-batch-form"></td>';
+                $content .= '<td>' . htmlspecialchars($logTitle) . '</td><td>' . htmlspecialchars($ip) . '</td><td>' . htmlspecialchars($location) . '</td><td>' . htmlspecialchars((string)($log['created_at'] ?? '-')) . '</td></tr>';
+            }
+            $content .= '</tbody></table>';
+        }
+        $content .= '<div class="pagination">';
+        $content .= '<a class="button ghost" href="' . build_admin_home_query_url(['lite_access_page' => max(1, $liteAccessPage - 1)]) . '">上一页</a>';
+        $content .= '<div class="pagination-info">第 ' . $liteAccessPage . ' / ' . $liteAccessPages . ' 页，共 ' . $liteAccessTotal . ' 条访问</div>';
+        $content .= '<a class="button ghost" href="' . build_admin_home_query_url(['lite_access_page' => min($liteAccessPages, $liteAccessPage + 1)]) . '">下一页</a>';
+        $content .= '<form method="get" action="' . base_path() . '/admin-home" class="pagination-form">';
+        $liteAccessQuery = $_GET;
+        unset($liteAccessQuery['lite_access_page'], $liteAccessQuery['lite_access_size']);
+        $content .= render_hidden_inputs($liteAccessQuery);
+        $content .= '<label>每页</label><select class="input" name="lite_access_size">';
+        foreach ([10, 50, 200, 1000] as $size) {
+            $selected = $liteAccessSize === $size ? ' selected' : '';
+            $content .= '<option value="' . $size . '"' . $selected . '>' . $size . '</option>';
+        }
+        $content .= '</select>';
+        $content .= '<label>页码</label><input class="input small" type="number" name="lite_access_page" min="1" max="' . $liteAccessPages . '" value="' . $liteAccessPage . '">';
+        $content .= '<button class="button" type="submit">跳转</button>';
+        $content .= '</form>';
+        $content .= '</div>';
+        $content .= '</div>';
+
         $content .= '</div>';
     }
     $content .= '</section>';
