@@ -472,7 +472,6 @@ function seed_default_settings(PDO $pdo): void {
     ensure_setting($pdo, 'smtp_pass', (string)$config['smtp_pass']);
     ensure_setting($pdo, 'banned_words', '');
     ensure_setting($pdo, 'site_icp', '');
-    ensure_setting($pdo, 'site_contact_email', '');
     ensure_setting($pdo, 'site_base_url', '');
     ensure_setting($pdo, 'site_head_html', '');
     ensure_setting($pdo, 'access_stats_default_enabled', '1');
@@ -9739,12 +9738,7 @@ if ($path === '/admin') {
     $error = flash('error');
     $defaultLimitBytes = default_storage_limit_bytes();
     $defaultLimitMb = mb_from_bytes($defaultLimitBytes);
-    $siteContactEmail = get_setting('site_contact_email', '');
     $siteHeadHtml = get_setting('site_head_html', '');
-
-    $allUsers = $pdo->query('SELECT id, username FROM users ORDER BY username ASC')->fetchAll(PDO::FETCH_ASSOC);
-
-    $filterUser = (int)($_GET['user'] ?? 0);
     $filterStatus = (string)($_GET['status'] ?? 'active');
     $shareSearch = trim((string)($_GET['share_search'] ?? ''));
     $sharePage = max(1, (int)($_GET['share_page'] ?? 1));
@@ -9754,10 +9748,6 @@ if ($path === '/admin') {
     }
     $where = [];
     $params = [];
-    if ($filterUser > 0) {
-        $where[] = 'shares.user_id = :uid';
-        $params[':uid'] = $filterUser;
-    }
     if ($shareSearch !== '') {
         $where[] = '(shares.title LIKE :share_search OR shares.slug LIKE :share_search)';
         $params[':share_search'] = '%' . $shareSearch . '%';
@@ -9821,14 +9811,19 @@ if ($path === '/admin') {
 
     $announcements = $pdo->query('SELECT a.*, u.username AS author FROM announcements a LEFT JOIN users u ON a.created_by = u.id ORDER BY a.created_at DESC')
         ->fetchAll(PDO::FETCH_ASSOC);
-    $userQuery = $_GET;
-    unset($userQuery['user_page'], $userQuery['user_size'], $userQuery['user_search'], $userQuery['user_status'], $userQuery['user_role']);
     $shareQuery = $_GET;
     unset($shareQuery['share_page'], $shareQuery['share_size'], $shareQuery['share_search'], $shareQuery['user'], $shareQuery['status']);
     $reportQuery = $_GET;
     unset($reportQuery['report_page'], $reportQuery['report_size'], $reportQuery['report_status']);
     $scanQuery = $_GET;
     unset($scanQuery['scan_page'], $scanQuery['scan_size']);
+    $scanKeepParam = null;
+    if (array_key_exists('scan_keep', $_GET)) {
+        $scanKeepParam = trim((string)$_GET['scan_keep']);
+        if ($scanKeepParam === '') {
+            $scanKeepParam = null;
+        }
+    }
     if ($scanKeepParam !== null) {
         $scanQuery['scan_keep'] = $scanKeepParam;
     } else {
@@ -9848,7 +9843,6 @@ if ($path === '/admin') {
     $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
     $content .= '<div class="grid">';
     $content .= '<div><label>默认存储上限 (MB)</label><input class="input" name="default_storage_limit_mb" type="number" min="0" value="' . (int)$defaultLimitMb . '"></div>';
-    $content .= '<div><label>联系邮箱</label><input class="input" name="site_contact_email" value="' . htmlspecialchars((string)$siteContactEmail) . '"></div>';
     $content .= '</div>';
     $content .= '<div style="margin-top:12px">';
     $content .= '<label>HTML Head 插入内容</label>';
@@ -9926,13 +9920,6 @@ if ($path === '/admin') {
     $content .= render_hidden_inputs($shareQuery);
     $content .= '<div class="grid">';
     $content .= '<div><label>关键词</label><input class="input" name="share_search" placeholder="标题 / Slug" value="' . htmlspecialchars($shareSearch) . '"></div>';
-    $content .= '<div><label>用户筛选</label><select class="input" name="user">';
-    $content .= '<option value="0">全部用户</option>';
-    foreach ($allUsers as $u) {
-        $selected = ($filterUser === (int)$u['id']) ? ' selected' : '';
-        $content .= '<option value="' . (int)$u['id'] . '"' . $selected . '>' . htmlspecialchars($u['username']) . '</option>';
-    }
-    $content .= '</select></div>';
     $content .= '<div><label>状态筛选</label><select class="input" name="status">';
     $content .= '<option value="all"' . ($filterStatus === 'all' ? ' selected' : '') . '>全部</option>';
     $content .= '<option value="active"' . ($filterStatus === 'active' ? ' selected' : '') . '>正常</option>';
@@ -10019,7 +10006,6 @@ if ($path === '/admin') {
     $content .= '<form method="get" action="' . base_path() . '/admin#shares" class="pagination-form">';
     $content .= render_hidden_inputs(array_merge($shareQuery, [
         'share_search' => $shareSearch,
-        'user' => $filterUser,
         'status' => $filterStatus,
     ]));
     $content .= '<label>每页</label><select class="input" name="share_size">';
@@ -10072,7 +10058,6 @@ if ($path === '/admin/settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $emailSubject = trim((string)($_POST['email_subject'] ?? ''));
     $emailResetSubject = trim((string)($_POST['email_reset_subject'] ?? ''));
     $siteIcp = trim((string)($_POST['site_icp'] ?? ''));
-    $siteContactEmail = trim((string)($_POST['site_contact_email'] ?? ''));
     $siteBaseUrl = trim((string)($_POST['site_base_url'] ?? ''));
     $siteHeadHtml = trim((string)($_POST['site_head_html'] ?? ''));
     $smtpHost = trim((string)($_POST['smtp_host'] ?? ''));
@@ -10102,7 +10087,6 @@ if ($path === '/admin/settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     set_setting('email_subject', $emailSubject);
     set_setting('email_reset_subject', $emailResetSubject);
     set_setting('site_icp', $siteIcp);
-    set_setting('site_contact_email', $siteContactEmail);
     set_setting('site_base_url', $siteBaseUrl);
     set_setting('site_head_html', $siteHeadHtml);
     set_setting('smtp_host', $smtpHost);
@@ -10350,7 +10334,6 @@ if ($path === '/') {
     }
     $allowRegistration = allow_registration();
     $siteIcp = '';
-    $siteContactEmail = get_setting('site_contact_email', '');
     $appName = htmlspecialchars($config['app_name']);
     $versionText = site_version();
     $versionHtml = '';
@@ -10427,9 +10410,6 @@ if ($path === '/') {
     $footerItems = [];
     if (trim((string)$siteIcp) !== '') {
         $footerItems[] = 'ICP备案：' . htmlspecialchars((string)$siteIcp);
-    }
-    if (trim((string)$siteContactEmail) !== '') {
-        $footerItems[] = '联系邮箱：' . htmlspecialchars((string)$siteContactEmail);
     }
     if (!empty($footerItems)) {
         $content .= '<footer class="home-footer">' . implode(' · ', $footerItems) . '</footer>';
