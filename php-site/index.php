@@ -1232,13 +1232,15 @@ function render_page(string $title, string $content, ?array $user = null, string
             $liteMode = lite_mode_enabled();
             $reportBadge = $liteMode ? 0 : pending_report_count();
             $navItems = [
-                ['key' => 'dashboard', 'label' => '控制台', 'href' => $base . '/dashboard'],
                 ['key' => 'account', 'label' => '账号设置', 'href' => $base . '/account'],
                 ['key' => 'admin-home', 'label' => '数据统计', 'href' => $base . '/admin-home'],
                 ['key' => 'admin-settings', 'label' => '站点设置', 'href' => $base . '/admin#settings'],
                 ['key' => 'admin-announcements', 'label' => '公告管理', 'href' => $base . '/admin#announcements'],
                 ['key' => 'admin-shares', 'label' => '分享管理', 'href' => $base . '/admin#shares'],
             ];
+            if (!$liteMode) {
+                array_unshift($navItems, ['key' => 'dashboard', 'label' => '控制台', 'href' => $base . '/dashboard']);
+            }
             if (!$liteMode) {
                 $navItems[] = ['key' => 'admin-chunks', 'label' => '分片清理', 'href' => $base . '/admin#chunks'];
             }
@@ -2028,7 +2030,7 @@ function country_code_zh_map(): array {
         'HT' => '海地',
         'HM' => '赫德岛和麦克唐纳群岛',
         'HN' => '洪都拉斯',
-        'HK' => '中国香港',
+        'HK' => '香港',
         'HU' => '匈牙利',
         'IS' => '冰岛',
         'IN' => '印度',
@@ -2059,7 +2061,7 @@ function country_code_zh_map(): array {
         'LI' => '列支敦士登',
         'LT' => '立陶宛',
         'LU' => '卢森堡',
-        'MO' => '中国澳门',
+        'MO' => '澳门',
         'MK' => '北马其顿',
         'MG' => '马达加斯加',
         'MW' => '马拉维',
@@ -2145,7 +2147,7 @@ function country_code_zh_map(): array {
         'SE' => '瑞典',
         'CH' => '瑞士',
         'SY' => '叙利亚',
-        'TW' => '中国台湾',
+        'TW' => '台湾',
         'TJ' => '塔吉克斯坦',
         'TZ' => '坦桑尼亚',
         'TH' => '泰国',
@@ -2199,6 +2201,22 @@ function normalize_country_name(string $country, string $countryCode): string {
         }
     }
     return $country;
+}
+
+function normalize_region_stats_label(string $label): string {
+    $label = trim($label);
+    if ($label === '') {
+        return '';
+    }
+    $map = [
+        '中国香港' => '香港',
+        '香港特别行政区' => '香港',
+        '中国澳门' => '澳门',
+        '澳门特别行政区' => '澳门',
+        '中国台湾' => '台湾',
+        '台湾省' => '台湾',
+    ];
+    return $map[$label] ?? $label;
 }
 
 function normalize_us_region(string $region): string {
@@ -8752,6 +8770,8 @@ if ($path === '/account') {
 
     $error = flash('error');
     $info = flash('info');
+    $apiKey = flash('api_key');
+    $liteMode = lite_mode_enabled();
     $content = '<div class="card"><h2>账号设置</h2>';
     if ($error) {
         $content .= '<div class="flash">' . htmlspecialchars($error) . '</div>';
@@ -8772,7 +8792,7 @@ if ($path === '/account') {
     $content .= '<div style="margin-top:12px"><button class="button primary" type="submit">更新密码</button></div>';
     $content .= '</form></div>';
 
-    if (!lite_mode_enabled()) {
+    if (!$liteMode) {
         $currentEmail = trim((string)($user['email'] ?? ''));
         $currentEmailLabel = $currentEmail !== '' ? htmlspecialchars($currentEmail) : '未绑定';
         $pendingEmail = (string)($_SESSION['account_email_target'] ?? '');
@@ -8788,6 +8808,22 @@ if ($path === '/account') {
         $content .= '<button class="button ghost" type="submit" formaction="' . base_path() . '/account/email-code" formnovalidate>发送邮箱验证码</button>';
         $content .= '<button class="button primary" type="submit">更换邮箱</button>';
         $content .= '</div>';
+        $content .= '</form></div>';
+    }
+    if ($liteMode) {
+        $content .= '<div class="card"><h2>API Key</h2>';
+        if ($apiKey) {
+            $content .= '<div class="notice">新的 API Key：<code>' . htmlspecialchars($apiKey) . '</code>（仅显示一次，请妥善保存）</div>';
+        }
+        if (!empty($user['api_key_last4'])) {
+            $content .= '<p class="muted">当前 Key 末尾：' . htmlspecialchars($user['api_key_last4'] ?? '') . '</p>';
+        } else {
+            $content .= '<p class="muted">尚未生成 API Key。</p>';
+        }
+        $buttonLabel = !empty($user['api_key_last4']) ? '重新生成' : '生成 API Key';
+        $content .= '<form method="post" action="' . base_path() . '/api-key/rotate">';
+        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+        $content .= '<button class="button" type="submit">' . $buttonLabel . '</button>';
         $content .= '</form></div>';
     }
     $titleHtml = build_topbar_title('账号设置', $user);
@@ -8921,10 +8957,26 @@ if ($path === '/dashboard') {
     $sourceStmt->bindValue(':offset', $accessSourceOffset, PDO::PARAM_INT);
     $sourceStmt->execute();
     $accessSources = $sourceStmt->fetchAll(PDO::FETCH_ASSOC);
-    $regionCnStmt = $pdo->prepare('SELECT ip_region AS label, COUNT(*) AS total FROM share_access_logs WHERE ' . $accessWhereSql . ' AND ip_country_code = "CN" AND ip_region != "" GROUP BY ip_region ORDER BY total DESC LIMIT 12');
+    $regionCnStmt = $pdo->prepare('SELECT ip_region AS label, COUNT(*) AS total FROM share_access_logs WHERE ' . $accessWhereSql . ' AND ip_country_code = "CN" AND ip_region != "" AND ip_region NOT IN ("香港","香港特别行政区","中国香港","澳门","澳门特别行政区","中国澳门","台湾","台湾省","中国台湾") GROUP BY ip_region ORDER BY total DESC LIMIT 12');
     $regionCnStmt->execute($accessParams);
     $accessRegionsCn = $regionCnStmt->fetchAll(PDO::FETCH_ASSOC);
-    $regionIntlStmt = $pdo->prepare('SELECT ip_country AS label, COUNT(*) AS total FROM share_access_logs WHERE ' . $accessWhereSql . ' AND (ip_country_code IS NULL OR ip_country_code != "CN") AND ip_country != "" GROUP BY ip_country ORDER BY total DESC LIMIT 12');
+    $regionIntlStmt = $pdo->prepare('SELECT CASE
+            WHEN ip_country_code = "CN" AND ip_region IN ("香港","香港特别行政区","中国香港") THEN "香港"
+            WHEN ip_country_code = "CN" AND ip_region IN ("澳门","澳门特别行政区","中国澳门") THEN "澳门"
+            WHEN ip_country_code = "CN" AND ip_region IN ("台湾","台湾省","中国台湾") THEN "台湾"
+            ELSE ip_country
+        END AS label, COUNT(*) AS total
+        FROM share_access_logs
+        WHERE ' . $accessWhereSql . '
+        AND (
+            ip_country_code IS NULL
+            OR ip_country_code != "CN"
+            OR ip_region IN ("香港","香港特别行政区","中国香港","澳门","澳门特别行政区","中国澳门","台湾","台湾省","中国台湾")
+        )
+        AND (ip_country != "" OR ip_region != "")
+        GROUP BY label
+        ORDER BY total DESC
+        LIMIT 12');
     $regionIntlStmt->execute($accessParams);
     $accessRegionsIntl = $regionIntlStmt->fetchAll(PDO::FETCH_ASSOC);
     $accessCnMax = 0;
@@ -8979,20 +9031,22 @@ if ($path === '/dashboard') {
     $content .= '<div class="card"><h2>存储空间</h2>';
     $content .= '<p>已使用：' . format_bytes($usedBytes) . ' / ' . $limitLabel . '（' . $limitSource . '）</p>';
     $content .= '</div>';
-    $content .= '<div class="card"><h2>API Key</h2>';
-    if ($apiKey) {
-        $content .= '<div class="notice">新的 API Key：<code>' . htmlspecialchars($apiKey) . '</code>（仅显示一次，请妥善保存）</div>';
+    if (!$liteMode) {
+        $content .= '<div class="card"><h2>API Key</h2>';
+        if ($apiKey) {
+            $content .= '<div class="notice">新的 API Key：<code>' . htmlspecialchars($apiKey) . '</code>（仅显示一次，请妥善保存）</div>';
+        }
+        if (!empty($user['api_key_last4'])) {
+            $content .= '<p class="muted">当前 Key 末尾：' . htmlspecialchars($user['api_key_last4'] ?? '') . '</p>';
+        } else {
+            $content .= '<p class="muted">尚未生成 API Key。</p>';
+        }
+        $buttonLabel = !empty($user['api_key_last4']) ? '重新生成' : '生成 API Key';
+        $content .= '<form method="post" action="' . base_path() . '/api-key/rotate">';
+        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+        $content .= '<button class="button" type="submit">' . $buttonLabel . '</button>';
+        $content .= '</form></div>';
     }
-    if (!empty($user['api_key_last4'])) {
-        $content .= '<p class="muted">当前 Key 末尾：' . htmlspecialchars($user['api_key_last4'] ?? '') . '</p>';
-    } else {
-        $content .= '<p class="muted">尚未生成 API Key。</p>';
-    }
-    $buttonLabel = !empty($user['api_key_last4']) ? '重新生成' : '生成 API Key';
-    $content .= '<form method="post" action="' . base_path() . '/api-key/rotate">';
-    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
-    $content .= '<button class="button" type="submit">' . $buttonLabel . '</button>';
-    $content .= '</form></div>';
 
     if (!$liteMode) {
         $content .= '<div class="card"><h2>账号设置</h2>';
@@ -9202,7 +9256,7 @@ if ($path === '/dashboard') {
         } else {
             $content .= '<div class="stats-chart-list">';
             foreach ($accessRegionsIntl as $row) {
-                $label = (string)($row['label'] ?? '');
+                $label = normalize_region_stats_label((string)($row['label'] ?? ''));
                 $total = (int)($row['total'] ?? 0);
                 $percent = $accessIntlMax > 0 ? round(($total / $accessIntlMax) * 100, 1) : 0;
                 $content .= '<div class="stats-chart-row"><div class="stats-label">' . htmlspecialchars($label) . '</div><div class="stats-bar-track"><div class="stats-bar" style="width:' . $percent . '%"></div></div><div class="stats-value">' . $total . '</div></div>';
@@ -9327,6 +9381,12 @@ if ($path === '/admin-home') {
     $todayPv = (int)($todayRow['pv'] ?? 0);
     $todayUv = (int)($todayRow['uv'] ?? 0);
     $accessSummary = null;
+    $liteAccessSources = [];
+    $liteAccessRegionsCn = [];
+    $liteAccessRegionsIntl = [];
+    $liteAccessCnMax = 0;
+    $liteAccessIntlMax = 0;
+    $liteAccessLogs = [];
     if ($liteMode) {
         $yesterdayStart = date('Y-m-d 00:00:00', strtotime('-1 day'));
         $summaryStmt = $pdo->prepare('SELECT
@@ -9357,6 +9417,43 @@ if ($path === '/admin-home') {
             'ip_yesterday' => (int)($summaryRow['ip_yesterday'] ?? 0),
             'ip_total' => (int)($summaryRow['ip_total'] ?? 0),
         ];
+        $sourceStmt = $pdo->prepare('SELECT referer, COUNT(*) AS total FROM share_access_logs WHERE referer != "" GROUP BY referer ORDER BY total DESC LIMIT 20');
+        $sourceStmt->execute();
+        $liteAccessSources = $sourceStmt->fetchAll(PDO::FETCH_ASSOC);
+        $regionCnStmt = $pdo->prepare('SELECT ip_region AS label, COUNT(*) AS total FROM share_access_logs WHERE ip_country_code = "CN" AND ip_region != "" AND ip_region NOT IN ("香港","香港特别行政区","中国香港","澳门","澳门特别行政区","中国澳门","台湾","台湾省","中国台湾") GROUP BY ip_region ORDER BY total DESC LIMIT 12');
+        $regionCnStmt->execute();
+        $liteAccessRegionsCn = $regionCnStmt->fetchAll(PDO::FETCH_ASSOC);
+        $regionIntlStmt = $pdo->prepare('SELECT CASE
+                WHEN ip_country_code = "CN" AND ip_region IN ("香港","香港特别行政区","中国香港") THEN "香港"
+                WHEN ip_country_code = "CN" AND ip_region IN ("澳门","澳门特别行政区","中国澳门") THEN "澳门"
+                WHEN ip_country_code = "CN" AND ip_region IN ("台湾","台湾省","中国台湾") THEN "台湾"
+                ELSE ip_country
+            END AS label, COUNT(*) AS total
+            FROM share_access_logs
+            WHERE (
+                ip_country_code IS NULL
+                OR ip_country_code != "CN"
+                OR ip_region IN ("香港","香港特别行政区","中国香港","澳门","澳门特别行政区","中国澳门","台湾","台湾省","中国台湾")
+            )
+            AND (ip_country != "" OR ip_region != "")
+            GROUP BY label
+            ORDER BY total DESC
+            LIMIT 12');
+        $regionIntlStmt->execute();
+        $liteAccessRegionsIntl = $regionIntlStmt->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($liteAccessRegionsCn as $row) {
+            $liteAccessCnMax = max($liteAccessCnMax, (int)($row['total'] ?? 0));
+        }
+        foreach ($liteAccessRegionsIntl as $row) {
+            $liteAccessIntlMax = max($liteAccessIntlMax, (int)($row['total'] ?? 0));
+        }
+        $logsStmt = $pdo->prepare('SELECT share_access_logs.*, shares.slug, shares.title AS share_title
+            FROM share_access_logs
+            LEFT JOIN shares ON share_access_logs.share_id = shares.id
+            ORDER BY share_access_logs.created_at DESC
+            LIMIT 20');
+        $logsStmt->execute();
+        $liteAccessLogs = $logsStmt->fetchAll(PDO::FETCH_ASSOC);
     }
     $activeStart30 = date('Y-m-d H:i:s', strtotime('-30 days'));
     $activeStart7 = date('Y-m-d H:i:s', strtotime('-7 days'));
@@ -9605,6 +9702,86 @@ if ($path === '/admin-home') {
         $content .= '<tr><td>总计</td><td>' . $accessSummary['pv_total'] . '</td><td>' . $accessSummary['uv_total'] . '</td><td>' . $accessSummary['ip_total'] . '</td></tr>';
         $content .= '</tbody></table>';
         $content .= '</div>';
+        $content .= '<div class="card"><h2>来源页</h2>';
+        if (empty($liteAccessSources)) {
+            $content .= '<p class="muted">暂无来源数据。</p>';
+        } else {
+            $content .= '<table class="table stats-table"><thead><tr><th>排名</th><th>次数</th><th>来源地址</th></tr></thead><tbody>';
+            $rank = 1;
+            foreach ($liteAccessSources as $row) {
+                $referer = (string)($row['referer'] ?? '');
+                $total = (int)($row['total'] ?? 0);
+                $content .= '<tr><td>' . $rank . '</td><td>' . $total . '</td><td class="stats-source">' . htmlspecialchars($referer) . '</td></tr>';
+                $rank++;
+            }
+            $content .= '</tbody></table>';
+        }
+        $content .= '</div>';
+        $content .= '<div class="card"><h2>访客地域分析</h2>';
+        $content .= '<div class="stats-charts">';
+        $content .= '<div class="stats-chart">';
+        $content .= '<div class="stats-subtitle">国内</div>';
+        if (empty($liteAccessRegionsCn)) {
+            $content .= '<p class="muted">暂无数据。</p>';
+        } else {
+            $content .= '<div class="stats-chart-list">';
+            foreach ($liteAccessRegionsCn as $row) {
+                $label = (string)($row['label'] ?? '');
+                $total = (int)($row['total'] ?? 0);
+                $percent = $liteAccessCnMax > 0 ? round(($total / $liteAccessCnMax) * 100, 1) : 0;
+                $content .= '<div class="stats-chart-row"><div class="stats-label">' . htmlspecialchars($label) . '</div><div class="stats-bar-track"><div class="stats-bar" style="width:' . $percent . '%"></div></div><div class="stats-value">' . $total . '</div></div>';
+            }
+            $content .= '</div>';
+        }
+        $content .= '</div>';
+        $content .= '<div class="stats-chart">';
+        $content .= '<div class="stats-subtitle">国际</div>';
+        if (empty($liteAccessRegionsIntl)) {
+            $content .= '<p class="muted">暂无数据。</p>';
+        } else {
+            $content .= '<div class="stats-chart-list">';
+            foreach ($liteAccessRegionsIntl as $row) {
+                $label = normalize_region_stats_label((string)($row['label'] ?? ''));
+                $total = (int)($row['total'] ?? 0);
+                $percent = $liteAccessIntlMax > 0 ? round(($total / $liteAccessIntlMax) * 100, 1) : 0;
+                $content .= '<div class="stats-chart-row"><div class="stats-label">' . htmlspecialchars($label) . '</div><div class="stats-bar-track"><div class="stats-bar" style="width:' . $percent . '%"></div></div><div class="stats-value">' . $total . '</div></div>';
+            }
+            $content .= '</div>';
+        }
+        $content .= '</div>';
+        $content .= '</div>';
+        $content .= '</div>';
+        $content .= '<div class="card"><h2>访问记录</h2>';
+        if (empty($liteAccessLogs)) {
+            $content .= '<p class="muted">暂无访问记录。</p>';
+        } else {
+            $content .= '<table class="table stats-table"><thead><tr><th>标题</th><th>IP</th><th>IP归属地</th><th>访问日期</th></tr></thead><tbody>';
+            foreach ($liteAccessLogs as $log) {
+                $logTitle = trim((string)($log['doc_title'] ?? ''));
+                if ($logTitle === '') {
+                    $logTitle = (string)($log['share_title'] ?? '');
+                }
+                if ($logTitle === '') {
+                    $logTitle = '未命名';
+                }
+                $ip = trim((string)($log['ip'] ?? ''));
+                if ($ip === '') {
+                    $ip = '-';
+                }
+                $location = format_ip_location([
+                    'country' => $log['ip_country'] ?? '',
+                    'country_code' => $log['ip_country_code'] ?? '',
+                    'region' => $log['ip_region'] ?? '',
+                    'city' => $log['ip_city'] ?? '',
+                ]);
+                if ($location === '') {
+                    $location = '-';
+                }
+                $content .= '<tr><td>' . htmlspecialchars($logTitle) . '</td><td>' . htmlspecialchars($ip) . '</td><td>' . htmlspecialchars($location) . '</td><td>' . htmlspecialchars((string)($log['created_at'] ?? '-')) . '</td></tr>';
+            }
+            $content .= '</tbody></table>';
+        }
+        $content .= '</div>';
     }
 
     $pvUvRangeSource = htmlspecialchars(json_encode([
@@ -9759,7 +9936,7 @@ if ($path === '/api-key/rotate' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         ':id' => $user['id'],
     ]);
     flash('api_key', $rawKey);
-    redirect('/dashboard');
+    redirect(lite_mode_enabled() ? '/account' : '/dashboard');
 }
 
 if ($path === '/dashboard/comment-notify' && $_SERVER['REQUEST_METHOD'] === 'POST') {
