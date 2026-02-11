@@ -1122,6 +1122,17 @@ function build_access_stats_query_url(array $overrides = []): string {
     return base_path() . '/dashboard' . ($qs ? '?' . $qs : '') . '#access-stats';
 }
 
+function build_admin_home_query_url(array $overrides = []): string {
+    $query = array_merge($_GET, $overrides);
+    foreach ($query as $key => $value) {
+        if ($value === null || $value === '') {
+            unset($query[$key]);
+        }
+    }
+    $qs = http_build_query($query);
+    return base_path() . '/admin-home' . ($qs ? '?' . $qs : '');
+}
+
 function render_hidden_inputs(array $values): string {
     $html = '';
     foreach ($values as $key => $value) {
@@ -2274,6 +2285,16 @@ function normalize_international_country_label(string $label, string $countryCod
     }
     if (strpos($label, '美国') !== false) {
         return '美国';
+    }
+    static $countryNames = null;
+    if ($countryNames === null) {
+        $countryNames = array_values(array_unique(country_code_zh_map()));
+        usort($countryNames, fn($a, $b) => mb_strlen($b) - mb_strlen($a));
+    }
+    foreach ($countryNames as $name) {
+        if ($name !== '' && mb_strpos($label, $name) === 0) {
+            return $name;
+        }
     }
     return $label;
 }
@@ -9118,20 +9139,20 @@ if ($path === '/dashboard') {
     $content .= '<p>已使用：' . format_bytes($usedBytes) . ' / ' . $limitLabel . '（' . $limitSource . '）</p>';
     $content .= '</div>';
     if (!$liteMode) {
-        $content .= '<div class="card"><h2>API Key</h2>';
-        if ($apiKey) {
-            $content .= '<div class="notice">新的 API Key：<code>' . htmlspecialchars($apiKey) . '</code>（仅显示一次，请妥善保存）</div>';
-        }
-        if (!empty($user['api_key_last4'])) {
-            $content .= '<p class="muted">当前 Key 末尾：' . htmlspecialchars($user['api_key_last4'] ?? '') . '</p>';
-        } else {
-            $content .= '<p class="muted">尚未生成 API Key。</p>';
-        }
-        $buttonLabel = !empty($user['api_key_last4']) ? '重新生成' : '生成 API Key';
-        $content .= '<form method="post" action="' . base_path() . '/api-key/rotate">';
-        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
-        $content .= '<button class="button" type="submit">' . $buttonLabel . '</button>';
-        $content .= '</form></div>';
+    $content .= '<div class="card"><h2>API Key</h2>';
+    if ($apiKey) {
+        $content .= '<div class="notice">新的 API Key：<code>' . htmlspecialchars($apiKey) . '</code>（仅显示一次，请妥善保存）</div>';
+    }
+    if (!empty($user['api_key_last4'])) {
+        $content .= '<p class="muted">当前 Key 末尾：' . htmlspecialchars($user['api_key_last4'] ?? '') . '</p>';
+    } else {
+        $content .= '<p class="muted">尚未生成 API Key。</p>';
+    }
+    $buttonLabel = !empty($user['api_key_last4']) ? '重新生成' : '生成 API Key';
+    $content .= '<form method="post" action="' . base_path() . '/api-key/rotate">';
+    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+    $content .= '<button class="button" type="submit">' . $buttonLabel . '</button>';
+    $content .= '</form></div>';
     }
 
     if (!$liteMode) {
@@ -9473,7 +9494,37 @@ if ($path === '/admin-home') {
     $liteAccessCnMax = 0;
     $liteAccessIntlMax = 0;
     $liteAccessLogs = [];
+    $liteAccessTotal = 0;
+    $liteAccessPage = 1;
+    $liteAccessSize = 10;
+    $liteAccessPages = 1;
+    $liteSourceTotal = 0;
+    $liteSourcePage = 1;
+    $liteSourceSize = 10;
+    $liteSourcePages = 1;
+    $liteAccessLogTotalLabel = '0 B';
+    $liteAccessEnabled = false;
+    $liteAccessRetention = 7;
+    $liteShareOptions = [];
+    $liteAccessShareId = 0;
     if ($liteMode) {
+        $liteAccessEnabled = access_stats_enabled((int)$admin['id']);
+        $liteAccessRetention = access_stats_retention_days((int)$admin['id']);
+        $liteAccessShare = trim((string)($_GET['lite_access_share'] ?? 'all'));
+        if ($liteAccessShare !== '' && $liteAccessShare !== 'all') {
+            $liteAccessShareId = (int)$liteAccessShare;
+        }
+        $liteShareOptions = $pdo->query('SELECT id, title, slug FROM shares WHERE deleted_at IS NULL ORDER BY updated_at DESC')->fetchAll(PDO::FETCH_ASSOC);
+        $liteAccessPage = max(1, (int)($_GET['lite_access_page'] ?? 1));
+        $liteAccessSize = normalize_page_size($_GET['lite_access_size'] ?? 10);
+        $liteSourcePage = max(1, (int)($_GET['lite_source_page'] ?? 1));
+        $liteSourceSize = normalize_page_size($_GET['lite_source_size'] ?? 10);
+        $liteWhere = '1=1';
+        $liteParams = [];
+        if ($liteAccessShareId > 0) {
+            $liteWhere = 'share_access_logs.share_id = :sid';
+            $liteParams[':sid'] = $liteAccessShareId;
+        }
         $yesterdayStart = date('Y-m-d 00:00:00', strtotime('-1 day'));
         $summaryStmt = $pdo->prepare('SELECT
             SUM(CASE WHEN created_at >= :today_start AND created_at < :tomorrow_start THEN 1 ELSE 0 END) AS pv_today,
@@ -9485,12 +9536,12 @@ if ($path === '/admin-home') {
             COUNT(DISTINCT CASE WHEN created_at >= :today_start AND created_at < :tomorrow_start THEN ip END) AS ip_today,
             COUNT(DISTINCT CASE WHEN created_at >= :yesterday_start AND created_at < :today_start THEN ip END) AS ip_yesterday,
             COUNT(DISTINCT ip) AS ip_total
-            FROM share_access_logs');
-        $summaryStmt->execute([
+            FROM share_access_logs WHERE ' . $liteWhere);
+        $summaryStmt->execute(array_merge($liteParams, [
             ':today_start' => $todayStart,
             ':tomorrow_start' => $tomorrowStart,
             ':yesterday_start' => $yesterdayStart,
-        ]);
+        ]));
         $summaryRow = $summaryStmt->fetch(PDO::FETCH_ASSOC) ?: [];
         $accessSummary = [
             'pv_today' => (int)($summaryRow['pv_today'] ?? 0),
@@ -9503,11 +9554,20 @@ if ($path === '/admin-home') {
             'ip_yesterday' => (int)($summaryRow['ip_yesterday'] ?? 0),
             'ip_total' => (int)($summaryRow['ip_total'] ?? 0),
         ];
-        $sourceStmt = $pdo->prepare('SELECT referer, COUNT(*) AS total FROM share_access_logs WHERE referer != "" GROUP BY referer ORDER BY total DESC LIMIT 20');
+        $liteSourceCountStmt = $pdo->prepare('SELECT COUNT(*) FROM (SELECT referer FROM share_access_logs WHERE ' . $liteWhere . ' AND referer != "" GROUP BY referer) AS t');
+        $liteSourceCountStmt->execute($liteParams);
+        $liteSourceTotal = (int)$liteSourceCountStmt->fetchColumn();
+        [$liteSourcePage, $liteSourceSize, $liteSourcePages, $liteSourceOffset] = paginate($liteSourceTotal, $liteSourcePage, $liteSourceSize);
+        $sourceStmt = $pdo->prepare('SELECT referer, COUNT(*) AS total FROM share_access_logs WHERE ' . $liteWhere . ' AND referer != "" GROUP BY referer ORDER BY total DESC LIMIT :limit OFFSET :offset');
+        foreach ($liteParams as $key => $value) {
+            $sourceStmt->bindValue($key, $value);
+        }
+        $sourceStmt->bindValue(':limit', $liteSourceSize, PDO::PARAM_INT);
+        $sourceStmt->bindValue(':offset', $liteSourceOffset, PDO::PARAM_INT);
         $sourceStmt->execute();
         $liteAccessSources = $sourceStmt->fetchAll(PDO::FETCH_ASSOC);
-        $regionCnStmt = $pdo->prepare('SELECT ip_region AS label, COUNT(*) AS total FROM share_access_logs WHERE ip_country_code = "CN" AND ip_region != "" AND ip_region NOT IN ("香港","香港特别行政区","中国香港","澳门","澳门特别行政区","中国澳门","台湾","台湾省","中国台湾") GROUP BY ip_region ORDER BY total DESC LIMIT 50');
-        $regionCnStmt->execute();
+        $regionCnStmt = $pdo->prepare('SELECT ip_region AS label, COUNT(*) AS total FROM share_access_logs WHERE ' . $liteWhere . ' AND ip_country_code = "CN" AND ip_region != "" AND ip_region NOT IN ("香港","香港特别行政区","中国香港","澳门","澳门特别行政区","中国澳门","台湾","台湾省","中国台湾") GROUP BY ip_region ORDER BY total DESC LIMIT 50');
+        $regionCnStmt->execute($liteParams);
         $liteAccessRegionsCn = aggregate_domestic_region_rows($regionCnStmt->fetchAll(PDO::FETCH_ASSOC));
         $regionIntlStmt = $pdo->prepare('SELECT CASE
                 WHEN ip_country_code = "CN" AND ip_region IN ("香港","香港特别行政区","中国香港") THEN "香港"
@@ -9516,7 +9576,8 @@ if ($path === '/admin-home') {
                 ELSE ip_country
             END AS label, ip_country_code AS country_code, COUNT(*) AS total
             FROM share_access_logs
-            WHERE (
+            WHERE ' . $liteWhere . '
+            AND (
                 ip_country_code IS NULL
                 OR ip_country_code != "CN"
                 OR ip_region IN ("香港","香港特别行政区","中国香港","澳门","澳门特别行政区","中国澳门","台湾","台湾省","中国台湾")
@@ -9525,7 +9586,7 @@ if ($path === '/admin-home') {
             GROUP BY label, country_code
             ORDER BY total DESC
             LIMIT 50');
-        $regionIntlStmt->execute();
+        $regionIntlStmt->execute($liteParams);
         $liteAccessRegionsIntl = aggregate_international_country_rows($regionIntlStmt->fetchAll(PDO::FETCH_ASSOC));
         foreach ($liteAccessRegionsCn as $row) {
             $liteAccessCnMax = max($liteAccessCnMax, (int)($row['total'] ?? 0));
@@ -9533,11 +9594,23 @@ if ($path === '/admin-home') {
         foreach ($liteAccessRegionsIntl as $row) {
             $liteAccessIntlMax = max($liteAccessIntlMax, (int)($row['total'] ?? 0));
         }
+        $liteAccessCountStmt = $pdo->prepare('SELECT COUNT(*) FROM share_access_logs WHERE ' . $liteWhere);
+        $liteAccessCountStmt->execute($liteParams);
+        $liteAccessTotal = (int)$liteAccessCountStmt->fetchColumn();
+        $liteAccessLogTotalBytes = (int)$pdo->query('SELECT COALESCE(SUM(size_bytes), 0) FROM share_access_logs')->fetchColumn();
+        $liteAccessLogTotalLabel = format_bytes($liteAccessLogTotalBytes);
+        [$liteAccessPage, $liteAccessSize, $liteAccessPages, $liteAccessOffset] = paginate($liteAccessTotal, $liteAccessPage, $liteAccessSize);
         $logsStmt = $pdo->prepare('SELECT share_access_logs.*, shares.slug, shares.title AS share_title
             FROM share_access_logs
             LEFT JOIN shares ON share_access_logs.share_id = shares.id
+            WHERE ' . $liteWhere . '
             ORDER BY share_access_logs.created_at DESC
-            LIMIT 20');
+            LIMIT :limit OFFSET :offset');
+        foreach ($liteParams as $key => $value) {
+            $logsStmt->bindValue($key, $value);
+        }
+        $logsStmt->bindValue(':limit', $liteAccessSize, PDO::PARAM_INT);
+        $logsStmt->bindValue(':offset', $liteAccessOffset, PDO::PARAM_INT);
         $logsStmt->execute();
         $liteAccessLogs = $logsStmt->fetchAll(PDO::FETCH_ASSOC);
     }
@@ -9781,19 +9854,51 @@ if ($path === '/admin-home') {
     $content .= render_kpi_card('存储占用/剩余', htmlspecialchars($storageValue), htmlspecialchars($storageMeta), $iconStorage, $storageProgress);
     $content .= '</div>';
     if ($liteMode && is_array($accessSummary)) {
-        $content .= '<div class="card"><h2>访问概况</h2>';
+        $content .= '<div class="card" id="access-stats"><h2>访问概况</h2>';
+        $content .= '<form method="post" action="' . base_path() . '/admin-home/access-update" class="stats-settings">';
+        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+        $content .= '<div class="grid">';
+        $content .= '<div><label>访问统计</label><label class="checkbox stats-toggle"><input type="checkbox" name="access_enabled" value="1"' . ($liteAccessEnabled ? ' checked' : '') . '> 开启</label></div>';
+        $content .= '<div><label>保留天数</label><input class="input" type="number" name="access_retention_days" min="1" max="365" value="' . (int)$liteAccessRetention . '"></div>';
+        $content .= '</div>';
+        $content .= '<div class="muted stats-note">访客数(UV) 按浏览器 Cookie 去重（按天），访问记录计入账号存储空间，默认保留最近 7 天（当前 ' . (int)$liteAccessRetention . ' 天），可在此调整；存储不足会自动关闭并清空统计。</div>';
+        $content .= '<div style="margin-top:12px"><button class="button" type="submit">保存设置</button></div>';
+        $content .= '</form>';
+        $liteFilterQuery = $_GET;
+        unset($liteFilterQuery['lite_access_share'], $liteFilterQuery['lite_access_page'], $liteFilterQuery['lite_source_page']);
+        $content .= '<form method="get" action="' . base_path() . '/admin-home" class="filter-form">';
+        $content .= render_hidden_inputs($liteFilterQuery);
+        $content .= '<div class="grid">';
+        $content .= '<div><label>笔记筛选</label><select class="input" name="lite_access_share">';
+        $content .= '<option value="all"' . ($liteAccessShareId <= 0 ? ' selected' : '') . '>全部</option>';
+        foreach ($liteShareOptions as $option) {
+            $optionId = (int)($option['id'] ?? 0);
+            $optionTitle = (string)($option['title'] ?? '');
+            $optionSlug = (string)($option['slug'] ?? '');
+            $optLabel = $optionTitle !== '' ? $optionTitle : $optionSlug;
+            if ($optionSlug !== '') {
+                $optLabel .= ' /s/' . $optionSlug;
+            }
+            $selected = $liteAccessShareId === $optionId ? ' selected' : '';
+            $content .= '<option value="' . $optionId . '"' . $selected . '>' . htmlspecialchars($optLabel) . '</option>';
+        }
+        $content .= '</select></div>';
+        $content .= '</div>';
+        $content .= '<div style="margin-top:12px"><button class="button" type="submit">筛选</button></div>';
+        $content .= '</form>';
         $content .= '<table class="table stats-table"><thead><tr><th></th><th>浏览量(PV)</th><th>访客数(UV)</th><th>IP 数量</th></tr></thead><tbody>';
         $content .= '<tr><td>今日</td><td>' . $accessSummary['pv_today'] . '</td><td>' . $accessSummary['uv_today'] . '</td><td>' . $accessSummary['ip_today'] . '</td></tr>';
         $content .= '<tr><td>昨日</td><td>' . $accessSummary['pv_yesterday'] . '</td><td>' . $accessSummary['uv_yesterday'] . '</td><td>' . $accessSummary['ip_yesterday'] . '</td></tr>';
         $content .= '<tr><td>总计</td><td>' . $accessSummary['pv_total'] . '</td><td>' . $accessSummary['uv_total'] . '</td><td>' . $accessSummary['ip_total'] . '</td></tr>';
         $content .= '</tbody></table>';
         $content .= '</div>';
+
         $content .= '<div class="card"><h2>来源页</h2>';
         if (empty($liteAccessSources)) {
             $content .= '<p class="muted">暂无来源数据。</p>';
         } else {
             $content .= '<table class="table stats-table"><thead><tr><th>排名</th><th>次数</th><th>来源地址</th></tr></thead><tbody>';
-            $rank = 1;
+            $rank = ($liteSourcePage - 1) * $liteSourceSize + 1;
             foreach ($liteAccessSources as $row) {
                 $referer = (string)($row['referer'] ?? '');
                 $total = (int)($row['total'] ?? 0);
@@ -9802,7 +9907,26 @@ if ($path === '/admin-home') {
             }
             $content .= '</tbody></table>';
         }
+        $content .= '<div class="pagination">';
+        $content .= '<a class="button ghost" href="' . build_admin_home_query_url(['lite_source_page' => max(1, $liteSourcePage - 1)]) . '">上一页</a>';
+        $content .= '<div class="pagination-info">第 ' . $liteSourcePage . ' / ' . $liteSourcePages . ' 页，共 ' . $liteSourceTotal . ' 条来源</div>';
+        $content .= '<a class="button ghost" href="' . build_admin_home_query_url(['lite_source_page' => min($liteSourcePages, $liteSourcePage + 1)]) . '">下一页</a>';
+        $content .= '<form method="get" action="' . base_path() . '/admin-home" class="pagination-form">';
+        $liteSourceQuery = $_GET;
+        unset($liteSourceQuery['lite_source_page'], $liteSourceQuery['lite_source_size']);
+        $content .= render_hidden_inputs($liteSourceQuery);
+        $content .= '<label>每页</label><select class="input" name="lite_source_size">';
+        foreach ([10, 50, 200, 1000] as $size) {
+            $selected = $liteSourceSize === $size ? ' selected' : '';
+            $content .= '<option value="' . $size . '"' . $selected . '>' . $size . '</option>';
+        }
+        $content .= '</select>';
+        $content .= '<label>页码</label><input class="input small" type="number" name="lite_source_page" min="1" max="' . $liteSourcePages . '" value="' . $liteSourcePage . '">';
+        $content .= '<button class="button" type="submit">跳转</button>';
+        $content .= '</form>';
         $content .= '</div>';
+        $content .= '</div>';
+
         $content .= '<div class="card"><h2>访客地域分析</h2>';
         $content .= '<div class="stats-charts">';
         $content .= '<div class="stats-chart">';
@@ -9837,11 +9961,23 @@ if ($path === '/admin-home') {
         $content .= '</div>';
         $content .= '</div>';
         $content .= '</div>';
+
         $content .= '<div class="card"><h2>访问记录</h2>';
+        $content .= '<div class="table-actions stats-actions">';
+        $content .= '<form id="lite-access-batch-form" method="post" action="' . base_path() . '/admin-home/access-delete" class="inline-form" data-batch-form="lite-access">';
+        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+        $content .= '<label class="checkbox"><input type="checkbox" data-check-all="lite-access"> 全选</label>';
+        $content .= '<button class="button danger" type="submit">批量删除</button>';
+        $content .= '</form>';
+        $content .= '<form method="post" action="' . base_path() . '/admin-home/access-delete-all" class="inline-form" data-confirm-message="确定删除全部访问记录吗？该操作不可恢复。">';
+        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+        $content .= '<button class="button danger" type="submit">删除全部（占用 ' . $liteAccessLogTotalLabel . '）</button>';
+        $content .= '</form>';
+        $content .= '</div>';
         if (empty($liteAccessLogs)) {
             $content .= '<p class="muted">暂无访问记录。</p>';
         } else {
-            $content .= '<table class="table stats-table"><thead><tr><th>标题</th><th>IP</th><th>IP归属地</th><th>访问日期</th></tr></thead><tbody>';
+            $content .= '<table class="table stats-table"><thead><tr><th><input type="checkbox" data-check-all="lite-access" form="lite-access-batch-form"></th><th>标题</th><th>IP</th><th>IP归属地</th><th>访问日期</th></tr></thead><tbody>';
             foreach ($liteAccessLogs as $log) {
                 $logTitle = trim((string)($log['doc_title'] ?? ''));
                 if ($logTitle === '') {
@@ -9863,10 +9999,30 @@ if ($path === '/admin-home') {
                 if ($location === '') {
                     $location = '-';
                 }
-                $content .= '<tr><td>' . htmlspecialchars($logTitle) . '</td><td>' . htmlspecialchars($ip) . '</td><td>' . htmlspecialchars($location) . '</td><td>' . htmlspecialchars((string)($log['created_at'] ?? '-')) . '</td></tr>';
+                $content .= '<tr>';
+                $content .= '<td><input type="checkbox" name="access_ids[]" value="' . (int)$log['id'] . '" data-check-item="lite-access" form="lite-access-batch-form"></td>';
+                $content .= '<td>' . htmlspecialchars($logTitle) . '</td><td>' . htmlspecialchars($ip) . '</td><td>' . htmlspecialchars($location) . '</td><td>' . htmlspecialchars((string)($log['created_at'] ?? '-')) . '</td></tr>';
             }
             $content .= '</tbody></table>';
         }
+        $content .= '<div class="pagination">';
+        $content .= '<a class="button ghost" href="' . build_admin_home_query_url(['lite_access_page' => max(1, $liteAccessPage - 1)]) . '">上一页</a>';
+        $content .= '<div class="pagination-info">第 ' . $liteAccessPage . ' / ' . $liteAccessPages . ' 页，共 ' . $liteAccessTotal . ' 条访问</div>';
+        $content .= '<a class="button ghost" href="' . build_admin_home_query_url(['lite_access_page' => min($liteAccessPages, $liteAccessPage + 1)]) . '">下一页</a>';
+        $content .= '<form method="get" action="' . base_path() . '/admin-home" class="pagination-form">';
+        $liteAccessQuery = $_GET;
+        unset($liteAccessQuery['lite_access_page'], $liteAccessQuery['lite_access_size']);
+        $content .= render_hidden_inputs($liteAccessQuery);
+        $content .= '<label>每页</label><select class="input" name="lite_access_size">';
+        foreach ([10, 50, 200, 1000] as $size) {
+            $selected = $liteAccessSize === $size ? ' selected' : '';
+            $content .= '<option value="' . $size . '"' . $selected . '>' . $size . '</option>';
+        }
+        $content .= '</select>';
+        $content .= '<label>页码</label><input class="input small" type="number" name="lite_access_page" min="1" max="' . $liteAccessPages . '" value="' . $liteAccessPage . '">';
+        $content .= '<button class="button" type="submit">跳转</button>';
+        $content .= '</form>';
+        $content .= '</div>';
         $content .= '</div>';
     }
 
@@ -10109,6 +10265,59 @@ if ($path === '/dashboard/access-stats/delete-all' && $_SERVER['REQUEST_METHOD']
     purge_user_access_logs($userId);
     flash('info', '已清空全部访问记录');
     redirect('/dashboard#access-stats');
+}
+
+if ($path === '/admin-home/access-update' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $admin = require_admin();
+    check_csrf();
+    $userId = (int)$admin['id'];
+    $enabled = !empty($_POST['access_enabled']);
+    $daysRaw = (int)($_POST['access_retention_days'] ?? access_stats_retention_days($userId));
+    $days = max(1, min(365, $daysRaw));
+    set_user_setting($userId, 'access_stats_retention_days', (string)$days);
+    if ($enabled) {
+        set_user_setting($userId, 'access_stats_enabled', '1');
+    } else {
+        set_user_setting($userId, 'access_stats_enabled', '0');
+    }
+    flash('info', '访问统计设置已更新');
+    redirect('/admin-home');
+}
+
+if ($path === '/admin-home/access-delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_admin();
+    check_csrf();
+    $ids = $_POST['access_ids'] ?? [];
+    $ids = is_array($ids) ? array_values(array_filter($ids)) : [];
+    if (empty($ids)) {
+        redirect('/admin-home');
+    }
+    $pdo = db();
+    $placeholders = implode(',', array_fill(0, count($ids), '?'));
+    $userSizes = $pdo->prepare('SELECT user_id, COALESCE(SUM(size_bytes), 0) AS total FROM share_access_logs WHERE id IN (' . $placeholders . ') GROUP BY user_id');
+    $userSizes->execute($ids);
+    $rows = $userSizes->fetchAll(PDO::FETCH_ASSOC);
+    $delStmt = $pdo->prepare('DELETE FROM share_access_logs WHERE id IN (' . $placeholders . ')');
+    $delStmt->execute($ids);
+    foreach ($rows as $row) {
+        adjust_user_storage((int)$row['user_id'], -(int)$row['total']);
+    }
+    flash('info', '已删除选中的访问记录');
+    redirect('/admin-home');
+}
+
+if ($path === '/admin-home/access-delete-all' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_admin();
+    check_csrf();
+    $pdo = db();
+    $userSizes = $pdo->query('SELECT user_id, COALESCE(SUM(size_bytes), 0) AS total FROM share_access_logs GROUP BY user_id');
+    $rows = $userSizes->fetchAll(PDO::FETCH_ASSOC);
+    $pdo->exec('DELETE FROM share_access_logs');
+    foreach ($rows as $row) {
+        adjust_user_storage((int)$row['user_id'], -(int)$row['total']);
+    }
+    flash('info', '已清空全部访问记录');
+    redirect('/admin-home');
 }
 
 if ($path === '/admin') {
