@@ -2219,6 +2219,89 @@ function normalize_region_stats_label(string $label): string {
     return $map[$label] ?? $label;
 }
 
+function normalize_domestic_region_label(string $label): string {
+    $label = normalize_region_stats_label(trim($label));
+    if ($label === '') {
+        return '';
+    }
+    $suffixes = [
+        '特别行政区',
+        '维吾尔自治区',
+        '壮族自治区',
+        '回族自治区',
+        '自治区',
+        '省',
+        '市',
+    ];
+    foreach ($suffixes as $suffix) {
+        if ($suffix !== '' && substr($label, -strlen($suffix)) === $suffix) {
+            $label = substr($label, 0, -strlen($suffix));
+            break;
+        }
+    }
+    return trim($label);
+}
+
+function aggregate_domestic_region_rows(array $rows): array {
+    $merged = [];
+    foreach ($rows as $row) {
+        $label = normalize_domestic_region_label((string)($row['label'] ?? ''));
+        if ($label === '') {
+            continue;
+        }
+        $total = (int)($row['total'] ?? 0);
+        if (!isset($merged[$label])) {
+            $merged[$label] = 0;
+        }
+        $merged[$label] += $total;
+    }
+    arsort($merged);
+    $result = [];
+    foreach ($merged as $label => $total) {
+        $result[] = ['label' => $label, 'total' => $total];
+    }
+    return array_slice($result, 0, 12);
+}
+
+function normalize_international_country_label(string $label, string $countryCode = ''): string {
+    $countryCode = strtoupper(trim($countryCode));
+    if ($countryCode !== '' && $countryCode !== 'CN') {
+        return normalize_country_name('', $countryCode);
+    }
+    $label = normalize_region_stats_label(trim($label));
+    if ($label === '') {
+        return '';
+    }
+    if (strpos($label, '美国') !== false) {
+        return '美国';
+    }
+    return $label;
+}
+
+function aggregate_international_country_rows(array $rows): array {
+    $merged = [];
+    foreach ($rows as $row) {
+        $label = normalize_international_country_label(
+            (string)($row['label'] ?? ''),
+            (string)($row['country_code'] ?? '')
+        );
+        if ($label === '') {
+            continue;
+        }
+        $total = (int)($row['total'] ?? 0);
+        if (!isset($merged[$label])) {
+            $merged[$label] = 0;
+        }
+        $merged[$label] += $total;
+    }
+    arsort($merged);
+    $result = [];
+    foreach ($merged as $label => $total) {
+        $result[] = ['label' => $label, 'total' => $total];
+    }
+    return array_slice($result, 0, 12);
+}
+
 function normalize_us_region(string $region): string {
     $raw = trim($region);
     if ($raw === '') {
@@ -8834,6 +8917,9 @@ if ($path === '/dashboard') {
     $user = require_login();
     $pdo = db();
     $liteMode = lite_mode_enabled();
+    if ($liteMode && ($user['role'] ?? '') === 'admin' && $path === '/dashboard') {
+        redirect('/admin-home');
+    }
     $usedBytes = recalculate_user_storage((int)$user['id']);
     $user['storage_used_bytes'] = $usedBytes;
     $limitBytes = get_user_limit_bytes($user);
@@ -8957,15 +9043,15 @@ if ($path === '/dashboard') {
     $sourceStmt->bindValue(':offset', $accessSourceOffset, PDO::PARAM_INT);
     $sourceStmt->execute();
     $accessSources = $sourceStmt->fetchAll(PDO::FETCH_ASSOC);
-    $regionCnStmt = $pdo->prepare('SELECT ip_region AS label, COUNT(*) AS total FROM share_access_logs WHERE ' . $accessWhereSql . ' AND ip_country_code = "CN" AND ip_region != "" AND ip_region NOT IN ("香港","香港特别行政区","中国香港","澳门","澳门特别行政区","中国澳门","台湾","台湾省","中国台湾") GROUP BY ip_region ORDER BY total DESC LIMIT 12');
+    $regionCnStmt = $pdo->prepare('SELECT ip_region AS label, COUNT(*) AS total FROM share_access_logs WHERE ' . $accessWhereSql . ' AND ip_country_code = "CN" AND ip_region != "" AND ip_region NOT IN ("香港","香港特别行政区","中国香港","澳门","澳门特别行政区","中国澳门","台湾","台湾省","中国台湾") GROUP BY ip_region ORDER BY total DESC LIMIT 50');
     $regionCnStmt->execute($accessParams);
-    $accessRegionsCn = $regionCnStmt->fetchAll(PDO::FETCH_ASSOC);
+    $accessRegionsCn = aggregate_domestic_region_rows($regionCnStmt->fetchAll(PDO::FETCH_ASSOC));
     $regionIntlStmt = $pdo->prepare('SELECT CASE
             WHEN ip_country_code = "CN" AND ip_region IN ("香港","香港特别行政区","中国香港") THEN "香港"
             WHEN ip_country_code = "CN" AND ip_region IN ("澳门","澳门特别行政区","中国澳门") THEN "澳门"
             WHEN ip_country_code = "CN" AND ip_region IN ("台湾","台湾省","中国台湾") THEN "台湾"
             ELSE ip_country
-        END AS label, COUNT(*) AS total
+        END AS label, ip_country_code AS country_code, COUNT(*) AS total
         FROM share_access_logs
         WHERE ' . $accessWhereSql . '
         AND (
@@ -8974,11 +9060,11 @@ if ($path === '/dashboard') {
             OR ip_region IN ("香港","香港特别行政区","中国香港","澳门","澳门特别行政区","中国澳门","台湾","台湾省","中国台湾")
         )
         AND (ip_country != "" OR ip_region != "")
-        GROUP BY label
+        GROUP BY label, country_code
         ORDER BY total DESC
-        LIMIT 12');
+        LIMIT 50');
     $regionIntlStmt->execute($accessParams);
-    $accessRegionsIntl = $regionIntlStmt->fetchAll(PDO::FETCH_ASSOC);
+    $accessRegionsIntl = aggregate_international_country_rows($regionIntlStmt->fetchAll(PDO::FETCH_ASSOC));
     $accessCnMax = 0;
     foreach ($accessRegionsCn as $row) {
         $accessCnMax = max($accessCnMax, (int)($row['total'] ?? 0));
@@ -9420,15 +9506,15 @@ if ($path === '/admin-home') {
         $sourceStmt = $pdo->prepare('SELECT referer, COUNT(*) AS total FROM share_access_logs WHERE referer != "" GROUP BY referer ORDER BY total DESC LIMIT 20');
         $sourceStmt->execute();
         $liteAccessSources = $sourceStmt->fetchAll(PDO::FETCH_ASSOC);
-        $regionCnStmt = $pdo->prepare('SELECT ip_region AS label, COUNT(*) AS total FROM share_access_logs WHERE ip_country_code = "CN" AND ip_region != "" AND ip_region NOT IN ("香港","香港特别行政区","中国香港","澳门","澳门特别行政区","中国澳门","台湾","台湾省","中国台湾") GROUP BY ip_region ORDER BY total DESC LIMIT 12');
+        $regionCnStmt = $pdo->prepare('SELECT ip_region AS label, COUNT(*) AS total FROM share_access_logs WHERE ip_country_code = "CN" AND ip_region != "" AND ip_region NOT IN ("香港","香港特别行政区","中国香港","澳门","澳门特别行政区","中国澳门","台湾","台湾省","中国台湾") GROUP BY ip_region ORDER BY total DESC LIMIT 50');
         $regionCnStmt->execute();
-        $liteAccessRegionsCn = $regionCnStmt->fetchAll(PDO::FETCH_ASSOC);
+        $liteAccessRegionsCn = aggregate_domestic_region_rows($regionCnStmt->fetchAll(PDO::FETCH_ASSOC));
         $regionIntlStmt = $pdo->prepare('SELECT CASE
                 WHEN ip_country_code = "CN" AND ip_region IN ("香港","香港特别行政区","中国香港") THEN "香港"
                 WHEN ip_country_code = "CN" AND ip_region IN ("澳门","澳门特别行政区","中国澳门") THEN "澳门"
                 WHEN ip_country_code = "CN" AND ip_region IN ("台湾","台湾省","中国台湾") THEN "台湾"
                 ELSE ip_country
-            END AS label, COUNT(*) AS total
+            END AS label, ip_country_code AS country_code, COUNT(*) AS total
             FROM share_access_logs
             WHERE (
                 ip_country_code IS NULL
@@ -9436,11 +9522,11 @@ if ($path === '/admin-home') {
                 OR ip_region IN ("香港","香港特别行政区","中国香港","澳门","澳门特别行政区","中国澳门","台湾","台湾省","中国台湾")
             )
             AND (ip_country != "" OR ip_region != "")
-            GROUP BY label
+            GROUP BY label, country_code
             ORDER BY total DESC
-            LIMIT 12');
+            LIMIT 50');
         $regionIntlStmt->execute();
-        $liteAccessRegionsIntl = $regionIntlStmt->fetchAll(PDO::FETCH_ASSOC);
+        $liteAccessRegionsIntl = aggregate_international_country_rows($regionIntlStmt->fetchAll(PDO::FETCH_ASSOC));
         foreach ($liteAccessRegionsCn as $row) {
             $liteAccessCnMax = max($liteAccessCnMax, (int)($row['total'] ?? 0));
         }
@@ -10029,6 +10115,9 @@ if ($path === '/admin') {
     $admin = require_admin();
     $pdo = db();
     $liteMode = lite_mode_enabled();
+    if ($liteMode) {
+        redirect('/admin-home');
+    }
     $info = flash('info');
     $error = flash('error');
     $createForm = $_SESSION['user_create_form'] ?? [];
