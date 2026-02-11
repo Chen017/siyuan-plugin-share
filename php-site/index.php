@@ -1238,8 +1238,10 @@ function render_page(string $title, string $content, ?array $user = null, string
                 ['key' => 'admin-settings', 'label' => '站点设置', 'href' => $base . '/admin#settings'],
                 ['key' => 'admin-announcements', 'label' => '公告管理', 'href' => $base . '/admin#announcements'],
                 ['key' => 'admin-shares', 'label' => '分享管理', 'href' => $base . '/admin#shares'],
-                ['key' => 'admin-chunks', 'label' => '分片清理', 'href' => $base . '/admin#chunks'],
             ];
+            if (!$liteMode) {
+                $navItems[] = ['key' => 'admin-chunks', 'label' => '分片清理', 'href' => $base . '/admin#chunks'];
+            }
             if (!$liteMode) {
                 $navItems[] = ['key' => 'admin-reports', 'label' => '举报管理', 'href' => $base . '/admin#reports', 'badge' => $reportBadge];
                 $navItems[] = ['key' => 'admin-users', 'label' => '用户管理', 'href' => $base . '/admin#users'];
@@ -8770,22 +8772,24 @@ if ($path === '/account') {
     $content .= '<div style="margin-top:12px"><button class="button primary" type="submit">更新密码</button></div>';
     $content .= '</form></div>';
 
-    $currentEmail = trim((string)($user['email'] ?? ''));
-    $currentEmailLabel = $currentEmail !== '' ? htmlspecialchars($currentEmail) : '未绑定';
-    $pendingEmail = (string)($_SESSION['account_email_target'] ?? '');
-    $content .= '<div class="card"><h2>换绑邮箱</h2>';
-    $content .= '<p class="muted">当前邮箱：' . $currentEmailLabel . '</p>';
-    $content .= '<form method="post" action="' . base_path() . '/account/email-change" style="margin-top:12px">';
-    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
-    $content .= '<div class="grid">';
-    $content .= '<div><label>新邮箱</label><input class="input" type="email" name="new_email" value="' . htmlspecialchars($pendingEmail) . '" required></div>';
-    $content .= '<div><label>邮箱验证码</label><input class="input" name="email_code" placeholder="请输入验证码" required></div>';
-    $content .= '</div>';
-    $content .= '<div class="form-actions" style="margin-top:12px">';
-    $content .= '<button class="button ghost" type="submit" formaction="' . base_path() . '/account/email-code" formnovalidate>发送邮箱验证码</button>';
-    $content .= '<button class="button primary" type="submit">更换邮箱</button>';
-    $content .= '</div>';
-    $content .= '</form></div>';
+    if (!lite_mode_enabled()) {
+        $currentEmail = trim((string)($user['email'] ?? ''));
+        $currentEmailLabel = $currentEmail !== '' ? htmlspecialchars($currentEmail) : '未绑定';
+        $pendingEmail = (string)($_SESSION['account_email_target'] ?? '');
+        $content .= '<div class="card"><h2>换绑邮箱</h2>';
+        $content .= '<p class="muted">当前邮箱：' . $currentEmailLabel . '</p>';
+        $content .= '<form method="post" action="' . base_path() . '/account/email-change" style="margin-top:12px">';
+        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+        $content .= '<div class="grid">';
+        $content .= '<div><label>新邮箱</label><input class="input" type="email" name="new_email" value="' . htmlspecialchars($pendingEmail) . '" required></div>';
+        $content .= '<div><label>邮箱验证码</label><input class="input" name="email_code" placeholder="请输入验证码" required></div>';
+        $content .= '</div>';
+        $content .= '<div class="form-actions" style="margin-top:12px">';
+        $content .= '<button class="button ghost" type="submit" formaction="' . base_path() . '/account/email-code" formnovalidate>发送邮箱验证码</button>';
+        $content .= '<button class="button primary" type="submit">更换邮箱</button>';
+        $content .= '</div>';
+        $content .= '</form></div>';
+    }
     $titleHtml = build_topbar_title('账号设置', $user);
     render_page('账号设置', $content, $user, '', ['title_html' => $titleHtml]);
 }
@@ -8990,10 +8994,12 @@ if ($path === '/dashboard') {
     $content .= '<button class="button" type="submit">' . $buttonLabel . '</button>';
     $content .= '</form></div>';
 
-    $content .= '<div class="card"><h2>账号设置</h2>';
-    $content .= '<p class="muted">修改登录密码、查看账号状态。</p>';
-    $content .= '<a class="button" href="' . base_path() . '/account">前往账号设置</a>';
-    $content .= '</div>';
+    if (!$liteMode) {
+        $content .= '<div class="card"><h2>账号设置</h2>';
+        $content .= '<p class="muted">修改登录密码、查看账号状态。</p>';
+        $content .= '<a class="button" href="' . base_path() . '/account">前往账号设置</a>';
+        $content .= '</div>';
+    }
 
     $content .= '<div class="card" id="shares"><h2>分享列表</h2>';
     $content .= '<form method="get" action="' . base_path() . '/dashboard#shares" class="filter-form">';
@@ -9088,206 +9094,208 @@ if ($path === '/dashboard') {
     $content .= '</div>';
     $content .= '</div>';
 
-    $content .= '<div class="card" id="access-stats"><h2>访问概况</h2>';
-    $content .= '<form method="post" action="' . base_path() . '/dashboard/access-stats/update" class="stats-settings">';
-    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
-    $content .= '<div class="grid">';
-    $content .= '<div><label>访问统计</label><label class="checkbox stats-toggle"><input type="checkbox" name="access_enabled" value="1"' . ($accessEnabled ? ' checked' : '') . '> 开启</label></div>';
-    $content .= '<div><label>保留天数</label><input class="input" type="number" name="access_retention_days" min="1" max="365" value="' . (int)$accessRetention . '"></div>';
-    $content .= '</div>';
-    $content .= '<div class="muted stats-note">访客数(UV) 按浏览器 Cookie 去重（按天），访问记录计入账号存储空间，默认保留最近 7 天（当前 ' . (int)$accessRetention . ' 天），可在此调整；存储不足会自动关闭并清空统计。</div>';
-    if ($storageFull) {
-        $content .= '<div class="notice" style="margin-top:8px">存储空间已满，当前无法开启访问统计，请先清理空间。</div>';
-    }
-    if (!$accessEnabled) {
-        $content .= '<div class="notice" style="margin-top:8px">访问统计已关闭，当前不会记录新的访问。</div>';
-    }
-    $content .= '<div style="margin-top:12px"><button class="button" type="submit">保存设置</button></div>';
-    $content .= '</form>';
-
-    $content .= '<form method="get" action="' . base_path() . '/dashboard#access-stats" class="filter-form">';
-    $content .= render_hidden_inputs($accessFilterQuery);
-    $content .= '<div class="grid">';
-    $content .= '<div><label>笔记筛选</label><select class="input" name="access_share">';
-    $content .= '<option value="all"' . ($accessShareId <= 0 ? ' selected' : '') . '>全部</option>';
-    foreach ($accessShareOptions as $option) {
-        $optionId = (int)($option['id'] ?? 0);
-        $optionTitle = (string)($option['title'] ?? '');
-        $optionSlug = (string)($option['slug'] ?? '');
-        $label = $optionTitle !== '' ? $optionTitle : $optionSlug;
-        if ($optionSlug !== '') {
-            $label .= ' /s/' . $optionSlug;
+    if (!$liteMode) {
+        $content .= '<div class="card" id="access-stats"><h2>访问概况</h2>';
+        $content .= '<form method="post" action="' . base_path() . '/dashboard/access-stats/update" class="stats-settings">';
+        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+        $content .= '<div class="grid">';
+        $content .= '<div><label>访问统计</label><label class="checkbox stats-toggle"><input type="checkbox" name="access_enabled" value="1"' . ($accessEnabled ? ' checked' : '') . '> 开启</label></div>';
+        $content .= '<div><label>保留天数</label><input class="input" type="number" name="access_retention_days" min="1" max="365" value="' . (int)$accessRetention . '"></div>';
+        $content .= '</div>';
+        $content .= '<div class="muted stats-note">访客数(UV) 按浏览器 Cookie 去重（按天），访问记录计入账号存储空间，默认保留最近 7 天（当前 ' . (int)$accessRetention . ' 天），可在此调整；存储不足会自动关闭并清空统计。</div>';
+        if ($storageFull) {
+            $content .= '<div class="notice" style="margin-top:8px">存储空间已满，当前无法开启访问统计，请先清理空间。</div>';
         }
-        $selected = $accessShareId === $optionId ? ' selected' : '';
-        $content .= '<option value="' . $optionId . '"' . $selected . '>' . htmlspecialchars($label) . '</option>';
-    }
-    $content .= '</select></div>';
-    $content .= '</div>';
-    $content .= '<div style="margin-top:12px"><button class="button" type="submit">筛选</button></div>';
-    $content .= '</form>';
-
-    $content .= '<div class="stats-block">';
-    $content .= '<div class="stats-title">访问概况</div>';
-    $content .= '<table class="table stats-table"><thead><tr><th></th><th>浏览量(PV)</th><th>访客数(UV)</th><th>IP 数量</th></tr></thead><tbody>';
-    $content .= '<tr><td>今日</td><td>' . $accessSummary['pv_today'] . '</td><td>' . $accessSummary['uv_today'] . '</td><td>' . $accessSummary['ip_today'] . '</td></tr>';
-    $content .= '<tr><td>昨日</td><td>' . $accessSummary['pv_yesterday'] . '</td><td>' . $accessSummary['uv_yesterday'] . '</td><td>' . $accessSummary['ip_yesterday'] . '</td></tr>';
-    $content .= '<tr><td>总计</td><td>' . $accessSummary['pv_total'] . '</td><td>' . $accessSummary['uv_total'] . '</td><td>' . $accessSummary['ip_total'] . '</td></tr>';
-    $content .= '</tbody></table>';
-    $content .= '</div>';
-
-    $content .= '<div class="stats-block">';
-    $content .= '<div class="stats-title">来源页</div>';
-    if (empty($accessSources)) {
-        $content .= '<p class="muted">暂无来源数据。</p>';
-    } else {
-        $content .= '<table class="table stats-table"><thead><tr><th>排名</th><th>次数</th><th>来源地址</th></tr></thead><tbody>';
-        $rank = 1;
-        foreach ($accessSources as $row) {
-            $referer = (string)($row['referer'] ?? '');
-            $total = (int)($row['total'] ?? 0);
-            $content .= '<tr><td>' . $rank . '</td><td>' . $total . '</td><td class="stats-source">' . htmlspecialchars($referer) . '</td></tr>';
-            $rank++;
+        if (!$accessEnabled) {
+            $content .= '<div class="notice" style="margin-top:8px">访问统计已关闭，当前不会记录新的访问。</div>';
         }
+        $content .= '<div style="margin-top:12px"><button class="button" type="submit">保存设置</button></div>';
+        $content .= '</form>';
+
+        $content .= '<form method="get" action="' . base_path() . '/dashboard#access-stats" class="filter-form">';
+        $content .= render_hidden_inputs($accessFilterQuery);
+        $content .= '<div class="grid">';
+        $content .= '<div><label>笔记筛选</label><select class="input" name="access_share">';
+        $content .= '<option value="all"' . ($accessShareId <= 0 ? ' selected' : '') . '>全部</option>';
+        foreach ($accessShareOptions as $option) {
+            $optionId = (int)($option['id'] ?? 0);
+            $optionTitle = (string)($option['title'] ?? '');
+            $optionSlug = (string)($option['slug'] ?? '');
+            $label = $optionTitle !== '' ? $optionTitle : $optionSlug;
+            if ($optionSlug !== '') {
+                $label .= ' /s/' . $optionSlug;
+            }
+            $selected = $accessShareId === $optionId ? ' selected' : '';
+            $content .= '<option value="' . $optionId . '"' . $selected . '>' . htmlspecialchars($label) . '</option>';
+        }
+        $content .= '</select></div>';
+        $content .= '</div>';
+        $content .= '<div style="margin-top:12px"><button class="button" type="submit">筛选</button></div>';
+        $content .= '</form>';
+
+        $content .= '<div class="stats-block">';
+        $content .= '<div class="stats-title">访问概况</div>';
+        $content .= '<table class="table stats-table"><thead><tr><th></th><th>浏览量(PV)</th><th>访客数(UV)</th><th>IP 数量</th></tr></thead><tbody>';
+        $content .= '<tr><td>今日</td><td>' . $accessSummary['pv_today'] . '</td><td>' . $accessSummary['uv_today'] . '</td><td>' . $accessSummary['ip_today'] . '</td></tr>';
+        $content .= '<tr><td>昨日</td><td>' . $accessSummary['pv_yesterday'] . '</td><td>' . $accessSummary['uv_yesterday'] . '</td><td>' . $accessSummary['ip_yesterday'] . '</td></tr>';
+        $content .= '<tr><td>总计</td><td>' . $accessSummary['pv_total'] . '</td><td>' . $accessSummary['uv_total'] . '</td><td>' . $accessSummary['ip_total'] . '</td></tr>';
         $content .= '</tbody></table>';
+        $content .= '</div>';
+
+        $content .= '<div class="stats-block">';
+        $content .= '<div class="stats-title">来源页</div>';
+        if (empty($accessSources)) {
+            $content .= '<p class="muted">暂无来源数据。</p>';
+        } else {
+            $content .= '<table class="table stats-table"><thead><tr><th>排名</th><th>次数</th><th>来源地址</th></tr></thead><tbody>';
+            $rank = 1;
+            foreach ($accessSources as $row) {
+                $referer = (string)($row['referer'] ?? '');
+                $total = (int)($row['total'] ?? 0);
+                $content .= '<tr><td>' . $rank . '</td><td>' . $total . '</td><td class="stats-source">' . htmlspecialchars($referer) . '</td></tr>';
+                $rank++;
+            }
+            $content .= '</tbody></table>';
+            $content .= '<div class="pagination">';
+            $content .= '<a class="button ghost" href="' . build_access_stats_query_url(['access_source_page' => max(1, $accessSourcePage - 1)]) . '">上一页</a>';
+            $content .= '<div class="pagination-info">第 ' . $accessSourcePage . ' / ' . $accessSourcePages . ' 页，共 ' . $accessSourceTotal . ' 条来源</div>';
+            $content .= '<a class="button ghost" href="' . build_access_stats_query_url(['access_source_page' => min($accessSourcePages, $accessSourcePage + 1)]) . '">下一页</a>';
+            $content .= '<form method="get" action="' . base_path() . '/dashboard#access-stats" class="pagination-form">';
+            $content .= render_hidden_inputs(array_merge($accessSourceQuery, [
+                'access_share' => $accessShareId > 0 ? $accessShareId : 'all',
+            ]));
+            $content .= '<label>每页</label><select class="input" name="access_source_size">';
+            foreach ([10, 50, 200, 1000] as $size) {
+                $selected = $accessSourceSize === $size ? ' selected' : '';
+                $content .= '<option value="' . $size . '"' . $selected . '>' . $size . '</option>';
+            }
+            $content .= '</select>';
+            $content .= '<label>页码</label><input class="input small" type="number" name="access_source_page" min="1" max="' . $accessSourcePages . '" value="' . $accessSourcePage . '">';
+            $content .= '<button class="button" type="submit">跳转</button>';
+            $content .= '</form>';
+            $content .= '</div>';
+        }
+        $content .= '</div>';
+
+        $content .= '<div class="stats-block">';
+        $content .= '<div class="stats-title">访客地域分析</div>';
+        $content .= '<div class="stats-charts">';
+        $content .= '<div class="stats-chart">';
+        $content .= '<div class="stats-subtitle">国内</div>';
+        if (empty($accessRegionsCn)) {
+            $content .= '<p class="muted">暂无数据。</p>';
+        } else {
+            $content .= '<div class="stats-chart-list">';
+            foreach ($accessRegionsCn as $row) {
+                $label = (string)($row['label'] ?? '');
+                $total = (int)($row['total'] ?? 0);
+                $percent = $accessCnMax > 0 ? round(($total / $accessCnMax) * 100, 1) : 0;
+                $content .= '<div class="stats-chart-row"><div class="stats-label">' . htmlspecialchars($label) . '</div><div class="stats-bar-track"><div class="stats-bar" style="width:' . $percent . '%"></div></div><div class="stats-value">' . $total . '</div></div>';
+            }
+            $content .= '</div>';
+        }
+        $content .= '</div>';
+        $content .= '<div class="stats-chart">';
+        $content .= '<div class="stats-subtitle">国际</div>';
+        if (empty($accessRegionsIntl)) {
+            $content .= '<p class="muted">暂无数据。</p>';
+        } else {
+            $content .= '<div class="stats-chart-list">';
+            foreach ($accessRegionsIntl as $row) {
+                $label = (string)($row['label'] ?? '');
+                $total = (int)($row['total'] ?? 0);
+                $percent = $accessIntlMax > 0 ? round(($total / $accessIntlMax) * 100, 1) : 0;
+                $content .= '<div class="stats-chart-row"><div class="stats-label">' . htmlspecialchars($label) . '</div><div class="stats-bar-track"><div class="stats-bar" style="width:' . $percent . '%"></div></div><div class="stats-value">' . $total . '</div></div>';
+            }
+            $content .= '</div>';
+        }
+        $content .= '</div>';
+        $content .= '</div>';
+        $content .= '</div>';
+
+        $content .= '<div class="stats-block">';
+        $content .= '<div class="stats-title">访问记录</div>';
+        $content .= '<div class="table-actions stats-actions">';
+        $content .= '<form id="access-batch-form" method="post" action="' . base_path() . '/dashboard/access-stats/delete" class="inline-form" data-batch-form="access">';
+        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+        $content .= '<label class="checkbox"><input type="checkbox" data-check-all="access"> 全选</label>';
+        $content .= '<button class="button danger" type="submit">批量删除</button>';
+        $content .= '</form>';
+        $content .= '<form method="post" action="' . base_path() . '/dashboard/access-stats/delete-all" class="inline-form" data-confirm-message="确定删除全部访问记录吗？该操作不可恢复。">';
+        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+        $content .= '<button class="button danger" type="submit">删除全部（占用 ' . $accessLogTotalLabel . '）</button>';
+        $content .= '</form>';
+        $content .= '</div>';
+        if (empty($accessLogs)) {
+            $content .= '<p class="muted">暂无访问记录。</p>';
+        } else {
+            $content .= '<table class="table stats-table"><thead><tr><th><input type="checkbox" data-check-all="access" form="access-batch-form"></th><th>标题</th><th>IP</th><th>IP归属地</th><th>访问日期</th></tr></thead><tbody>';
+            foreach ($accessLogs as $log) {
+                $logTitle = trim((string)($log['doc_title'] ?? ''));
+                if ($logTitle === '') {
+                    $logTitle = (string)($log['share_title'] ?? '');
+                }
+                if ($logTitle === '') {
+                    $logTitle = '未命名';
+                }
+                $slug = (string)($log['slug'] ?? '');
+                $docId = trim((string)($log['doc_id'] ?? ''));
+                if ($slug !== '') {
+                    $shareLink = $docId !== '' ? base_url() . build_share_redirect_path($slug, $docId, '') : share_url($slug);
+                    $suffix = $docId !== '' ? '/s/' . $slug . '/' . $docId : '/s/' . $slug;
+                } else {
+                    $shareLink = '#';
+                    $suffix = '';
+                }
+                $ip = trim((string)($log['ip'] ?? ''));
+                if ($ip === '') {
+                    $ip = '-';
+                }
+                $location = format_ip_location([
+                    'country' => $log['ip_country'] ?? '',
+                    'country_code' => $log['ip_country_code'] ?? '',
+                    'region' => $log['ip_region'] ?? '',
+                    'city' => $log['ip_city'] ?? '',
+                ]);
+                if ($location === '') {
+                    $location = '-';
+                }
+                $content .= '<tr>';
+                $content .= '<td><input type="checkbox" name="access_ids[]" value="' . (int)$log['id'] . '" data-check-item="access" form="access-batch-form"></td>';
+                $content .= '<td><a href="' . htmlspecialchars($shareLink) . '" target="_blank">' . htmlspecialchars($logTitle) . '</a>';
+                if ($suffix !== '') {
+                    $content .= '<div class="muted">' . htmlspecialchars($suffix) . '</div>';
+                }
+                $content .= '</td>';
+                $content .= '<td>' . htmlspecialchars($ip) . '</td>';
+                $content .= '<td>' . htmlspecialchars($location) . '</td>';
+                $content .= '<td>' . htmlspecialchars((string)($log['created_at'] ?? '')) . '</td>';
+                $content .= '</tr>';
+            }
+            $content .= '</tbody></table>';
+        }
         $content .= '<div class="pagination">';
-        $content .= '<a class="button ghost" href="' . build_access_stats_query_url(['access_source_page' => max(1, $accessSourcePage - 1)]) . '">上一页</a>';
-        $content .= '<div class="pagination-info">第 ' . $accessSourcePage . ' / ' . $accessSourcePages . ' 页，共 ' . $accessSourceTotal . ' 条来源</div>';
-        $content .= '<a class="button ghost" href="' . build_access_stats_query_url(['access_source_page' => min($accessSourcePages, $accessSourcePage + 1)]) . '">下一页</a>';
+        $content .= '<a class="button ghost" href="' . build_access_stats_query_url(['access_page' => max(1, $accessPage - 1)]) . '">上一页</a>';
+        $content .= '<div class="pagination-info">第 ' . $accessPage . ' / ' . $accessPages . ' 页，共 ' . $accessTotal . ' 条访问</div>';
+        $content .= '<a class="button ghost" href="' . build_access_stats_query_url(['access_page' => min($accessPages, $accessPage + 1)]) . '">下一页</a>';
         $content .= '<form method="get" action="' . base_path() . '/dashboard#access-stats" class="pagination-form">';
-        $content .= render_hidden_inputs(array_merge($accessSourceQuery, [
+        $content .= render_hidden_inputs(array_merge($accessQuery, [
             'access_share' => $accessShareId > 0 ? $accessShareId : 'all',
         ]));
-        $content .= '<label>每页</label><select class="input" name="access_source_size">';
+        $content .= '<label>每页</label><select class="input" name="access_size">';
         foreach ([10, 50, 200, 1000] as $size) {
-            $selected = $accessSourceSize === $size ? ' selected' : '';
+            $selected = $accessSize === $size ? ' selected' : '';
             $content .= '<option value="' . $size . '"' . $selected . '>' . $size . '</option>';
         }
         $content .= '</select>';
-        $content .= '<label>页码</label><input class="input small" type="number" name="access_source_page" min="1" max="' . $accessSourcePages . '" value="' . $accessSourcePage . '">';
+        $content .= '<label>页码</label><input class="input small" type="number" name="access_page" min="1" max="' . $accessPages . '" value="' . $accessPage . '">';
         $content .= '<button class="button" type="submit">跳转</button>';
         $content .= '</form>';
         $content .= '</div>';
-    }
-    $content .= '</div>';
+        $content .= '</div>';
 
-    $content .= '<div class="stats-block">';
-    $content .= '<div class="stats-title">访客地域分析</div>';
-    $content .= '<div class="stats-charts">';
-    $content .= '<div class="stats-chart">';
-    $content .= '<div class="stats-subtitle">国内</div>';
-    if (empty($accessRegionsCn)) {
-        $content .= '<p class="muted">暂无数据。</p>';
-    } else {
-        $content .= '<div class="stats-chart-list">';
-        foreach ($accessRegionsCn as $row) {
-            $label = (string)($row['label'] ?? '');
-            $total = (int)($row['total'] ?? 0);
-            $percent = $accessCnMax > 0 ? round(($total / $accessCnMax) * 100, 1) : 0;
-            $content .= '<div class="stats-chart-row"><div class="stats-label">' . htmlspecialchars($label) . '</div><div class="stats-bar-track"><div class="stats-bar" style="width:' . $percent . '%"></div></div><div class="stats-value">' . $total . '</div></div>';
-        }
         $content .= '</div>';
     }
-    $content .= '</div>';
-    $content .= '<div class="stats-chart">';
-    $content .= '<div class="stats-subtitle">国际</div>';
-    if (empty($accessRegionsIntl)) {
-        $content .= '<p class="muted">暂无数据。</p>';
-    } else {
-        $content .= '<div class="stats-chart-list">';
-        foreach ($accessRegionsIntl as $row) {
-            $label = (string)($row['label'] ?? '');
-            $total = (int)($row['total'] ?? 0);
-            $percent = $accessIntlMax > 0 ? round(($total / $accessIntlMax) * 100, 1) : 0;
-            $content .= '<div class="stats-chart-row"><div class="stats-label">' . htmlspecialchars($label) . '</div><div class="stats-bar-track"><div class="stats-bar" style="width:' . $percent . '%"></div></div><div class="stats-value">' . $total . '</div></div>';
-        }
-        $content .= '</div>';
-    }
-    $content .= '</div>';
-    $content .= '</div>';
-    $content .= '</div>';
-
-    $content .= '<div class="stats-block">';
-    $content .= '<div class="stats-title">访问记录</div>';
-    $content .= '<div class="table-actions stats-actions">';
-    $content .= '<form id="access-batch-form" method="post" action="' . base_path() . '/dashboard/access-stats/delete" class="inline-form" data-batch-form="access">';
-    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
-    $content .= '<label class="checkbox"><input type="checkbox" data-check-all="access"> 全选</label>';
-    $content .= '<button class="button danger" type="submit">批量删除</button>';
-    $content .= '</form>';
-    $content .= '<form method="post" action="' . base_path() . '/dashboard/access-stats/delete-all" class="inline-form" data-confirm-message="确定删除全部访问记录吗？该操作不可恢复。">';
-    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
-    $content .= '<button class="button danger" type="submit">删除全部（占用 ' . $accessLogTotalLabel . '）</button>';
-    $content .= '</form>';
-    $content .= '</div>';
-    if (empty($accessLogs)) {
-        $content .= '<p class="muted">暂无访问记录。</p>';
-    } else {
-        $content .= '<table class="table stats-table"><thead><tr><th><input type="checkbox" data-check-all="access" form="access-batch-form"></th><th>标题</th><th>IP</th><th>IP归属地</th><th>访问日期</th></tr></thead><tbody>';
-        foreach ($accessLogs as $log) {
-            $logTitle = trim((string)($log['doc_title'] ?? ''));
-            if ($logTitle === '') {
-                $logTitle = (string)($log['share_title'] ?? '');
-            }
-            if ($logTitle === '') {
-                $logTitle = '未命名';
-            }
-            $slug = (string)($log['slug'] ?? '');
-            $docId = trim((string)($log['doc_id'] ?? ''));
-            if ($slug !== '') {
-                $shareLink = $docId !== '' ? base_url() . build_share_redirect_path($slug, $docId, '') : share_url($slug);
-                $suffix = $docId !== '' ? '/s/' . $slug . '/' . $docId : '/s/' . $slug;
-            } else {
-                $shareLink = '#';
-                $suffix = '';
-            }
-            $ip = trim((string)($log['ip'] ?? ''));
-            if ($ip === '') {
-                $ip = '-';
-            }
-            $location = format_ip_location([
-                'country' => $log['ip_country'] ?? '',
-                'country_code' => $log['ip_country_code'] ?? '',
-                'region' => $log['ip_region'] ?? '',
-                'city' => $log['ip_city'] ?? '',
-            ]);
-            if ($location === '') {
-                $location = '-';
-            }
-            $content .= '<tr>';
-            $content .= '<td><input type="checkbox" name="access_ids[]" value="' . (int)$log['id'] . '" data-check-item="access" form="access-batch-form"></td>';
-            $content .= '<td><a href="' . htmlspecialchars($shareLink) . '" target="_blank">' . htmlspecialchars($logTitle) . '</a>';
-            if ($suffix !== '') {
-                $content .= '<div class="muted">' . htmlspecialchars($suffix) . '</div>';
-            }
-            $content .= '</td>';
-            $content .= '<td>' . htmlspecialchars($ip) . '</td>';
-            $content .= '<td>' . htmlspecialchars($location) . '</td>';
-            $content .= '<td>' . htmlspecialchars((string)($log['created_at'] ?? '')) . '</td>';
-            $content .= '</tr>';
-        }
-        $content .= '</tbody></table>';
-    }
-    $content .= '<div class="pagination">';
-    $content .= '<a class="button ghost" href="' . build_access_stats_query_url(['access_page' => max(1, $accessPage - 1)]) . '">上一页</a>';
-    $content .= '<div class="pagination-info">第 ' . $accessPage . ' / ' . $accessPages . ' 页，共 ' . $accessTotal . ' 条访问</div>';
-    $content .= '<a class="button ghost" href="' . build_access_stats_query_url(['access_page' => min($accessPages, $accessPage + 1)]) . '">下一页</a>';
-    $content .= '<form method="get" action="' . base_path() . '/dashboard#access-stats" class="pagination-form">';
-    $content .= render_hidden_inputs(array_merge($accessQuery, [
-        'access_share' => $accessShareId > 0 ? $accessShareId : 'all',
-    ]));
-    $content .= '<label>每页</label><select class="input" name="access_size">';
-    foreach ([10, 50, 200, 1000] as $size) {
-        $selected = $accessSize === $size ? ' selected' : '';
-        $content .= '<option value="' . $size . '"' . $selected . '>' . $size . '</option>';
-    }
-    $content .= '</select>';
-    $content .= '<label>页码</label><input class="input small" type="number" name="access_page" min="1" max="' . $accessPages . '" value="' . $accessPage . '">';
-    $content .= '<button class="button" type="submit">跳转</button>';
-    $content .= '</form>';
-    $content .= '</div>';
-    $content .= '</div>';
-
-    $content .= '</div>';
 
     if (($user['role'] ?? '') === 'admin' && !lite_mode_enabled()) {
         $content .= '<div class="card"><h2>管理员入口</h2>';
@@ -9318,6 +9326,38 @@ if ($path === '/admin-home') {
     $todayRow = $todayStmt->fetch(PDO::FETCH_ASSOC) ?: [];
     $todayPv = (int)($todayRow['pv'] ?? 0);
     $todayUv = (int)($todayRow['uv'] ?? 0);
+    $accessSummary = null;
+    if ($liteMode) {
+        $yesterdayStart = date('Y-m-d 00:00:00', strtotime('-1 day'));
+        $summaryStmt = $pdo->prepare('SELECT
+            SUM(CASE WHEN created_at >= :today_start AND created_at < :tomorrow_start THEN 1 ELSE 0 END) AS pv_today,
+            SUM(CASE WHEN created_at >= :yesterday_start AND created_at < :today_start THEN 1 ELSE 0 END) AS pv_yesterday,
+            COUNT(*) AS pv_total,
+            COUNT(DISTINCT CASE WHEN created_at >= :today_start AND created_at < :tomorrow_start THEN visitor_id END) AS uv_today,
+            COUNT(DISTINCT CASE WHEN created_at >= :yesterday_start AND created_at < :today_start THEN visitor_id END) AS uv_yesterday,
+            COUNT(DISTINCT visitor_id || ":" || substr(created_at, 1, 10)) AS uv_total,
+            COUNT(DISTINCT CASE WHEN created_at >= :today_start AND created_at < :tomorrow_start THEN ip END) AS ip_today,
+            COUNT(DISTINCT CASE WHEN created_at >= :yesterday_start AND created_at < :today_start THEN ip END) AS ip_yesterday,
+            COUNT(DISTINCT ip) AS ip_total
+            FROM share_access_logs');
+        $summaryStmt->execute([
+            ':today_start' => $todayStart,
+            ':tomorrow_start' => $tomorrowStart,
+            ':yesterday_start' => $yesterdayStart,
+        ]);
+        $summaryRow = $summaryStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+        $accessSummary = [
+            'pv_today' => (int)($summaryRow['pv_today'] ?? 0),
+            'pv_yesterday' => (int)($summaryRow['pv_yesterday'] ?? 0),
+            'pv_total' => (int)($summaryRow['pv_total'] ?? 0),
+            'uv_today' => (int)($summaryRow['uv_today'] ?? 0),
+            'uv_yesterday' => (int)($summaryRow['uv_yesterday'] ?? 0),
+            'uv_total' => (int)($summaryRow['uv_total'] ?? 0),
+            'ip_today' => (int)($summaryRow['ip_today'] ?? 0),
+            'ip_yesterday' => (int)($summaryRow['ip_yesterday'] ?? 0),
+            'ip_total' => (int)($summaryRow['ip_total'] ?? 0),
+        ];
+    }
     $activeStart30 = date('Y-m-d H:i:s', strtotime('-30 days'));
     $activeStart7 = date('Y-m-d H:i:s', strtotime('-7 days'));
     $activeStmt = $pdo->prepare('SELECT COUNT(*) FROM users WHERE last_active_at >= :start');
@@ -9557,6 +9597,15 @@ if ($path === '/admin-home') {
     $content .= render_kpi_card('总访问', number_format($totalAccess), '访客数(UV) 总计 ' . number_format($totalUv), $iconAccess);
     $content .= render_kpi_card('存储占用/剩余', htmlspecialchars($storageValue), htmlspecialchars($storageMeta), $iconStorage, $storageProgress);
     $content .= '</div>';
+    if ($liteMode && is_array($accessSummary)) {
+        $content .= '<div class="card"><h2>访问概况</h2>';
+        $content .= '<table class="table stats-table"><thead><tr><th></th><th>浏览量(PV)</th><th>访客数(UV)</th><th>IP 数量</th></tr></thead><tbody>';
+        $content .= '<tr><td>今日</td><td>' . $accessSummary['pv_today'] . '</td><td>' . $accessSummary['uv_today'] . '</td><td>' . $accessSummary['ip_today'] . '</td></tr>';
+        $content .= '<tr><td>昨日</td><td>' . $accessSummary['pv_yesterday'] . '</td><td>' . $accessSummary['uv_yesterday'] . '</td><td>' . $accessSummary['ip_yesterday'] . '</td></tr>';
+        $content .= '<tr><td>总计</td><td>' . $accessSummary['pv_total'] . '</td><td>' . $accessSummary['uv_total'] . '</td><td>' . $accessSummary['ip_total'] . '</td></tr>';
+        $content .= '</tbody></table>';
+        $content .= '</div>';
+    }
 
     $pvUvRangeSource = htmlspecialchars(json_encode([
         'labels' => $range30,
@@ -10502,37 +10551,39 @@ if ($path === '/admin') {
     $content .= '</div>';
     $content .= '</div>';
 
-    $chunkTtlHours = $chunkTtlSeconds > 0 ? ($chunkTtlSeconds / 3600) : 2;
-    $content .= '<div class="card" id="chunks"><h2>分片清理</h2>';
-    $content .= '<div class="muted">仅显示超过 ' . htmlspecialchars(number_format($chunkTtlHours, 1)) . ' 小时未更新的分片目录。</div>';
-    if (empty($staleChunks)) {
-        $content .= '<p class="muted" style="margin-top:12px">暂无过期分片。</p>';
-    } else {
-        $content .= '<form method="post" action="' . base_path() . '/admin/chunk-clean" class="inline-form" style="margin-top:12px">';
-        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
-        $content .= '<button class="button danger" type="submit">清理全部过期分片</button>';
-        $content .= '</form>';
-        $content .= '<table class="table" style="margin-top:12px"><thead><tr><th>目录</th><th>最后更新</th><th>已过期</th><th>操作</th></tr></thead><tbody>';
-        foreach ($staleChunks as $chunk) {
-            $chunkId = (string)$chunk['id'];
-            $mtime = (int)$chunk['mtime'];
-            $ageHours = max(0, $chunk['age'] / 3600);
-            $content .= '<tr>';
-            $content .= '<td><span class="muted">' . htmlspecialchars($chunkId) . '</span></td>';
-            $content .= '<td>' . htmlspecialchars(date('Y-m-d H:i', $mtime)) . '</td>';
-            $content .= '<td>' . htmlspecialchars(number_format($ageHours, 1)) . ' 小时</td>';
-            $content .= '<td class="actions">';
-            $content .= '<form method="post" action="' . base_path() . '/admin/chunk-delete" class="inline-form">';
+    if (!$liteMode) {
+        $chunkTtlHours = $chunkTtlSeconds > 0 ? ($chunkTtlSeconds / 3600) : 2;
+        $content .= '<div class="card" id="chunks"><h2>分片清理</h2>';
+        $content .= '<div class="muted">仅显示超过 ' . htmlspecialchars(number_format($chunkTtlHours, 1)) . ' 小时未更新的分片目录。</div>';
+        if (empty($staleChunks)) {
+            $content .= '<p class="muted" style="margin-top:12px">暂无过期分片。</p>';
+        } else {
+            $content .= '<form method="post" action="' . base_path() . '/admin/chunk-clean" class="inline-form" style="margin-top:12px">';
             $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
-            $content .= '<input type="hidden" name="chunk_id" value="' . htmlspecialchars($chunkId) . '">';
-            $content .= '<button class="button danger" type="submit">删除</button>';
+            $content .= '<button class="button danger" type="submit">清理全部过期分片</button>';
             $content .= '</form>';
-            $content .= '</td>';
-            $content .= '</tr>';
+            $content .= '<table class="table" style="margin-top:12px"><thead><tr><th>目录</th><th>最后更新</th><th>已过期</th><th>操作</th></tr></thead><tbody>';
+            foreach ($staleChunks as $chunk) {
+                $chunkId = (string)$chunk['id'];
+                $mtime = (int)$chunk['mtime'];
+                $ageHours = max(0, $chunk['age'] / 3600);
+                $content .= '<tr>';
+                $content .= '<td><span class="muted">' . htmlspecialchars($chunkId) . '</span></td>';
+                $content .= '<td>' . htmlspecialchars(date('Y-m-d H:i', $mtime)) . '</td>';
+                $content .= '<td>' . htmlspecialchars(number_format($ageHours, 1)) . ' 小时</td>';
+                $content .= '<td class="actions">';
+                $content .= '<form method="post" action="' . base_path() . '/admin/chunk-delete" class="inline-form">';
+                $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+                $content .= '<input type="hidden" name="chunk_id" value="' . htmlspecialchars($chunkId) . '">';
+                $content .= '<button class="button danger" type="submit">删除</button>';
+                $content .= '</form>';
+                $content .= '</td>';
+                $content .= '</tr>';
+            }
+            $content .= '</tbody></table>';
         }
-        $content .= '</tbody></table>';
+        $content .= '</div>';
     }
-    $content .= '</div>';
 
     if (!$liteMode) {
         $content .= '<div class="card" id="scan"><h2>违禁词扫描</h2>';
@@ -10685,15 +10736,17 @@ if ($path === '/admin') {
     $content .= '</div>';
     }
 
-    $content .= '<div class="card danger-zone"><h2>危险操作</h2>';
-    $content .= '<p class="muted">删除所有数据将清空用户、分享与公告，仅保留初始管理员。</p>';
-    $content .= '<form method="post" action="' . base_path() . '/admin/reset-data">';
-    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
-    $content .= '<div class="grid">';
-    $content .= '<div><label>输入“确认删除”继续</label><input class="input" name="confirm_phrase" placeholder="确认删除" required></div>';
-    $content .= '</div>';
-    $content .= '<div style="margin-top:12px"><button class="button danger" type="submit">删除所有数据</button></div>';
-    $content .= '</form></div>';
+    if (!$liteMode) {
+        $content .= '<div class="card danger-zone"><h2>危险操作</h2>';
+        $content .= '<p class="muted">删除所有数据将清空用户、分享与公告，仅保留初始管理员。</p>';
+        $content .= '<form method="post" action="' . base_path() . '/admin/reset-data">';
+        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+        $content .= '<div class="grid">';
+        $content .= '<div><label>输入“确认删除”继续</label><input class="input" name="confirm_phrase" placeholder="确认删除" required></div>';
+        $content .= '</div>';
+        $content .= '<div style="margin-top:12px"><button class="button danger" type="submit">删除所有数据</button></div>';
+        $content .= '</form></div>';
+    }
 $content .= '<div class="modal admin-comment-modal" data-admin-comment-modal hidden>';
     $content .= '<div class="modal-backdrop" data-modal-close></div>';
     $content .= '<div class="modal-card">';
