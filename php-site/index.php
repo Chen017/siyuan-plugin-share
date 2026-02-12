@@ -4827,16 +4827,22 @@ function handle_api(string $path): void {
         }
 
         $docs = [];
-        $docStmt = $pdo->prepare('SELECT id, doc_id, title, icon, hpath, parent_id, sort_index, sort_order, markdown, size_bytes, content_hash, meta_hash
+        $docStmt = $pdo->prepare('SELECT id, doc_id, title, icon, hpath, parent_id, sort_index, sort_order, size_bytes, content_hash, meta_hash
             FROM share_docs WHERE share_id = :sid ORDER BY sort_order ASC, id ASC');
         $docStmt->execute([':sid' => $shareId]);
-        $docRows = $docStmt->fetchAll(PDO::FETCH_ASSOC);
         $docHashUpdate = $pdo->prepare('UPDATE share_docs SET content_hash = :content_hash, meta_hash = :meta_hash WHERE id = :id');
-        foreach ($docRows as $row) {
+        $docMarkdownStmt = $pdo->prepare('SELECT markdown FROM share_docs WHERE share_id = :sid AND id = :id LIMIT 1');
+        while ($row = $docStmt->fetch(PDO::FETCH_ASSOC)) {
             $contentHash = normalize_hash_hex($row['content_hash'] ?? '');
             $metaHash = normalize_hash_hex($row['meta_hash'] ?? '');
             if ($contentHash === '') {
-                $contentHash = compute_doc_content_hash((string)($row['markdown'] ?? ''));
+                $docMarkdownStmt->execute([
+                    ':sid' => $shareId,
+                    ':id' => (int)($row['id'] ?? 0),
+                ]);
+                $docMarkdown = (string)($docMarkdownStmt->fetchColumn() ?: '');
+                $contentHash = compute_doc_content_hash($docMarkdown);
+                unset($docMarkdown);
             }
             if ($metaHash === '') {
                 $metaHash = compute_doc_meta_hash($row);
@@ -4859,6 +4865,7 @@ function handle_api(string $path): void {
                 'contentHash' => $contentHash,
                 'metaHash' => $metaHash,
             ];
+            unset($row);
         }
 
         $assets = [];
@@ -4868,9 +4875,8 @@ function handle_api(string $path): void {
             ':sid' => $shareId,
             ':prefix' => comment_asset_prefix() . '%',
         ]);
-        $assetRows = $assetStmt->fetchAll(PDO::FETCH_ASSOC);
         $assetHashUpdate = $pdo->prepare('UPDATE share_assets SET asset_hash = :asset_hash WHERE id = :id');
-        foreach ($assetRows as $row) {
+        while ($row = $assetStmt->fetch(PDO::FETCH_ASSOC)) {
             $assetHash = normalize_hash_hex($row['asset_hash'] ?? '');
             if ($assetHash === '') {
                 $filePath = (string)($row['file_path'] ?? '');
@@ -4892,6 +4898,7 @@ function handle_api(string $path): void {
                 'size' => max(0, (int)($row['size_bytes'] ?? 0)),
                 'hash' => $assetHash,
             ];
+            unset($row);
         }
 
         api_response(200, [
@@ -7636,9 +7643,22 @@ function route_share(string $slug, ?string $docId = null): void {
     $pdo->prepare('UPDATE shares SET access_count = access_count + 1 WHERE id = :id')
         ->execute([':id' => $shareId]);
     $share['access_count'] = (int)($share['access_count'] ?? 0) + 1;
-    $stmt = $pdo->prepare('SELECT * FROM share_docs WHERE share_id = :sid ORDER BY sort_order ASC, id ASC');
+    $stmt = $pdo->prepare('SELECT id, doc_id, title, icon, hpath, parent_id, sort_index, sort_order, updated_at FROM share_docs WHERE share_id = :sid ORDER BY sort_order ASC, id ASC');
     $stmt->execute([':sid' => $shareId]);
     $docs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $docMarkdownStmt = $pdo->prepare('SELECT markdown FROM share_docs WHERE share_id = :sid AND id = :id LIMIT 1');
+    $loadDocMarkdown = function (array $doc) use ($docMarkdownStmt, $shareId): string {
+        $rowId = (int)($doc['id'] ?? 0);
+        if ($rowId <= 0) {
+            return '';
+        }
+        $docMarkdownStmt->execute([
+            ':sid' => $shareId,
+            ':id' => $rowId,
+        ]);
+        $markdown = $docMarkdownStmt->fetchColumn();
+        return is_string($markdown) ? $markdown : '';
+    };
     if (empty($docs)) {
         http_response_code(404);
         echo '文档不存在。';
@@ -7669,7 +7689,7 @@ function route_share(string $slug, ?string $docId = null): void {
             }
             $docTitleRaw = trim((string)($doc['title'] ?? '')) ?: $shareTitleRaw;
             $docTitle = htmlspecialchars($docTitleRaw);
-            $front = extract_front_matter((string)$doc['markdown']);
+            $front = extract_front_matter($loadDocMarkdown($doc));
             $markdown = rewrite_asset_links((string)$front['body'], $assetBasePath);
             $markdown = strip_duplicate_title_heading($markdown, $docTitleRaw);
             $markdown = replace_custom_emoji_tokens($markdown, (int)$shareId, $assetBasePath);
@@ -7753,7 +7773,7 @@ function route_share(string $slug, ?string $docId = null): void {
         $doc = $docs[0];
         $docTitleRaw = trim((string)($doc['title'] ?? '')) ?: $shareTitleRaw;
         $docTitle = htmlspecialchars($docTitleRaw);
-        $front = extract_front_matter((string)$doc['markdown']);
+        $front = extract_front_matter($loadDocMarkdown($doc));
         $markdown = rewrite_asset_links((string)$front['body'], $assetBasePath);
         $markdown = strip_duplicate_title_heading($markdown, $docTitleRaw);
         $markdown = replace_custom_emoji_tokens($markdown, (int)$shareId, $assetBasePath);
@@ -7825,7 +7845,7 @@ function route_share(string $slug, ?string $docId = null): void {
             }
             $docTitleRaw = trim((string)($doc['title'] ?? '')) ?: $shareTitleRaw;
             $docTitle = htmlspecialchars($docTitleRaw);
-            $front = extract_front_matter((string)$doc['markdown']);
+            $front = extract_front_matter($loadDocMarkdown($doc));
             $markdown = rewrite_asset_links((string)$front['body'], $assetBasePath);
             $markdown = strip_duplicate_title_heading($markdown, $docTitleRaw);
             $markdown = replace_custom_emoji_tokens($markdown, (int)$shareId, $assetBasePath);
@@ -7896,7 +7916,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $docPath = $base . '/s/' . $slug . '/' . rawurlencode((string)$doc['doc_id']);
             $hPath = trim((string)($doc['hpath'] ?? ''), '/');
             $pathLabel = $hPath !== '' ? $hPath : '/';
-            $front = extract_front_matter((string)$doc['markdown']);
+            $front = extract_front_matter($loadDocMarkdown($doc));
             $meta = (array)$front['meta'];
             $updatedRaw = $meta['lastmod'] ?? $meta['updated'] ?? $meta['modified'] ?? '';
             $updated = $updatedRaw ? format_meta_date((string)$updatedRaw) : '';
