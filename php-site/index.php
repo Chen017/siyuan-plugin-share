@@ -5661,14 +5661,14 @@ function handle_api(string $path): void {
             $docChunkById[(string)($item['docId'] ?? '')] = $item;
         }
 
-        $docStmt = $pdo->prepare('SELECT * FROM share_upload_docs WHERE upload_id = :upload_id ORDER BY id ASC');
+        $bannedWords = get_banned_words();
+        $docStmt = $pdo->prepare('SELECT id, doc_id, title, icon, hpath, parent_id, sort_index, sort_order, size_bytes, content_hash, meta_hash, LENGTH(markdown) AS markdown_len FROM share_upload_docs WHERE upload_id = :upload_id ORDER BY id ASC');
         $docStmt->execute([':upload_id' => $uploadId]);
-        $docRowsRaw = $docStmt->fetchAll(PDO::FETCH_ASSOC);
         $docRows = [];
         $docSizeTotal = 0;
-        foreach ($docRowsRaw as $row) {
+        $chunkFilesToClean = [];
+        while ($row = $docStmt->fetch(PDO::FETCH_ASSOC)) {
             $docIdKey = trim((string)($row['doc_id'] ?? ''));
-            $docMarkdown = (string)($row['markdown'] ?? '');
             $docTitle = (string)($row['title'] ?? '');
             $docIcon = (string)($row['icon'] ?? '');
             $docHpath = (string)($row['hpath'] ?? '');
@@ -5678,20 +5678,16 @@ function handle_api(string $path): void {
             $docChunk = $docIdKey !== '' ? ($docChunkById[$docIdKey] ?? null) : null;
             $chunkHash = '';
             $chunkSize = -1;
+            $chunkFilePath = null;
             if ($docChunk) {
                 $chunkPath = sanitize_asset_path((string)($docChunk['path'] ?? ''));
                 $fullChunkPath = $chunkPath !== '' ? ($stagingDir . '/' . $chunkPath) : '';
                 if ($fullChunkPath === '' || !is_file($fullChunkPath)) {
                     api_response(400, null, 'Missing document: ' . $docIdKey);
                 }
-                $chunkContent = @file_get_contents($fullChunkPath);
-                if ($chunkContent === false) {
-                    api_response(500, null, 'Failed to read document: ' . $docIdKey);
-                }
-                $docMarkdown = (string)$chunkContent;
                 $chunkSize = (int)filesize($fullChunkPath);
                 if ($chunkSize < 0) {
-                    $chunkSize = strlen($docMarkdown);
+                    $chunkSize = 0;
                 }
                 $expectedSize = max(0, (int)($docChunk['size'] ?? 0));
                 if ($expectedSize > 0 && $chunkSize !== $expectedSize) {
@@ -5699,19 +5695,52 @@ function handle_api(string $path): void {
                 }
                 $chunkHash = normalize_hash_hex($docChunk['hash'] ?? '');
                 if ($chunkHash !== '') {
-                    $computedChunkHash = compute_doc_content_hash($docMarkdown);
+                    $computedChunkHash = normalize_hash_hex(hash_file('sha256', $fullChunkPath));
                     if ($computedChunkHash !== $chunkHash) {
                         api_response(400, null, 'Document hash mismatch: ' . $docIdKey);
                     }
                 }
-                @unlink($fullChunkPath);
+                $chunkFilePath = $fullChunkPath;
+                $chunkFilesToClean[] = $fullChunkPath;
+                if (!empty($bannedWords)) {
+                    $chunkContent = @file_get_contents($fullChunkPath);
+                    if ($chunkContent !== false && $chunkContent !== '') {
+                        $hit = find_banned_word((string)$chunkContent, $bannedWords);
+                        if ($hit) {
+                            $displayTitle = trim($docTitle) ?: $docIdKey;
+                            api_response(400, null, 'Banned word detected: ' . $hit['word'] . ' (doc: ' . $displayTitle . ')');
+                        }
+                    }
+                    unset($chunkContent);
+                }
+            } else {
+                if (!empty($bannedWords)) {
+                    $inlineMdStmt = $pdo->prepare('SELECT markdown FROM share_upload_docs WHERE id = :id LIMIT 1');
+                    $inlineMdStmt->execute([':id' => (int)$row['id']]);
+                    $inlineMarkdown = (string)($inlineMdStmt->fetchColumn() ?: '');
+                    if ($inlineMarkdown !== '') {
+                        $hit = find_banned_word($inlineMarkdown, $bannedWords);
+                        if ($hit) {
+                            $displayTitle = trim($docTitle) ?: $docIdKey;
+                            api_response(400, null, 'Banned word detected: ' . $hit['word'] . ' (doc: ' . $displayTitle . ')');
+                        }
+                    }
+                    unset($inlineMarkdown);
+                }
             }
             $docContentHash = normalize_hash_hex($row['content_hash'] ?? '');
             if ($chunkHash !== '') {
                 $docContentHash = $chunkHash;
             }
-            if ($docContentHash === '') {
-                $docContentHash = compute_doc_content_hash($docMarkdown);
+            if ($docContentHash === '' && $chunkFilePath) {
+                $docContentHash = normalize_hash_hex(hash_file('sha256', $chunkFilePath));
+            }
+            if ($docContentHash === '' && !$chunkFilePath) {
+                $inlineMdStmt2 = $pdo->prepare('SELECT markdown FROM share_upload_docs WHERE id = :id LIMIT 1');
+                $inlineMdStmt2->execute([':id' => (int)$row['id']]);
+                $inlineMd2 = (string)($inlineMdStmt2->fetchColumn() ?: '');
+                $docContentHash = compute_doc_content_hash($inlineMd2);
+                unset($inlineMd2);
             }
             $docMetaHash = normalize_hash_hex($row['meta_hash'] ?? '');
             if ($docMetaHash === '') {
@@ -5728,7 +5757,7 @@ function handle_api(string $path): void {
             if ($chunkSize >= 0) {
                 $rowSize = $chunkSize;
             } elseif ($rowSize <= 0) {
-                $rowSize = strlen($docMarkdown);
+                $rowSize = (int)($row['markdown_len'] ?? 0);
             }
             $docRows[] = [
                 'doc_id' => $docIdKey,
@@ -5737,31 +5766,15 @@ function handle_api(string $path): void {
                 'hpath' => $docHpath,
                 'parent_id' => $docParent !== '' ? $docParent : null,
                 'sort_index' => $docSortIndex,
-                'markdown' => $docMarkdown,
                 'sort_order' => $docSortOrder,
                 'size_bytes' => $rowSize,
                 'content_hash' => $docContentHash,
                 'meta_hash' => $docMetaHash,
+                '_chunk_file' => $chunkFilePath,
+                '_upload_row_id' => (int)$row['id'],
             ];
             $docSizeTotal += $rowSize;
-        }
-        $bannedWords = get_banned_words();
-        if (!empty($bannedWords)) {
-            foreach ($docRows as $row) {
-                $docMarkdown = (string)($row['markdown'] ?? '');
-                if ($docMarkdown === '') {
-                    continue;
-                }
-                $hit = find_banned_word($docMarkdown, $bannedWords);
-                if ($hit) {
-                    $docTitle = trim((string)($row['title'] ?? '')) ?: trim((string)($row['doc_id'] ?? ''));
-                    api_response(400, null, 'Banned word detected: ' . $hit['word'] . ' (doc: ' . $docTitle . ')');
-                }
-            }
-        }
-        $docChunkDir = $stagingDir . '/' . rtrim(doc_chunk_prefix(), '/');
-        if (!empty($docManifest) && is_dir($docChunkDir)) {
-            remove_dir($docChunkDir);
+            unset($row);
         }
 
         $manifest = normalize_asset_manifest(json_decode((string)($upload['asset_manifest'] ?? ''), true));
@@ -6001,7 +6014,15 @@ function handle_api(string $path): void {
             if ($uploadMode === 'full') {
                 $insertDoc = $pdo->prepare('INSERT INTO share_docs (share_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, content_hash, meta_hash, created_at, updated_at)
                     VALUES (:share_id, :doc_id, :title, :icon, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :content_hash, :meta_hash, :created_at, :updated_at)');
+                $fetchMdStmt = $pdo->prepare('SELECT markdown FROM share_upload_docs WHERE id = :id LIMIT 1');
                 foreach ($docRows as $row) {
+                    $docMarkdown = '';
+                    if (!empty($row['_chunk_file']) && is_file($row['_chunk_file'])) {
+                        $docMarkdown = (string)@file_get_contents($row['_chunk_file']);
+                    } else {
+                        $fetchMdStmt->execute([':id' => (int)$row['_upload_row_id']]);
+                        $docMarkdown = (string)($fetchMdStmt->fetchColumn() ?: '');
+                    }
                     $insertDoc->execute([
                         ':share_id' => $shareId,
                         ':doc_id' => $row['doc_id'],
@@ -6010,7 +6031,7 @@ function handle_api(string $path): void {
                         ':hpath' => $row['hpath'],
                         ':parent_id' => $row['parent_id'] ?? null,
                         ':sort_index' => $row['sort_index'] ?? 0,
-                        ':markdown' => $row['markdown'],
+                        ':markdown' => $docMarkdown,
                         ':sort_order' => $row['sort_order'] ?? 0,
                         ':size_bytes' => $row['size_bytes'] ?? 0,
                         ':content_hash' => normalize_hash_hex($row['content_hash'] ?? ''),
@@ -6018,6 +6039,12 @@ function handle_api(string $path): void {
                         ':created_at' => now(),
                         ':updated_at' => now(),
                     ]);
+                    unset($docMarkdown);
+                }
+                foreach ($chunkFilesToClean as $cf) {
+                    if (is_file($cf)) {
+                        @unlink($cf);
+                    }
                 }
                 if (is_dir($stagingDir)) {
                     move_dir($stagingDir, $targetDir);
@@ -6056,10 +6083,18 @@ function handle_api(string $path): void {
                 $updateDoc = $pdo->prepare('UPDATE share_docs SET title = :title, icon = :icon, hpath = :hpath, parent_id = :parent_id, sort_index = :sort_index, markdown = :markdown, sort_order = :sort_order, size_bytes = :size_bytes, content_hash = :content_hash, meta_hash = :meta_hash, updated_at = :updated_at WHERE id = :id');
                 $insertDoc = $pdo->prepare('INSERT INTO share_docs (share_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, content_hash, meta_hash, created_at, updated_at)
                     VALUES (:share_id, :doc_id, :title, :icon, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :content_hash, :meta_hash, :created_at, :updated_at)');
+                $fetchMdStmt2 = $pdo->prepare('SELECT markdown FROM share_upload_docs WHERE id = :id LIMIT 1');
                 foreach ($docRows as $row) {
                     $docKey = trim((string)($row['doc_id'] ?? ''));
                     if ($docKey === '') {
                         continue;
+                    }
+                    $docMarkdown = '';
+                    if (!empty($row['_chunk_file']) && is_file($row['_chunk_file'])) {
+                        $docMarkdown = (string)@file_get_contents($row['_chunk_file']);
+                    } else {
+                        $fetchMdStmt2->execute([':id' => (int)$row['_upload_row_id']]);
+                        $docMarkdown = (string)($fetchMdStmt2->fetchColumn() ?: '');
                     }
                     $findDoc->execute([
                         ':share_id' => $shareId,
@@ -6072,13 +6107,14 @@ function handle_api(string $path): void {
                         ':hpath' => $row['hpath'],
                         ':parent_id' => $row['parent_id'] ?? null,
                         ':sort_index' => $row['sort_index'] ?? 0,
-                        ':markdown' => $row['markdown'],
+                        ':markdown' => $docMarkdown,
                         ':sort_order' => $row['sort_order'] ?? 0,
                         ':size_bytes' => $row['size_bytes'] ?? 0,
                         ':content_hash' => normalize_hash_hex($row['content_hash'] ?? ''),
                         ':meta_hash' => normalize_hash_hex($row['meta_hash'] ?? ''),
                         ':updated_at' => now(),
                     ];
+                    unset($docMarkdown);
                     if ($docRowId > 0) {
                         $bind[':id'] = $docRowId;
                         $updateDoc->execute($bind);
@@ -6088,6 +6124,11 @@ function handle_api(string $path): void {
                             ':doc_id' => $docKey,
                             ':created_at' => now(),
                         ]));
+                    }
+                }
+                foreach ($chunkFilesToClean as $cf) {
+                    if (is_file($cf)) {
+                        @unlink($cf);
                     }
                 }
 
@@ -6141,11 +6182,17 @@ function handle_api(string $path): void {
             $pdo->prepare('DELETE FROM share_upload_docs WHERE upload_id = :upload_id')->execute([':upload_id' => $uploadId]);
             $pdo->prepare('DELETE FROM share_uploads WHERE upload_id = :upload_id')->execute([':upload_id' => $uploadId]);
             $pdo->commit();
+            foreach ($chunkFilesToClean as $chunkFile) {
+                if (is_file($chunkFile)) {
+                    @unlink($chunkFile);
+                }
+            }
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();
             }
-            api_response(500, null, 'Upload finalize failed');
+            error_log('Upload finalize failed for uploadId=' . $uploadId . ': ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
+            api_response(500, null, 'Upload finalize failed: ' . $e->getMessage());
         }
 
         if (!empty($visitorValue)) {
