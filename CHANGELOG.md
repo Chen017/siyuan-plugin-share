@@ -1,6 +1,6 @@
 # 更新日志
 
-## 0.4.0 计划中
+## 0.4.0 2026/2/13
 
 - [x] [Chen017](https://github.com/Chen017) 新增支持在管理员后台向 HTML `<head>` 插入自定义脚本
 - [x] 分享时，增量分析完成后，「继续上传」按钮将进入 10 秒倒计时；若在倒计时内无任何操作，系统将自动点击「继续上传」。 [Issues 44](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/44)
