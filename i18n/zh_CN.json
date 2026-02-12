@@ -123,7 +123,7 @@
   "siyuanShare.message.notebookListRefreshed": "笔记本列表已刷新。",
   "siyuanShare.message.openSharePanelFailed": "打开分享面板失败，请检查日志。",
   "siyuanShare.message.pluginInitFailed": "插件初始化失败：{error}",
-  "siyuanShare.message.processing": "处理中...",
+  "siyuanShare.message.processing": "加载中...",
   "siyuanShare.message.resourcesSkipped": "有 {count} 个资源获取失败，已跳过。",
   "siyuanShare.message.shareCreated": "分享已创建：{value}",
   "siyuanShare.message.verifySuccess": "验证成功",
@@ -166,5 +166,16 @@
   "siyuanShare.section.shareLink": "分享链接",
   "siyuanShare.title.processing": "处理中",
   "siyuanShare.title.shareListCount": "分享列表 ({count})",
-  "siyuanShare.title.shareManagement": "分享管理"
+  "siyuanShare.title.shareManagement": "分享管理",
+  "siyuanShare.action.confirm": "确定",
+  "siyuanShare.action.clearExcludedDocs": "清空排除",
+  "siyuanShare.action.selectExcludedDocs": "排除文档",
+  "siyuanShare.hint.excludeDocsNotebook": "可排除文档及其子文档，不参与笔记本分享",
+  "siyuanShare.hint.excludeDocsDoc": "可排除子文档，仅在“同时分享子文档”开启时生效。",
+  "siyuanShare.hint.excludeRootLocked": "当前根文档不可排除。",
+  "siyuanShare.label.excludedDocsCount": "已排除文档：{count}",
+  "siyuanShare.message.noDocsToExclude": "没有可排除的文档。",
+  "siyuanShare.message.noMatchingDocs": "没有匹配的文档。",
+  "siyuanShare.placeholder.searchDocs": "按标题或 ID 搜索",
+  "siyuanShare.title.selectExcludedDocs": "选择要排除的文档"
 }
