@@ -3416,6 +3416,10 @@ class SiYuanSharePlugin extends Plugin {
     let currentText = rawMessage;
     let barVisible = true;
     let closed = false;
+    let continueCountdownTimer = null;
+    let continueCountdownInterval = null;
+    let continueCountdownRemain = 0;
+    let continueBaseText = "";
     const setIndeterminate = () => {
       if (!bar) return;
       bar.style.animation = "";
@@ -3488,14 +3492,79 @@ class SiYuanSharePlugin extends Plugin {
       }
     };
     const hideContinue = () => {
+      if (continueCountdownTimer) {
+        clearTimeout(continueCountdownTimer);
+        continueCountdownTimer = null;
+      }
+      if (continueCountdownInterval) {
+        clearInterval(continueCountdownInterval);
+        continueCountdownInterval = null;
+      }
+      continueCountdownRemain = 0;
+      continueBaseText = "";
       if (!continueBtn) return;
       continueBtn.style.display = "none";
       continueBtn.textContent = "";
     };
-    const showContinue = (labelText) => {
+    const showContinue = (labelText, autoProceedSeconds = 0) => {
+      if (continueCountdownTimer) {
+        clearTimeout(continueCountdownTimer);
+        continueCountdownTimer = null;
+      }
+      if (continueCountdownInterval) {
+        clearInterval(continueCountdownInterval);
+        continueCountdownInterval = null;
+      }
+      continueCountdownRemain = 0;
+      continueBaseText = String(labelText || t("siyuanShare.action.continueUpload"));
       if (!continueBtn) return;
-      continueBtn.textContent = String(labelText || t("siyuanShare.action.continueUpload"));
       continueBtn.style.display = "";
+      const renderLabel = () => {
+        if (!continueBtn) return;
+        const suffix = continueCountdownRemain > 0 ? ` (${continueCountdownRemain}s)` : "";
+        continueBtn.textContent = `${continueBaseText}${suffix}`;
+      };
+      const countdownSeconds = Math.max(0, Math.floor(Number(autoProceedSeconds) || 0));
+      if (countdownSeconds <= 0) {
+        renderLabel();
+        return;
+      }
+      continueCountdownRemain = countdownSeconds;
+      renderLabel();
+      continueCountdownInterval = setInterval(() => {
+        if (!confirmResolver) {
+          if (continueCountdownInterval) {
+            clearInterval(continueCountdownInterval);
+            continueCountdownInterval = null;
+          }
+          if (continueCountdownTimer) {
+            clearTimeout(continueCountdownTimer);
+            continueCountdownTimer = null;
+          }
+          continueCountdownRemain = 0;
+          return;
+        }
+        continueCountdownRemain -= 1;
+        if (continueCountdownRemain <= 0) {
+          if (continueCountdownInterval) {
+            clearInterval(continueCountdownInterval);
+            continueCountdownInterval = null;
+          }
+          continueCountdownRemain = 0;
+          return;
+        }
+        renderLabel();
+      }, 1000);
+      continueCountdownTimer = setTimeout(() => {
+        if (continueCountdownInterval) {
+          clearInterval(continueCountdownInterval);
+          continueCountdownInterval = null;
+        }
+        continueCountdownTimer = null;
+        continueCountdownRemain = 0;
+        if (!confirmResolver) return;
+        settleConfirm(true);
+      }, countdownSeconds * 1000);
     };
     const settleConfirm = (result) => {
       if (!confirmResolver) return;
@@ -3519,7 +3588,7 @@ class SiYuanSharePlugin extends Plugin {
         this.progressDialog = null;
       }
     };
-    const confirm = ({text = null, detail = "", continueText = ""} = {}) =>
+    const confirm = ({text = null, detail = "", continueText = "", autoProceedSeconds = 0} = {}) =>
       new Promise((resolve) => {
         if (typeof text === "string" || (text && typeof text === "object")) {
           update({text, detail});
@@ -3527,7 +3596,7 @@ class SiYuanSharePlugin extends Plugin {
           update({detail});
         }
         confirmResolver = resolve;
-        showContinue(continueText);
+        showContinue(continueText, autoProceedSeconds);
       });
     const close = () => {
       if (closed) return;
@@ -6744,6 +6813,7 @@ class SiYuanSharePlugin extends Plugin {
           text: t("siyuanShare.progress.incrementReady"),
           detail,
           continueText: t("siyuanShare.action.continueUpload"),
+          autoProceedSeconds: 10,
         });
       } finally {
         progress.setBarVisible?.(true);
@@ -7107,6 +7177,7 @@ class SiYuanSharePlugin extends Plugin {
           text: t("siyuanShare.progress.incrementReady"),
           detail,
           continueText: t("siyuanShare.action.continueUpload"),
+          autoProceedSeconds: 10,
         });
       } finally {
         progress.setBarVisible?.(true);
