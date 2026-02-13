@@ -1284,6 +1284,41 @@ function render_page(string $title, string $content, ?array $user = null, string
     exit;
 }
 
+function render_404_page(): void {
+    $base = base_path();
+    $content = '<div class="error-page">';
+    $content .= '<div class="error-page__scene">';
+    $content .= '<div class="error-page__stars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>';
+    $content .= '<div class="error-page__planet"><div class="error-page__planet-body"></div><div class="error-page__planet-ring"></div></div>';
+    $content .= '<div class="error-page__satellite"></div>';
+    $content .= '<div class="error-page__comet"></div>';
+    $content .= '</div>';
+    $content .= '<h1 class="error-page__code">404</h1>';
+    $content .= '<h2 class="error-page__title">页面飞走了</h2>';
+    $content .= '<p class="error-page__desc">你访问的页面不存在，可能已被移除或者地址有误。</p>';
+    $content .= '<a class="error-page__back" href="' . $base . '/">';
+    $content .= '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>';
+    $content .= '返回首页</a>';
+    $content .= '</div>';
+    render_page('页面未找到', $content, null);
+}
+
+function render_share_not_found_page(): void {
+    $base = base_path();
+    $content = '<div class="error-page">';
+    $content .= '<div class="error-page__scene">';
+    $content .= '<div class="error-page__stars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>';
+    $content .= '<div class="error-page__signal"><i></i><i></i><i></i><i></i><div class="error-page__signal-core"></div></div>';
+    $content .= '</div>';
+    $content .= '<h2 class="error-page__title">找不到这个分享</h2>';
+    $content .= '<p class="error-page__desc">该分享链接不存在或已被创建者删除。</p>';
+    $content .= '<a class="error-page__back" href="' . $base . '/">';
+    $content .= '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>';
+    $content .= '返回首页</a>';
+    $content .= '</div>';
+    render_page('分享不存在', $content, null);
+}
+
 function generate_captcha_code(int $length = 5): string {
     $alphabet = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
     $max = strlen($alphabet) - 1;
@@ -7578,9 +7613,8 @@ function is_share_partial_request(): bool {
 function route_share(string $slug, ?string $docId = null): void {
     $share = find_share_by_slug($slug);
     if (!$share) {
-        http_response_code(404);
-        echo '分享不存在。';
-        exit;
+        render_share_not_found_page();
+        return;
     }
     $shareId = (int)$share['id'];
     $viewer = current_user();
@@ -7635,13 +7669,7 @@ function route_share(string $slug, ?string $docId = null): void {
         return;
     }
 
-    if (share_visitor_limit($share) > 0) {
-        register_share_visitor($shareId, get_visitor_id());
-    }
     $pdo = db();
-    $pdo->prepare('UPDATE shares SET access_count = access_count + 1 WHERE id = :id')
-        ->execute([':id' => $shareId]);
-    $share['access_count'] = (int)($share['access_count'] ?? 0) + 1;
     $stmt = $pdo->prepare('SELECT id, doc_id, title, icon, hpath, parent_id, sort_index, sort_order, updated_at FROM share_docs WHERE share_id = :sid ORDER BY sort_order ASC, id ASC');
     $stmt->execute([':sid' => $shareId]);
     $docs = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -7659,10 +7687,22 @@ function route_share(string $slug, ?string $docId = null): void {
         return is_string($markdown) ? $markdown : '';
     };
     if (empty($docs)) {
-        http_response_code(404);
-        echo '文档不存在。';
-        exit;
+        render_share_not_found_page();
+        return;
     }
+    $accessCountRecorded = false;
+    $touchShareAccess = function () use (&$accessCountRecorded, &$share, $shareId, $pdo): void {
+        if ($accessCountRecorded) {
+            return;
+        }
+        if (share_visitor_limit($share) > 0) {
+            register_share_visitor($shareId, get_visitor_id());
+        }
+        $pdo->prepare('UPDATE shares SET access_count = access_count + 1 WHERE id = :id')
+            ->execute([':id' => $shareId]);
+        $share['access_count'] = (int)($share['access_count'] ?? 0) + 1;
+        $accessCountRecorded = true;
+    };
 
     $assetBasePath = base_path() . '/uploads/shares/' . $shareId . '/';
 
@@ -7682,9 +7722,8 @@ function route_share(string $slug, ?string $docId = null): void {
                 $activeDocId = (string)($doc['doc_id'] ?? '');
             }
             if (!$doc) {
-                http_response_code(404);
-                echo '文档不存在。';
-                exit;
+                render_share_not_found_page();
+                return;
             }
             $docTitleRaw = trim((string)($doc['title'] ?? '')) ?: $shareTitleRaw;
             $docTitle = htmlspecialchars($docTitleRaw);
@@ -7693,6 +7732,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $markdown = strip_duplicate_title_heading($markdown, $docTitleRaw);
             $markdown = replace_custom_emoji_tokens($markdown, (int)$shareId, $assetBasePath);
             $markdown = insert_adjacent_emoji_image_spacing($markdown);
+            $touchShareAccess();
             $reportTrigger = render_share_report_trigger($share);
             $shareMetaHtml = render_share_stats($share, $reportTrigger);
             record_share_access($share, (string)($doc['doc_id'] ?? ''), $docTitleRaw);
@@ -7777,6 +7817,7 @@ function route_share(string $slug, ?string $docId = null): void {
         $markdown = strip_duplicate_title_heading($markdown, $docTitleRaw);
         $markdown = replace_custom_emoji_tokens($markdown, (int)$shareId, $assetBasePath);
         $markdown = insert_adjacent_emoji_image_spacing($markdown);
+        $touchShareAccess();
         $reportTrigger = render_share_report_trigger($share);
         $shareMetaHtml = render_share_stats($share, $reportTrigger);
         record_share_access($share, (string)($doc['doc_id'] ?? ''), $docTitleRaw);
@@ -7838,9 +7879,8 @@ function route_share(string $slug, ?string $docId = null): void {
                 }
             }
             if (!$doc) {
-                http_response_code(404);
-                echo '文档不存在。';
-                exit;
+                render_share_not_found_page();
+                return;
             }
             $docTitleRaw = trim((string)($doc['title'] ?? '')) ?: $shareTitleRaw;
             $docTitle = htmlspecialchars($docTitleRaw);
@@ -7849,6 +7889,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $markdown = strip_duplicate_title_heading($markdown, $docTitleRaw);
             $markdown = replace_custom_emoji_tokens($markdown, (int)$shareId, $assetBasePath);
             $markdown = insert_adjacent_emoji_image_spacing($markdown);
+            $touchShareAccess();
             $reportTrigger = render_share_report_trigger($share);
             $shareMetaHtml = render_share_stats($share, $reportTrigger);
             record_share_access($share, (string)($doc['doc_id'] ?? ''), $docTitleRaw);
@@ -7892,6 +7933,7 @@ function route_share(string $slug, ?string $docId = null): void {
         }
 
         if (!$docId) {
+            $touchShareAccess();
             $mainHtml = '<div class="kb-main"><div class="share-empty">请先在文档树里面先打开一个文档</div></div>';
             if ($isPartial) {
                 api_response(200, [
@@ -7949,9 +7991,7 @@ function route_share(string $slug, ?string $docId = null): void {
         render_page($shareTitleRaw, $content, null, '', ['layout' => 'share']);
     }
 
-    http_response_code(404);
-    echo '分享不存在。';
-    exit;
+    render_share_not_found_page();
 }
 $path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH) ?: '/';
 $base = base_path();
@@ -11702,6 +11742,5 @@ if ($path === '/') {
     render_page('首页', $content, null);
 }
 
-http_response_code(404);
-echo '未找到。';
+render_404_page();
 
