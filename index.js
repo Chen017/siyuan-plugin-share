@@ -482,6 +482,24 @@ function isValidNotebookId(id) {
   return isValidDocId(id);
 }
 
+function normalizeDocIdList(input) {
+  const source = Array.isArray(input)
+    ? input
+    : typeof input === "string"
+      ? input.split(/[,\n\r\s]+/)
+      : [];
+  const out = [];
+  const seen = new Set();
+  source.forEach((item) => {
+    const id = String(item || "").trim();
+    if (!isValidDocId(id)) return;
+    if (seen.has(id)) return;
+    seen.add(id);
+    out.push(id);
+  });
+  return out;
+}
+
 function findAttrId(el) {
   if (!el || typeof el.getAttribute !== "function") return "";
   const attrs = [
@@ -2310,6 +2328,612 @@ class SiYuanSharePlugin extends Plugin {
     return `${base}${path}`;
   }
 
+  normalizeShareOptionValue(raw, {fallbackIncludeChildren = null} = {}) {
+    if (typeof raw === "boolean") {
+      return {
+        includeChildren: raw,
+        excludedDocIds: [],
+      };
+    }
+    const fallback =
+      typeof fallbackIncludeChildren === "boolean" ? fallbackIncludeChildren : null;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      if (fallback === null) return null;
+      return {
+        includeChildren: fallback,
+        excludedDocIds: [],
+      };
+    }
+    return {
+      includeChildren:
+        typeof raw.includeChildren === "boolean"
+          ? raw.includeChildren
+          : fallback === null
+            ? false
+            : fallback,
+      excludedDocIds: normalizeDocIdList(raw.excludedDocIds),
+    };
+  }
+
+  normalizeShareOptionsMap(raw) {
+    const out = {};
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+    Object.entries(raw).forEach(([shareIdRaw, optionRaw]) => {
+      const shareId = String(shareIdRaw || "").trim();
+      if (!shareId) return;
+      const option = this.normalizeShareOptionValue(optionRaw);
+      if (!option) return;
+      out[shareId] = option;
+    });
+    return out;
+  }
+
+  getShareOptionValue(shareId, {fallbackIncludeChildren = null} = {}) {
+    const key = String(shareId || "").trim();
+    if (!key) {
+      return this.normalizeShareOptionValue(null, {fallbackIncludeChildren});
+    }
+    const optionMap =
+      this.shareOptions && typeof this.shareOptions === "object" && !Array.isArray(this.shareOptions)
+        ? this.shareOptions
+        : {};
+    const optionRaw = Object.prototype.hasOwnProperty.call(optionMap, key) ? optionMap[key] : null;
+    return this.normalizeShareOptionValue(optionRaw, {fallbackIncludeChildren});
+  }
+
+  setShareOptionValue(shareId, {includeChildren = false, excludedDocIds = []} = {}) {
+    const key = String(shareId || "").trim();
+    if (!key) return;
+    const normalized = this.normalizeShareOptionValue(
+      {
+        includeChildren: !!includeChildren,
+        excludedDocIds,
+      },
+      {fallbackIncludeChildren: !!includeChildren},
+    );
+    if (!normalized) return;
+    if (!this.shareOptions || typeof this.shareOptions !== "object" || Array.isArray(this.shareOptions)) {
+      this.shareOptions = {};
+    }
+    this.shareOptions[key] = normalized;
+  }
+
+  buildDocSelectionRows(docs, {rootDocId = ""} = {}) {
+    const listRaw = Array.isArray(docs) ? docs : [];
+    const map = new Map();
+    listRaw.forEach((item, index) => {
+      const docId = String(item?.docId || "").trim();
+      if (!isValidDocId(docId)) return;
+      if (map.has(docId)) return;
+      map.set(docId, {
+        docId,
+        title: String(item?.title || ""),
+        parentId: String(item?.parentId || "").trim(),
+        sortIndex: Number.isFinite(Number(item?.sortIndex)) ? Number(item.sortIndex) : index,
+        sortOrder: Number.isFinite(Number(item?.sortOrder)) ? Number(item.sortOrder) : index,
+      });
+    });
+    if (!map.size) return [];
+
+    const idSet = new Set(map.keys());
+    const childrenMap = new Map();
+    const parentMap = new Map();
+    map.forEach((doc) => {
+      const parentId = String(doc.parentId || "").trim();
+      const validParent = isValidDocId(parentId) && idSet.has(parentId) ? parentId : "";
+      parentMap.set(doc.docId, validParent);
+      if (!validParent) return;
+      if (!childrenMap.has(validParent)) childrenMap.set(validParent, []);
+      childrenMap.get(validParent).push(doc);
+    });
+    const sortDocs = (arr) =>
+      arr.sort((a, b) => {
+        const aOrder = Number.isFinite(Number(a?.sortOrder)) ? Number(a.sortOrder) : 0;
+        const bOrder = Number.isFinite(Number(b?.sortOrder)) ? Number(b.sortOrder) : 0;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        const aIndex = Number.isFinite(Number(a?.sortIndex)) ? Number(a.sortIndex) : 0;
+        const bIndex = Number.isFinite(Number(b?.sortIndex)) ? Number(b.sortIndex) : 0;
+        if (aIndex !== bIndex) return aIndex - bIndex;
+        const aTitle = String(a?.title || "");
+        const bTitle = String(b?.title || "");
+        if (aTitle !== bTitle) return aTitle.localeCompare(bTitle);
+        return String(a?.docId || "").localeCompare(String(b?.docId || ""));
+      });
+
+    childrenMap.forEach((arr, parentId) => {
+      childrenMap.set(parentId, sortDocs(arr));
+    });
+
+    const roots = [];
+    const rootCandidate = String(rootDocId || "").trim();
+    if (isValidDocId(rootCandidate) && map.has(rootCandidate)) {
+      roots.push(map.get(rootCandidate));
+    } else {
+      const top = [];
+      map.forEach((doc) => {
+        const parentId = parentMap.get(doc.docId) || "";
+        if (!parentId) top.push(doc);
+      });
+      roots.push(...sortDocs(top));
+    }
+
+    const out = [];
+    const visited = new Set();
+    const pushNode = (doc, depth) => {
+      if (!doc || visited.has(doc.docId)) return;
+      visited.add(doc.docId);
+      out.push({
+        ...doc,
+        parentId: parentMap.get(doc.docId) || "",
+        depth: Math.max(0, depth),
+      });
+      const children = childrenMap.get(doc.docId) || [];
+      children.forEach((child) => pushNode(child, depth + 1));
+    };
+
+    roots.forEach((doc) => pushNode(doc, 0));
+    map.forEach((doc) => {
+      if (!visited.has(doc.docId)) pushNode(doc, 0);
+    });
+    return out;
+  }
+
+  expandExcludedDocIds(scopeDocs, excludedDocIds, {lockedDocIds = []} = {}) {
+    const docs = Array.isArray(scopeDocs) ? scopeDocs : [];
+    if (!docs.length) return new Set();
+    const docSet = new Set(
+      docs.map((doc) => String(doc?.docId || "").trim()).filter((id) => isValidDocId(id)),
+    );
+    if (!docSet.size) return new Set();
+    const lockedSet = new Set(normalizeDocIdList(lockedDocIds).filter((id) => docSet.has(id)));
+    const childrenMap = new Map();
+    docs.forEach((doc) => {
+      const docId = String(doc?.docId || "").trim();
+      if (!docSet.has(docId)) return;
+      const parentId = String(doc?.parentId || "").trim();
+      if (!docSet.has(parentId)) return;
+      if (!childrenMap.has(parentId)) childrenMap.set(parentId, []);
+      childrenMap.get(parentId).push(docId);
+    });
+    const queue = normalizeDocIdList(excludedDocIds)
+      .filter((id) => docSet.has(id))
+      .filter((id) => !lockedSet.has(id));
+    const out = new Set();
+    while (queue.length > 0) {
+      const docId = queue.pop();
+      if (!docId || out.has(docId) || lockedSet.has(docId)) continue;
+      out.add(docId);
+      const children = childrenMap.get(docId) || [];
+      children.forEach((childId) => {
+        if (!out.has(childId) && !lockedSet.has(childId)) queue.push(childId);
+      });
+    }
+    return out;
+  }
+
+  compactExcludedDocIds(scopeDocs, excludedDocIds, {lockedDocIds = []} = {}) {
+    const docs = Array.isArray(scopeDocs) ? scopeDocs : [];
+    if (!docs.length) return [];
+    const expandedSet = this.expandExcludedDocIds(docs, excludedDocIds, {lockedDocIds});
+    if (!expandedSet.size) return [];
+    const parentMap = new Map();
+    const ordered = [];
+    docs.forEach((doc) => {
+      const docId = String(doc?.docId || "").trim();
+      if (!isValidDocId(docId) || parentMap.has(docId)) return;
+      ordered.push(docId);
+      parentMap.set(docId, String(doc?.parentId || "").trim());
+    });
+    const out = [];
+    ordered.forEach((docId) => {
+      if (!expandedSet.has(docId)) return;
+      let parentId = parentMap.get(docId) || "";
+      let hasExcludedAncestor = false;
+      while (isValidDocId(parentId)) {
+        if (expandedSet.has(parentId)) {
+          hasExcludedAncestor = true;
+          break;
+        }
+        parentId = parentMap.get(parentId) || "";
+      }
+      if (!hasExcludedAncestor) out.push(docId);
+    });
+    return out;
+  }
+
+  filterScopeDocsByExcludedDocIds(scopeDocs, excludedDocIds, {lockedDocIds = []} = {}) {
+    const docs = Array.isArray(scopeDocs) ? scopeDocs : [];
+    const expandedSet = this.expandExcludedDocIds(docs, excludedDocIds, {lockedDocIds});
+    if (!expandedSet.size) {
+      return {
+        docs: docs.slice(),
+        selectedDocIds: this.compactExcludedDocIds(docs, excludedDocIds, {lockedDocIds}),
+        excludedSet: expandedSet,
+      };
+    }
+    return {
+      docs: docs.filter((doc) => !expandedSet.has(String(doc?.docId || "").trim())),
+      selectedDocIds: this.compactExcludedDocIds(docs, excludedDocIds, {lockedDocIds}),
+      excludedSet: expandedSet,
+    };
+  }
+
+  async openExcludedDocsDialog(
+    {
+      itemType = SHARE_TYPES.NOTEBOOK,
+      itemTitle = "",
+      docs = [],
+      selectedDocIds = [],
+      lockedDocIds = [],
+      loader = null,
+    } = {},
+  ) {
+    const t = this.t.bind(this);
+    const loadingLabel = t("siyuanShare.message.processing");
+    const rootDocId = itemType === SHARE_TYPES.DOC ? String(lockedDocIds?.[0] || "").trim() : "";
+    const lockedList = normalizeDocIdList(lockedDocIds);
+    const normalizeDoc = (raw, fallbackOrder = 0) => {
+      const docId = String(raw?.docId || "").trim();
+      if (!isValidDocId(docId)) return null;
+      return {
+        docId,
+        title: String(raw?.title || ""),
+        parentId: String(raw?.parentId || "").trim(),
+        sortIndex: Number.isFinite(Number(raw?.sortIndex)) ? Number(raw.sortIndex) : fallbackOrder,
+        sortOrder: Number.isFinite(Number(raw?.sortOrder)) ? Number(raw.sortOrder) : fallbackOrder,
+      };
+    };
+    const docMap = new Map();
+    (Array.isArray(docs) ? docs : []).forEach((doc, index) => {
+      const normalized = normalizeDoc(doc, index);
+      if (!normalized || docMap.has(normalized.docId)) return;
+      docMap.set(normalized.docId, normalized);
+    });
+    let rows = [];
+    let childrenMap = new Map();
+    let parentMap = new Map();
+    let lockedSet = new Set();
+    let selectedRoots = normalizeDocIdList(selectedDocIds).filter((id) => !lockedList.includes(id));
+    let selectedSet = new Set();
+    let loading = typeof loader === "function";
+    let loadedCount = docMap.size;
+    const rebuildState = () => {
+      rows = this.buildDocSelectionRows(Array.from(docMap.values()), {rootDocId});
+      const rowIdSet = new Set(rows.map((row) => row.docId));
+      childrenMap = new Map();
+      parentMap = new Map();
+      rows.forEach((row) => {
+        const rowId = String(row?.docId || "").trim();
+        const parentId = String(row?.parentId || "").trim();
+        if (isValidDocId(rowId)) {
+          parentMap.set(rowId, parentId);
+        }
+        if (!rowIdSet.has(parentId)) return;
+        if (!childrenMap.has(parentId)) childrenMap.set(parentId, []);
+        childrenMap.get(parentId).push(rowId);
+      });
+      lockedSet = new Set(lockedList.filter((id) => rowIdSet.has(id)));
+      const unresolvedRoots = selectedRoots.filter((id) => !rowIdSet.has(id) && !lockedList.includes(id));
+      const expanded = this.expandExcludedDocIds(rows, selectedRoots, {lockedDocIds: lockedList});
+      selectedSet = new Set(
+        Array.from(expanded).filter((id) => rowIdSet.has(id) && !lockedSet.has(id)),
+      );
+      const compacted = this.compactExcludedDocIds(rows, Array.from(selectedSet), {
+        lockedDocIds: lockedList,
+      });
+      selectedRoots = normalizeDocIdList([...compacted, ...unresolvedRoots]);
+      loadedCount = docMap.size;
+    };
+    const updateSelectedRootsFromSet = () => {
+      const rowIdSet = new Set(rows.map((row) => row.docId));
+      const unresolvedRoots = selectedRoots.filter((id) => !rowIdSet.has(id) && !lockedList.includes(id));
+      const compacted = this.compactExcludedDocIds(rows, Array.from(selectedSet), {
+        lockedDocIds: lockedList,
+      });
+      selectedRoots = normalizeDocIdList([...compacted, ...unresolvedRoots]);
+    };
+    rebuildState();
+
+    return new Promise((resolve) => {
+      let done = false;
+      let dialog = null;
+      let loadingController = null;
+      let listScrollEl = null;
+      let renderTimer = null;
+      let lastRenderAt = 0;
+      let interactionFreezeUntil = 0;
+      let pendingLoadedSinceRender = 0;
+      const LOADING_RENDER_INTERVAL_MS = 900;
+      const LOADING_RENDER_BATCH_SIZE = 160;
+      const freezeRenderDuringInteraction = (ms = 220) => {
+        const until = Date.now() + Math.max(0, Math.floor(Number(ms) || 0));
+        if (until <= interactionFreezeUntil) return;
+        interactionFreezeUntil = until;
+        if (renderTimer) {
+          clearTimeout(renderTimer);
+          renderTimer = null;
+          scheduleRender();
+        }
+      };
+      const finish = (value = null) => {
+        if (done) return;
+        done = true;
+        if (renderTimer) {
+          clearTimeout(renderTimer);
+          renderTimer = null;
+        }
+        if (loadingController && !loadingController.signal?.aborted) {
+          try {
+            loadingController.abort();
+          } catch {
+            // ignore
+          }
+        }
+        dialog?.element?.removeEventListener?.("click", onClick);
+        dialog?.element?.removeEventListener?.("change", onChange);
+        dialog?.element?.removeEventListener?.("input", onInput);
+        dialog?.element?.removeEventListener?.("pointerdown", onPointerDown);
+        dialog?.element?.removeEventListener?.("wheel", onWheel);
+        listScrollEl?.removeEventListener?.("scroll", onListScroll);
+        resolve(value);
+      };
+
+      const content = `<div class="b3-dialog__content sps-exclude-dialog">
+  <div class="sps-exclude-dialog__header">
+    <div class="sps-exclude-dialog__title">${escapeHtml(t("siyuanShare.title.selectExcludedDocs"))}</div>
+    <div class="siyuan-plugin-share__muted">${escapeHtml(itemTitle || "")}</div>
+  </div>
+  <input id="sps-exclude-search" class="b3-text-field fn__block" placeholder="${escapeAttr(
+    t("siyuanShare.placeholder.searchDocs"),
+  )}" />
+  <div class="siyuan-plugin-share__muted sps-exclude-dialog__summary"></div>
+  <div class="sps-exclude-dialog__list"></div>
+</div>
+<div class="b3-dialog__action">
+  <button class="b3-button b3-button--cancel" data-action="cancel">${escapeHtml(t("siyuanShare.action.cancel"))}</button>
+  <div class="fn__space"></div>
+  <button class="b3-button b3-button--text" data-action="confirm">${escapeHtml(t("siyuanShare.action.confirm"))}</button>
+</div>`;
+
+      dialog = new Dialog({
+        title: t("siyuanShare.title.selectExcludedDocs"),
+        content,
+        width: "min(760px, 94vw)",
+        destroyCallback: () => finish(null),
+      });
+      const scheduleRender = () => {
+        if (done) return;
+        if (renderTimer) return;
+        const now = Date.now();
+        let delay = Math.max(24, LOADING_RENDER_INTERVAL_MS - (now - lastRenderAt));
+        const freezeDelay = interactionFreezeUntil - now;
+        if (freezeDelay > delay) delay = freezeDelay;
+        renderTimer = setTimeout(() => {
+          if (done) return;
+          renderTimer = null;
+          rebuildState();
+          render();
+          lastRenderAt = Date.now();
+          pendingLoadedSinceRender = 0;
+        }, Math.max(0, delay));
+      };
+
+      const toggleSubtree = (docId, checked) => {
+        if (!isValidDocId(docId)) return;
+        const queue = [docId];
+        const visited = new Set();
+        while (queue.length > 0) {
+          const current = queue.pop();
+          if (!current || visited.has(current)) continue;
+          visited.add(current);
+          if (!lockedSet.has(current)) {
+            if (checked) selectedSet.add(current);
+            else selectedSet.delete(current);
+          }
+          const children = childrenMap.get(current) || [];
+          children.forEach((childId) => {
+            if (!visited.has(childId)) queue.push(childId);
+          });
+        }
+        if (!checked) {
+          const cancelledAncestorIds = new Set();
+          let parentId = parentMap.get(docId) || "";
+          while (isValidDocId(parentId) && !cancelledAncestorIds.has(parentId)) {
+            cancelledAncestorIds.add(parentId);
+            if (selectedSet.has(parentId)) {
+              selectedSet.delete(parentId);
+            }
+            parentId = parentMap.get(parentId) || "";
+          }
+          if (cancelledAncestorIds.size > 0) {
+            selectedRoots = selectedRoots.filter((id) => !cancelledAncestorIds.has(id));
+          }
+        }
+        updateSelectedRootsFromSet();
+      };
+
+      const render = () => {
+        const root = dialog?.element;
+        if (!root) return;
+        const searchInput = root.querySelector("#sps-exclude-search");
+        const summaryEl = root.querySelector(".sps-exclude-dialog__summary");
+        const listEl = root.querySelector(".sps-exclude-dialog__list");
+        const confirmBtn = root.querySelector("[data-action='confirm']");
+        if (!summaryEl || !listEl) return;
+        if (confirmBtn) confirmBtn.disabled = loading;
+        const keyword = String(searchInput?.value || "")
+          .trim()
+          .toLowerCase();
+        const visibleRows = keyword
+          ? rows.filter((row) => {
+              const title = String(row?.title || "").toLowerCase();
+              const docId = String(row?.docId || "").toLowerCase();
+              return title.includes(keyword) || docId.includes(keyword);
+            })
+          : rows;
+
+        const summaryParts = [t("siyuanShare.label.excludedDocsCount", {count: selectedSet.size})];
+        if (loading) {
+          summaryParts.push(`${loadingLabel} (${loadedCount})`);
+        }
+        if (lockedSet.size) {
+          summaryParts.push(t("siyuanShare.hint.excludeRootLocked"));
+        }
+        summaryEl.textContent = summaryParts.join(" | ");
+        const prevScrollTop = listEl.scrollTop;
+
+        if (!visibleRows.length) {
+          const emptyLabel = keyword
+            ? t("siyuanShare.message.noMatchingDocs")
+            : loading
+              ? loadingLabel
+              : t("siyuanShare.message.noDocsToExclude");
+          listEl.innerHTML = `<div class="siyuan-plugin-share__muted">${escapeHtml(emptyLabel)}</div>`;
+          listEl.scrollTop = prevScrollTop;
+          return;
+        }
+        listEl.innerHTML = visibleRows
+          .map((row) => {
+            const docId = String(row?.docId || "").trim();
+            const checked = selectedSet.has(docId);
+            const locked = lockedSet.has(docId);
+            const disabled = locked;
+            const depth = Math.max(0, Math.floor(Number(row?.depth) || 0));
+            const title = String(row?.title || "").trim() || t("siyuanShare.label.untitled");
+            const indent = 8 + Math.min(depth, 18) * 16;
+            return `<label class="sps-exclude-row${locked ? " sps-exclude-row--locked" : ""}" style="padding-left:${indent}px;">
+  <input type="checkbox" data-doc-id="${escapeAttr(docId)}"${checked ? " checked" : ""}${disabled ? " disabled" : ""} />
+  <span class="sps-exclude-row__title">${escapeHtml(title)}</span>
+  <span class="sps-exclude-row__meta">${escapeHtml(docId)}</span>
+</label>`;
+          })
+          .join("");
+        listEl.scrollTop = prevScrollTop;
+      };
+
+      const onClick = (event) => {
+        const btn = event.target?.closest?.("[data-action]");
+        if (!btn) return;
+        const action = btn.getAttribute("data-action");
+        if (!action) return;
+        if (action === "cancel") {
+          finish(null);
+          dialog?.destroy();
+          return;
+        }
+        if (action === "confirm") {
+          if (loading) return;
+          const selected = this.compactExcludedDocIds(rows, selectedRoots, {
+            lockedDocIds: lockedList,
+          });
+          finish({
+            selectedDocIds: selected,
+            excludedCount: selectedSet.size,
+          });
+          dialog?.destroy();
+        }
+      };
+
+      const onInput = (event) => {
+        const target = event.target;
+        if (!target || target.id !== "sps-exclude-search") return;
+        freezeRenderDuringInteraction(220);
+        render();
+        lastRenderAt = Date.now();
+      };
+
+      const onChange = (event) => {
+        const target = event.target;
+        if (!target || target.type !== "checkbox") return;
+        const docId = target.getAttribute?.("data-doc-id");
+        if (!isValidDocId(docId) || lockedSet.has(docId)) return;
+        freezeRenderDuringInteraction(700);
+        toggleSubtree(docId, !!target.checked);
+        render();
+        lastRenderAt = Date.now();
+      };
+      const onPointerDown = (event) => {
+        const target = event.target;
+        if (!target?.closest?.(".sps-exclude-row")) return;
+        freezeRenderDuringInteraction(700);
+      };
+      const onWheel = (event) => {
+        const target = event.target;
+        if (!target?.closest?.(".sps-exclude-dialog__list")) return;
+        freezeRenderDuringInteraction(320);
+      };
+      const onListScroll = () => {
+        freezeRenderDuringInteraction(260);
+      };
+      const addDocRow = (rawDoc, indexHint = 0) => {
+        if (done) return false;
+        const normalized = normalizeDoc(rawDoc, indexHint);
+        if (!normalized || docMap.has(normalized.docId)) return false;
+        docMap.set(normalized.docId, normalized);
+        loadedCount = docMap.size;
+        pendingLoadedSinceRender += 1;
+        return true;
+      };
+      const startLoading = async () => {
+        if (typeof loader !== "function") {
+          loading = false;
+          rebuildState();
+          render();
+          lastRenderAt = Date.now();
+          return;
+        }
+        loading = true;
+        render();
+        lastRenderAt = Date.now();
+        loadingController = new AbortController();
+        try {
+          const loaded = await loader({
+            controller: loadingController,
+            onDoc: (doc) => {
+              if (done) return;
+              if (addDocRow(doc, docMap.size)) {
+                if (docMap.size <= 60 || pendingLoadedSinceRender >= LOADING_RENDER_BATCH_SIZE) {
+                  scheduleRender();
+                }
+              }
+            },
+          });
+          if (done) return;
+          const finalDocs = Array.isArray(loaded?.docs)
+            ? loaded.docs
+            : Array.isArray(loaded)
+              ? loaded
+              : [];
+          finalDocs.forEach((doc, index) => {
+            addDocRow(doc, index);
+          });
+        } catch (err) {
+          if (done) return;
+          if (!isAbortError(err)) {
+            this.showErr(err);
+          }
+        } finally {
+          if (done) return;
+          loading = false;
+          rebuildState();
+          render();
+          lastRenderAt = Date.now();
+        }
+      };
+
+      dialog?.element?.addEventListener?.("click", onClick);
+      dialog?.element?.addEventListener?.("input", onInput);
+      dialog?.element?.addEventListener?.("change", onChange);
+      dialog?.element?.addEventListener?.("pointerdown", onPointerDown);
+      dialog?.element?.addEventListener?.("wheel", onWheel, {passive: true});
+      listScrollEl = dialog?.element?.querySelector?.(".sps-exclude-dialog__list") || null;
+      listScrollEl?.addEventListener?.("scroll", onListScroll, {passive: true});
+      render();
+      lastRenderAt = Date.now();
+      void startLoading();
+    });
+  }
+
   async openShareDialogFor({type = SHARE_TYPES.DOC, id = "", title = ""} = {}) {
     const t = this.t.bind(this);
     const itemType = type === SHARE_TYPES.NOTEBOOK ? SHARE_TYPES.NOTEBOOK : SHARE_TYPES.DOC;
@@ -2344,6 +2968,10 @@ class SiYuanSharePlugin extends Plugin {
     const typeLabel =
       itemType === SHARE_TYPES.NOTEBOOK ? t("siyuanShare.label.notebook") : t("siyuanShare.label.document");
     const passwordKeepToken = "__KEEP__";
+    let draftExcludedDocIds = null;
+    let draftExcludedDocCount = null;
+    let excludedCountRequestId = 0;
+    let excludedCountController = null;
     const getShare = () =>
       itemType === SHARE_TYPES.NOTEBOOK ? this.getShareByNotebookId(itemId) : this.getShareByDocId(itemId);
     const buildViewState = () => {
@@ -2368,6 +2996,23 @@ class SiYuanSharePlugin extends Plugin {
       const passwordPlaceholder = share
         ? (hasPassword ? t("siyuanShare.hint.passwordKeep") : t("siyuanShare.label.passwordNotSet"))
         : t("siyuanShare.hint.passwordOptional");
+      const option = this.getShareOptionValue(share?.id, {
+        fallbackIncludeChildren: typeof share?.includeChildren === "boolean" ? share.includeChildren : false,
+      });
+      const includeChildrenDefault =
+        typeof option?.includeChildren === "boolean"
+          ? option.includeChildren
+          : typeof share?.includeChildren === "boolean"
+            ? share.includeChildren
+            : false;
+      const excludedDefault = normalizeDocIdList(
+        draftExcludedDocIds === null
+          ? (option?.excludedDocIds || share?.excludedDocIds || [])
+          : draftExcludedDocIds,
+      );
+      const excludedCountDefault = Number.isFinite(Number(draftExcludedDocCount))
+        ? Math.max(0, Math.floor(Number(draftExcludedDocCount)))
+        : excludedDefault.length;
       return {
         share,
         url,
@@ -2379,10 +3024,13 @@ class SiYuanSharePlugin extends Plugin {
         currentVisitorLabel,
         passwordInputValue,
         passwordPlaceholder,
+        includeChildrenDefault,
+        excludedDocIds: excludedDefault,
+        excludedDocCount: excludedCountDefault,
       };
     };
 
-  const renderContent = () => {
+    const renderContent = () => {
       const state = buildViewState();
       const share = state.share;
       const url = state.url;
@@ -2393,18 +3041,43 @@ class SiYuanSharePlugin extends Plugin {
       const currentVisitorLabel = state.currentVisitorLabel;
       const passwordInputValue = state.passwordInputValue;
       const passwordPlaceholder = state.passwordPlaceholder;
-      const optionKey = share?.id ? String(share.id) : "";
-      const optionValue =
-        optionKey && Object.prototype.hasOwnProperty.call(this.shareOptions || {}, optionKey)
-          ? this.shareOptions[optionKey]
-          : null;
-      const includeChildrenDefault =
-        typeof optionValue === "boolean"
-          ? optionValue
-          : typeof share?.includeChildren === "boolean"
-            ? share.includeChildren
-            : false;
+      const includeChildrenDefault = !!state.includeChildrenDefault;
+      const excludedDocIds = normalizeDocIdList(state.excludedDocIds || []);
+      const excludedDocCount = Math.max(0, Math.floor(Number(state.excludedDocCount) || 0));
+      const excludedCountLabel = t("siyuanShare.label.excludedDocsCount", {count: excludedDocCount});
       const showDocOptions = itemType === SHARE_TYPES.DOC;
+      const showExcludeOptions = itemType === SHARE_TYPES.NOTEBOOK || showDocOptions;
+      const excludeEnabled = itemType === SHARE_TYPES.NOTEBOOK || includeChildrenDefault;
+      const includeBlockHtml = showDocOptions
+        ? `<label class="sps-checkbox">
+      <input id="sps-share-include-children" type="checkbox"${includeChildrenDefault ? " checked" : ""} />
+      <span>${escapeHtml(t("siyuanShare.label.includeChildren"))}</span>
+    </label>
+    <div class="siyuan-plugin-share__muted">${escapeHtml(t("siyuanShare.hint.includeChildren"))}</div>`
+        : "";
+      const excludeInputsHtml = `<input id="sps-share-excluded-doc-ids" type="hidden" value="${escapeAttr(excludedDocIds.join(","))}" />
+      <input id="sps-share-excluded-doc-count" type="hidden" value="${escapeAttr(String(excludedDocCount))}" />`;
+      const excludeActionsHtml = `<div class="siyuan-plugin-share__actions sps-share-exclude__actions">
+        <button class="b3-button b3-button--outline sps-share-exclude__btn" data-action="pick-excluded-docs"${excludeEnabled ? "" : " disabled"}>${escapeHtml(
+          t("siyuanShare.action.selectExcludedDocs"),
+        )}</button>
+        <button class="b3-button b3-button--outline sps-share-exclude__btn" data-action="clear-excluded-docs"${excludeEnabled && excludedDocIds.length ? "" : " disabled"}>${escapeHtml(
+          t("siyuanShare.action.clearExcludedDocs"),
+        )}</button>
+      </div>`;
+      const excludeBlockHtml = showExcludeOptions
+        ? showDocOptions
+          ? `<div class="sps-share-exclude sps-share-exclude--doc">
+      ${excludeInputsHtml}
+      ${excludeActionsHtml}
+      <div id="sps-share-excluded-count" class="siyuan-plugin-share__muted">${escapeHtml(excludedCountLabel)}</div>
+    </div>`
+          : `<div class="sps-share-exclude sps-share-exclude--notebook">
+      ${excludeInputsHtml}
+      ${excludeActionsHtml}
+      <div id="sps-share-excluded-count" class="siyuan-plugin-share__muted">${escapeHtml(excludedCountLabel)}</div>
+    </div>`
+        : "";
       return `<div class="siyuan-plugin-share sps-dialog-body">
   <div class="siyuan-plugin-share__section">
     <div class="siyuan-plugin-share__title">${escapeHtml(typeLabel)}</div>
@@ -2434,14 +3107,17 @@ class SiYuanSharePlugin extends Plugin {
     )} | ${escapeHtml(currentExpiresLabel)} | ${escapeHtml(currentVisitorLabel)}</div>
   </div>
   ${
-    showDocOptions
+    showDocOptions || showExcludeOptions
       ? `<div class="siyuan-plugin-share__section">
     <div class="siyuan-plugin-share__title">${escapeHtml(t("siyuanShare.section.shareOptions"))}</div>
-    <label class="sps-checkbox">
-      <input id="sps-share-include-children" type="checkbox"${includeChildrenDefault ? " checked" : ""} />
-      <span>${escapeHtml(t("siyuanShare.label.includeChildren"))}</span>
-    </label>
-    <div class="siyuan-plugin-share__muted">${escapeHtml(t("siyuanShare.hint.includeChildren"))}</div>
+    ${
+      showDocOptions
+        ? `<div class="sps-share-doc-options">
+      <div class="sps-share-doc-options__include">${includeBlockHtml}</div>
+      ${excludeBlockHtml}
+    </div>`
+        : excludeBlockHtml
+    }
   </div>`
       : ""
   }
@@ -2495,11 +3171,120 @@ class SiYuanSharePlugin extends Plugin {
     };
     const content = `<div class="sps-share-dialog-content">${renderContent()}</div>`;
 
+    const normalizeExcludedDocCount = (value, fallback = 0) => {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        return Math.max(0, Math.floor(Number(fallback) || 0));
+      }
+      return Math.max(0, Math.floor(parsed));
+    };
+
+    const writeExcludedDocCount = (root, nextCount = null) => {
+      const hiddenIds = root?.querySelector?.("#sps-share-excluded-doc-ids");
+      const fallbackCount = normalizeDocIdList(hiddenIds?.value || "").length;
+      const safeCount = normalizeExcludedDocCount(nextCount, fallbackCount);
+      draftExcludedDocCount = safeCount;
+      const hiddenCount = root?.querySelector?.("#sps-share-excluded-doc-count");
+      if (hiddenCount) {
+        hiddenCount.value = String(safeCount);
+      }
+      const countEl = root?.querySelector?.("#sps-share-excluded-count");
+      if (countEl) {
+        countEl.textContent = t("siyuanShare.label.excludedDocsCount", {count: safeCount});
+      }
+    };
+
+    const abortExcludedCountRefresh = () => {
+      if (excludedCountController && !excludedCountController.signal?.aborted) {
+        try {
+          excludedCountController.abort();
+        } catch {
+          // ignore
+        }
+      }
+      excludedCountController = null;
+    };
+
+    const loadExcludeScopeDocs = async ({controller = null} = {}) => {
+      if (itemType === SHARE_TYPES.NOTEBOOK) {
+        const tree = await this.listDocsInNotebook(itemId, {
+          controller,
+          fillIcons: false,
+        });
+        return Array.isArray(tree?.docs) ? tree.docs : [];
+      }
+      const byPath = await this.listDocSubtreeByPath(itemId, {
+        controller,
+        fillIcons: false,
+      });
+      return Array.isArray(byPath) ? byPath : [];
+    };
+
+    const refreshExcludedDocCount = (root) => {
+      const container = root || dialog?.element;
+      if (!container) return;
+      const hiddenIds = container.querySelector?.("#sps-share-excluded-doc-ids");
+      const excludedDocIds = normalizeDocIdList(hiddenIds?.value || "");
+      if (!excludedDocIds.length) {
+        writeExcludedDocCount(container, 0);
+        return;
+      }
+      const requestId = ++excludedCountRequestId;
+      abortExcludedCountRefresh();
+      excludedCountController = new AbortController();
+      void (async () => {
+        try {
+          const scopeDocs = await loadExcludeScopeDocs({controller: excludedCountController});
+          if (requestId !== excludedCountRequestId) return;
+          const lockedDocIds = itemType === SHARE_TYPES.DOC ? [itemId] : [];
+          const expandedSet = this.expandExcludedDocIds(scopeDocs, excludedDocIds, {lockedDocIds});
+          writeExcludedDocCount(container, expandedSet.size);
+        } catch (err) {
+          if (requestId !== excludedCountRequestId) return;
+          if (isAbortError(err) || err?.name === "AbortError") return;
+          console.warn("refreshExcludedDocCount failed", err);
+          writeExcludedDocCount(container, excludedDocIds.length);
+        } finally {
+          if (requestId === excludedCountRequestId) {
+            excludedCountController = null;
+          }
+        }
+      })();
+    };
+
+    const syncExcludeControlsState = (root) => {
+      const hidden = root?.querySelector?.("#sps-share-excluded-doc-ids");
+      const normalized = normalizeDocIdList(hidden?.value || "");
+      const includeChildrenChecked =
+        itemType === SHARE_TYPES.NOTEBOOK || !!root?.querySelector?.("#sps-share-include-children")?.checked;
+      const pickBtn = root?.querySelector?.("[data-action='pick-excluded-docs']");
+      if (pickBtn) {
+        pickBtn.disabled = !includeChildrenChecked;
+      }
+      const clearBtn = root?.querySelector?.("[data-action='clear-excluded-docs']");
+      if (clearBtn) {
+        clearBtn.disabled = !includeChildrenChecked || normalized.length === 0;
+      }
+    };
+
+    const writeExcludedDocIds = (root, nextIds = [], {excludedCount = null, recalcCount = false} = {}) => {
+      const normalized = normalizeDocIdList(nextIds);
+      draftExcludedDocIds = normalized;
+      const hidden = root?.querySelector?.("#sps-share-excluded-doc-ids");
+      if (hidden) hidden.value = normalized.join(",");
+      writeExcludedDocCount(root, excludedCount);
+      syncExcludeControlsState(root);
+      if (recalcCount) {
+        refreshExcludedDocCount(root);
+      }
+    };
+
     const readShareOptions = (root, currentShare) => {
       const passwordInput = root?.querySelector?.("#sps-share-password");
       const expiresInput = root?.querySelector?.("#sps-share-expires");
       const visitorInput = root?.querySelector?.("#sps-share-visitor-limit");
       const includeChildrenInput = root?.querySelector?.("#sps-share-include-children");
+      const excludedInput = root?.querySelector?.("#sps-share-excluded-doc-ids");
       const passwordRaw = (passwordInput?.value || "").trim();
       const expiresAt = parseDateTimeLocalInput(expiresInput?.value || "");
       const visitorRaw = (visitorInput?.value || "").trim();
@@ -2507,6 +3292,7 @@ class SiYuanSharePlugin extends Plugin {
       const visitorLimit = Number.isFinite(visitorParsed)
         ? Math.max(0, Math.floor(visitorParsed))
         : null;
+      const excludedDocIds = normalizeDocIdList(excludedInput?.value || "");
       const hasExistingPassword = !!currentShare?.hasPassword;
       const hasExistingExpires = normalizeTimestampMs(currentShare?.expiresAt || 0) > 0;
       const hasExistingVisitorLimit = Number(currentShare?.visitorLimit || 0) > 0;
@@ -2520,6 +3306,7 @@ class SiYuanSharePlugin extends Plugin {
         visitorLimit,
         clearVisitorLimit: !!currentShare && hasExistingVisitorLimit && visitorRaw === "",
         includeChildren,
+        excludedDocIds,
       };
     };
 
@@ -2548,6 +3335,60 @@ class SiYuanSharePlugin extends Plugin {
           if (action === "copy-info") {
             const shareId = btn.getAttribute("data-share-id");
             await this.copyShareInfo(shareId, {title: itemTitle});
+            return;
+          }
+          if (action === "pick-excluded-docs") {
+            const currentOptions = readShareOptions(dialog.element, getShare());
+            const selectedDocIds = normalizeDocIdList(currentOptions.excludedDocIds || []);
+            const includeChildrenChecked =
+              itemType === SHARE_TYPES.NOTEBOOK ||
+              !!dialog?.element?.querySelector?.("#sps-share-include-children")?.checked;
+            if (!includeChildrenChecked) {
+              return;
+            }
+            const selected = await this.openExcludedDocsDialog({
+              itemType,
+              itemTitle,
+              selectedDocIds,
+              lockedDocIds: itemType === SHARE_TYPES.DOC ? [itemId] : [],
+              loader: async ({onDoc, controller}) => {
+                if (itemType === SHARE_TYPES.NOTEBOOK) {
+                  const tree = await this.listDocsInNotebook(itemId, {
+                    onDoc,
+                    controller,
+                    fillIcons: false,
+                  });
+                  return {docs: Array.isArray(tree?.docs) ? tree.docs : []};
+                }
+              const byPath = await this.listDocSubtreeByPath(itemId, {
+                onDoc,
+                controller,
+                fillIcons: false,
+              });
+              if (Array.isArray(byPath) && byPath.length > 0) {
+                return {docs: byPath};
+              }
+              const fallback = await this.listDocSubtree(itemId);
+              return {docs: Array.isArray(fallback) ? fallback : []};
+            },
+          });
+            if (!selected) return;
+            const nextIds = Array.isArray(selected)
+              ? selected
+              : normalizeDocIdList(selected?.selectedDocIds || []);
+            if (!Array.isArray(nextIds)) return;
+            const rawSelectedCount = Array.isArray(selected) ? null : selected?.excludedCount;
+            const hasSelectedCount =
+              Number.isFinite(Number(rawSelectedCount)) && Number(rawSelectedCount) >= 0;
+            const nextCount = hasSelectedCount ? normalizeExcludedDocCount(rawSelectedCount, 0) : null;
+            writeExcludedDocIds(dialog.element, nextIds, {
+              excludedCount: nextCount,
+              recalcCount: nextCount === null,
+            });
+            return;
+          }
+          if (action === "clear-excluded-docs") {
+            writeExcludedDocIds(dialog.element, [], {excludedCount: 0});
             return;
           }
           if (action === "update") {
@@ -2584,6 +3425,13 @@ class SiYuanSharePlugin extends Plugin {
         }
       })();
     };
+    const onChange = (event) => {
+      const target = event.target;
+      if (!target) return;
+      if (target.id === "sps-share-include-children") {
+        syncExcludeControlsState(dialog?.element);
+      }
+    };
 
     let dialog = null;
     const attachCopyFocus = () => {
@@ -2595,8 +3443,12 @@ class SiYuanSharePlugin extends Plugin {
     const refreshDialog = () => {
       const contentEl = dialog?.element?.querySelector?.(".sps-share-dialog-content");
       if (!contentEl) return;
+      draftExcludedDocIds = null;
+      draftExcludedDocCount = null;
       contentEl.innerHTML = renderContent();
       attachCopyFocus();
+      syncExcludeControlsState(dialog?.element);
+      refreshExcludedDocCount(dialog?.element);
     };
 
     dialog = new Dialog({
@@ -2604,12 +3456,18 @@ class SiYuanSharePlugin extends Plugin {
       content,
       width: "min(720px, 92vw)",
       destroyCallback: () => {
+        excludedCountRequestId += 1;
+        abortExcludedCountRefresh();
         dialog.element.removeEventListener("click", onClick);
+        dialog.element.removeEventListener("change", onChange);
       },
     });
 
     dialog.element.addEventListener("click", onClick);
+    dialog.element.addEventListener("change", onChange);
     attachCopyFocus();
+    syncExcludeControlsState(dialog?.element);
+    refreshExcludedDocCount(dialog?.element);
   }
 
   startSettingLayoutObserver() {
@@ -3416,6 +4274,10 @@ class SiYuanSharePlugin extends Plugin {
     let currentText = rawMessage;
     let barVisible = true;
     let closed = false;
+    let continueCountdownTimer = null;
+    let continueCountdownInterval = null;
+    let continueCountdownRemain = 0;
+    let continueBaseText = "";
     const setIndeterminate = () => {
       if (!bar) return;
       bar.style.animation = "";
@@ -3488,14 +4350,79 @@ class SiYuanSharePlugin extends Plugin {
       }
     };
     const hideContinue = () => {
+      if (continueCountdownTimer) {
+        clearTimeout(continueCountdownTimer);
+        continueCountdownTimer = null;
+      }
+      if (continueCountdownInterval) {
+        clearInterval(continueCountdownInterval);
+        continueCountdownInterval = null;
+      }
+      continueCountdownRemain = 0;
+      continueBaseText = "";
       if (!continueBtn) return;
       continueBtn.style.display = "none";
       continueBtn.textContent = "";
     };
-    const showContinue = (labelText) => {
+    const showContinue = (labelText, autoProceedSeconds = 0) => {
+      if (continueCountdownTimer) {
+        clearTimeout(continueCountdownTimer);
+        continueCountdownTimer = null;
+      }
+      if (continueCountdownInterval) {
+        clearInterval(continueCountdownInterval);
+        continueCountdownInterval = null;
+      }
+      continueCountdownRemain = 0;
+      continueBaseText = String(labelText || t("siyuanShare.action.continueUpload"));
       if (!continueBtn) return;
-      continueBtn.textContent = String(labelText || t("siyuanShare.action.continueUpload"));
       continueBtn.style.display = "";
+      const renderLabel = () => {
+        if (!continueBtn) return;
+        const suffix = continueCountdownRemain > 0 ? ` (${continueCountdownRemain}s)` : "";
+        continueBtn.textContent = `${continueBaseText}${suffix}`;
+      };
+      const countdownSeconds = Math.max(0, Math.floor(Number(autoProceedSeconds) || 0));
+      if (countdownSeconds <= 0) {
+        renderLabel();
+        return;
+      }
+      continueCountdownRemain = countdownSeconds;
+      renderLabel();
+      continueCountdownInterval = setInterval(() => {
+        if (!confirmResolver) {
+          if (continueCountdownInterval) {
+            clearInterval(continueCountdownInterval);
+            continueCountdownInterval = null;
+          }
+          if (continueCountdownTimer) {
+            clearTimeout(continueCountdownTimer);
+            continueCountdownTimer = null;
+          }
+          continueCountdownRemain = 0;
+          return;
+        }
+        continueCountdownRemain -= 1;
+        if (continueCountdownRemain <= 0) {
+          if (continueCountdownInterval) {
+            clearInterval(continueCountdownInterval);
+            continueCountdownInterval = null;
+          }
+          continueCountdownRemain = 0;
+          return;
+        }
+        renderLabel();
+      }, 1000);
+      continueCountdownTimer = setTimeout(() => {
+        if (continueCountdownInterval) {
+          clearInterval(continueCountdownInterval);
+          continueCountdownInterval = null;
+        }
+        continueCountdownTimer = null;
+        continueCountdownRemain = 0;
+        if (!confirmResolver) return;
+        settleConfirm(true);
+      }, countdownSeconds * 1000);
     };
     const settleConfirm = (result) => {
       if (!confirmResolver) return;
@@ -3519,7 +4446,7 @@ class SiYuanSharePlugin extends Plugin {
         this.progressDialog = null;
       }
     };
-    const confirm = ({text = null, detail = "", continueText = ""} = {}) =>
+    const confirm = ({text = null, detail = "", continueText = "", autoProceedSeconds = 0} = {}) =>
       new Promise((resolve) => {
         if (typeof text === "string" || (text && typeof text === "object")) {
           update({text, detail});
@@ -3527,7 +4454,7 @@ class SiYuanSharePlugin extends Plugin {
           update({detail});
         }
         confirmResolver = resolve;
-        showContinue(continueText);
+        showContinue(continueText, autoProceedSeconds);
       });
     const close = () => {
       if (closed) return;
@@ -3564,10 +4491,7 @@ class SiYuanSharePlugin extends Plugin {
     const exportRetryCacheIndexRaw = (await this.loadData(STORAGE_EXPORT_RETRY_CACHE_INDEX)) || {};
     const siteShares =
       siteSharesRaw && typeof siteSharesRaw === "object" && !Array.isArray(siteSharesRaw) ? siteSharesRaw : {};
-    const shareOptions =
-      shareOptionsRaw && typeof shareOptionsRaw === "object" && !Array.isArray(shareOptionsRaw)
-        ? shareOptionsRaw
-        : {};
+    const shareOptions = this.normalizeShareOptionsMap(shareOptionsRaw);
     const incrementalCursorBySite = this.normalizeIncrementalCursorBySite(incrementalCursorRaw);
     const exportRetryCacheIndexBySite = this.normalizeExportRetryCacheIndexBySite(exportRetryCacheIndexRaw);
     let sites = this.normalizeSiteList(settings.sites);
@@ -4459,6 +5383,11 @@ class SiYuanSharePlugin extends Plugin {
     if (!record) {
       return {scopeDigest, cache: null, changedDocIds: scopeDocIds};
     }
+    // Scope changed (e.g., excluded docs changed), cached export data is no longer reusable.
+    if (record.scopeDigest && scopeDigest && record.scopeDigest !== scopeDigest) {
+      await this.removeExportRetryCacheForScope(scopeMeta);
+      return {scopeDigest, cache: null, changedDocIds: scopeDocIds};
+    }
     let cache = null;
     try {
       cache = await this.loadExportRetryCacheEntry(record);
@@ -4475,6 +5404,10 @@ class SiYuanSharePlugin extends Plugin {
       docs: this.normalizeExportRetryDocs(cache.docs || []),
       assetEntries: this.normalizeExportRetryAssetEntries(cache.assetEntries || []),
     };
+    if (cache.scopeDigest && scopeDigest && cache.scopeDigest !== scopeDigest) {
+      await this.removeExportRetryCacheForScope(scopeMeta);
+      return {scopeDigest, cache: null, changedDocIds: scopeDocIds};
+    }
     let changedDocIds = scopeDocIds;
     try {
       changedDocIds = await this.collectExportRetryChangedDocIds(
@@ -6463,6 +7396,7 @@ class SiYuanSharePlugin extends Plugin {
       visitorLimit = null,
       clearVisitorLimit = false,
       includeChildren = false,
+      excludedDocIds = [],
       allowRequestError = true,
     } = {},
   ) {
@@ -6506,6 +7440,7 @@ class SiYuanSharePlugin extends Plugin {
       }
       const exportedMarkdowns = [];
       const iconUploadMap = new Map();
+      let selectedExcludedDocIds = normalizeDocIdList(excludedDocIds).filter((id) => id !== String(docId));
       if (includeChildren) {
         progress.update(t("siyuanShare.progress.fetchingNotebookList"));
         subtreeDocs = await this.listDocSubtree(docId);
@@ -6516,7 +7451,7 @@ class SiYuanSharePlugin extends Plugin {
         applyDefaultDocIcons(subtreeDocs);
       }
       const useChildren = includeChildren && subtreeDocs.length > 1;
-      const scopeDocs = useChildren
+      let scopeDocs = useChildren
         ? subtreeDocs.map((doc, index) => ({
             docId: String(doc?.docId || "").trim(),
             title: String(doc?.title || ""),
@@ -6535,6 +7470,14 @@ class SiYuanSharePlugin extends Plugin {
               sortOrder: 0,
             },
           ];
+      if (useChildren) {
+        const filtered = this.filterScopeDocsByExcludedDocIds(scopeDocs, selectedExcludedDocIds, {
+          lockedDocIds: [String(docId)],
+        });
+        scopeDocs = filtered.docs;
+        selectedExcludedDocIds = filtered.selectedDocIds;
+        if (!scopeDocs.length) throw new Error(t("siyuanShare.error.noDocsToShare"));
+      }
       let candidateDocIds = scopeDocs.map((doc) => String(doc?.docId || "").trim());
       if (useIncremental) {
         progress.update(t("siyuanShare.progress.analyzingIncrement"));
@@ -6744,6 +7687,7 @@ class SiYuanSharePlugin extends Plugin {
           text: t("siyuanShare.progress.incrementReady"),
           detail,
           continueText: t("siyuanShare.action.continueUpload"),
+          autoProceedSeconds: 10,
         });
       } finally {
         progress.setBarVisible?.(true);
@@ -6837,7 +7781,10 @@ class SiYuanSharePlugin extends Plugin {
         if (syncError) throw syncError;
         throw new Error(t("siyuanShare.error.shareCreateFailed"));
       }
-      this.shareOptions[String(share.id)] = !!includeChildren;
+      this.setShareOptionValue(share.id, {
+        includeChildren: !!includeChildren,
+        excludedDocIds: selectedExcludedDocIds,
+      });
       await this.saveData(STORAGE_SHARE_OPTIONS, this.shareOptions);
       await this.updateSharePasswordCache(share.id, {password, clearPassword});
       await this.setIncrementalCursor(share.id, incrementalCursorStamp);
@@ -6864,6 +7811,7 @@ class SiYuanSharePlugin extends Plugin {
       clearExpires = false,
       visitorLimit = null,
       clearVisitorLimit = false,
+      excludedDocIds = [],
       allowRequestError = true,
     } = {},
   ) {
@@ -6888,7 +7836,7 @@ class SiYuanSharePlugin extends Plugin {
       if (!docs.length) throw new Error(t("siyuanShare.error.noDocsToShare"));
       await this.fillDocIcons(docs);
       applyDefaultDocIcons(docs);
-      const scopeDocs = docs.map((doc, index) => ({
+      let scopeDocs = docs.map((doc, index) => ({
         docId: String(doc?.docId || "").trim(),
         title: String(doc?.title || ""),
         icon: normalizeDocIconValue(doc?.icon || ""),
@@ -6896,6 +7844,11 @@ class SiYuanSharePlugin extends Plugin {
         sortIndex: Number.isFinite(Number(doc?.sortIndex)) ? Number(doc.sortIndex) : index,
         sortOrder: Number.isFinite(Number(doc?.sortOrder)) ? Number(doc.sortOrder) : index,
       }));
+      let selectedExcludedDocIds = normalizeDocIdList(excludedDocIds);
+      const excludedState = this.filterScopeDocsByExcludedDocIds(scopeDocs, selectedExcludedDocIds);
+      scopeDocs = excludedState.docs;
+      selectedExcludedDocIds = excludedState.selectedDocIds;
+      if (!scopeDocs.length) throw new Error(t("siyuanShare.error.noDocsToShare"));
       const existingShare = this.getShareByNotebookId(notebookId);
       let useIncremental = !!(existingShare?.id && this.supportsIncrementalShare());
       let remoteSnapshot = null;
@@ -7107,6 +8060,7 @@ class SiYuanSharePlugin extends Plugin {
           text: t("siyuanShare.progress.incrementReady"),
           detail,
           continueText: t("siyuanShare.action.continueUpload"),
+          autoProceedSeconds: 10,
         });
       } finally {
         progress.setBarVisible?.(true);
@@ -7195,6 +8149,11 @@ class SiYuanSharePlugin extends Plugin {
         if (syncError) throw syncError;
         throw new Error(t("siyuanShare.error.shareCreateFailed"));
       }
+      this.setShareOptionValue(share.id, {
+        includeChildren: true,
+        excludedDocIds: selectedExcludedDocIds,
+      });
+      await this.saveData(STORAGE_SHARE_OPTIONS, this.shareOptions);
       await this.updateSharePasswordCache(share.id, {password, clearPassword});
       await this.setIncrementalCursor(share.id, incrementalCursorStamp);
       if (requestError) {
@@ -7233,39 +8192,58 @@ class SiYuanSharePlugin extends Plugin {
     return {ok: false, nodes: []};
   }
 
-  async collectDocsByPath(notebookId, pathValue, parentId, out, seen) {
+  async collectDocsByPath(notebookId, pathValue, parentId, out, seen, {onDoc = null, controller = null} = {}) {
+    const t = this.t.bind(this);
+    throwIfAborted(controller, t("siyuanShare.message.cancelled"));
     const {ok, nodes} = await this.fetchDocsByPath(notebookId, pathValue);
     if (!ok) return false;
     if (!Array.isArray(nodes) || nodes.length === 0) return true;
     for (const [index, node] of nodes.entries()) {
+      throwIfAborted(controller, t("siyuanShare.message.cancelled"));
       const docId = getDocTreeNodeId(node);
       if (!isValidDocId(docId)) continue;
       if (seen.has(docId)) continue;
       seen.add(docId);
       const rawTitle = node?.name || node?.title || node?.content || node?.label || "";
       const rawIcon = extractDocTreeNodeIcon(node);
-      out.push({
+      const row = {
         docId: String(docId || "").trim(),
         title: normalizeDocTitle(rawTitle),
         icon: normalizeDocIconValue(rawIcon),
         parentId: String(parentId || "").trim(),
         sortIndex: index,
         sortOrder: out.length,
-      });
+      };
+      out.push(row);
+      if (typeof onDoc === "function") {
+        try {
+          onDoc(row);
+        } catch {
+          // ignore callback errors
+        }
+      }
       const nodePath = getDocTreeNodePath(node) || buildDocPath(pathValue, docId);
-      const okChild = await this.collectDocsByPath(notebookId, nodePath, docId, out, seen);
+      const okChild = await this.collectDocsByPath(notebookId, nodePath, docId, out, seen, {
+        onDoc,
+        controller,
+      });
       if (!okChild) return false;
     }
     return true;
   }
 
-  async listDocsInNotebookByPath(notebookId) {
+  async listDocsInNotebookByPath(
+    notebookId,
+    {onDoc = null, controller = null, fillIcons = true} = {},
+  ) {
+    const t = this.t.bind(this);
     if (!isValidNotebookId(notebookId)) return null;
     const rootCandidates = ["/", ""];
     let rootNodes = null;
     let rootPath = "";
     let ok = false;
     for (const candidate of rootCandidates) {
+      throwIfAborted(controller, t("siyuanShare.message.cancelled"));
       const resp = await this.fetchDocsByPath(notebookId, candidate);
       if (resp.ok) {
         ok = true;
@@ -7279,30 +8257,49 @@ class SiYuanSharePlugin extends Plugin {
     const seen = new Set();
     if (Array.isArray(rootNodes)) {
       for (const [index, node] of rootNodes.entries()) {
+        throwIfAborted(controller, t("siyuanShare.message.cancelled"));
         const docId = getDocTreeNodeId(node);
         if (!isValidDocId(docId)) continue;
         seen.add(docId);
         const rawTitle = node?.name || node?.title || node?.content || node?.label || "";
         const rawIcon = extractDocTreeNodeIcon(node);
-        out.push({
+        const row = {
           docId: String(docId || "").trim(),
           title: normalizeDocTitle(rawTitle),
           icon: normalizeDocIconValue(rawIcon),
           parentId: "",
           sortIndex: index,
           sortOrder: out.length,
-        });
+        };
+        out.push(row);
+        if (typeof onDoc === "function") {
+          try {
+            onDoc(row);
+          } catch {
+            // ignore callback errors
+          }
+        }
         const nodePath = getDocTreeNodePath(node) || buildDocPath(rootPath, docId);
-        const okChild = await this.collectDocsByPath(notebookId, nodePath, docId, out, seen);
+        const okChild = await this.collectDocsByPath(notebookId, nodePath, docId, out, seen, {
+          onDoc,
+          controller,
+        });
         if (!okChild) return null;
       }
     }
-    await this.fillDocIcons(out);
+    if (fillIcons) {
+      await this.fillDocIcons(out);
+    }
     return {title: "", docs: out};
   }
 
-  async listDocSubtreeByPath(docId) {
+  async listDocSubtreeByPath(
+    docId,
+    {onDoc = null, controller = null, fillIcons = true} = {},
+  ) {
+    const t = this.t.bind(this);
     if (!isValidDocId(docId)) return null;
+    throwIfAborted(controller, t("siyuanShare.message.cancelled"));
     const notebookId = await this.resolveNotebookIdFromDoc(docId);
     if (!isValidNotebookId(notebookId)) return null;
     const row = await this.fetchBlockRow(docId);
@@ -7314,24 +8311,37 @@ class SiYuanSharePlugin extends Plugin {
       typeof row?.content === "string" ? row.content : "",
     );
     const rootIcon = await this.resolveDocIcon(docId);
-    out.push({
+    const rootDoc = {
       docId: String(docId || "").trim(),
       title: rootTitle,
       icon: normalizeDocIconValue(rootIcon),
       parentId: "",
       sortIndex: 0,
       sortOrder: 0,
-    });
+    };
+    out.push(rootDoc);
+    if (typeof onDoc === "function") {
+      try {
+        onDoc(rootDoc);
+      } catch {
+        // ignore callback errors
+      }
+    }
     seen.add(docId);
-    const ok = await this.collectDocsByPath(notebookId, rootPath, docId, out, seen);
+    const ok = await this.collectDocsByPath(notebookId, rootPath, docId, out, seen, {
+      onDoc,
+      controller,
+    });
     if (!ok) return null;
-    await this.fillDocIcons(out);
+    if (fillIcons) {
+      await this.fillDocIcons(out);
+    }
     return out;
   }
 
-  async listDocsInNotebook(notebookId) {
+  async listDocsInNotebook(notebookId, options = {}) {
     if (!isValidNotebookId(notebookId)) return {docs: [], title: ""};
-    const byPath = await this.listDocsInNotebookByPath(notebookId);
+    const byPath = await this.listDocsInNotebookByPath(notebookId, options);
     if (byPath) return byPath;
     return {docs: [], title: ""};
   }
@@ -7383,8 +8393,8 @@ class SiYuanSharePlugin extends Plugin {
     return out;
   }
 
-  async listDocSubtree(docId) {
-    const byPath = await this.listDocSubtreeByPath(docId);
+  async listDocSubtree(docId, options = {}) {
+    const byPath = await this.listDocSubtreeByPath(docId, options);
     if (byPath && byPath.length) return byPath;
     return [];
   }
@@ -7526,12 +8536,19 @@ class SiYuanSharePlugin extends Plugin {
       visitorLimit = null,
       clearVisitorLimit = false,
       includeChildren = null,
+      excludedDocIds = null,
     } = {},
   ) {
     const t = this.t.bind(this);
     if (!shareId) throw new Error(t("siyuanShare.error.missingShareId"));
     const existing = this.getShareById(shareId);
     if (!existing) throw new Error(t("siyuanShare.error.shareNotFound"));
+    const option = this.getShareOptionValue(existing.id, {
+      fallbackIncludeChildren: typeof existing?.includeChildren === "boolean" ? existing.includeChildren : false,
+    });
+    const excludedDocIdsValue = Array.isArray(excludedDocIds)
+      ? normalizeDocIdList(excludedDocIds)
+      : normalizeDocIdList(option?.excludedDocIds || existing?.excludedDocIds || []);
     if (existing.type === SHARE_TYPES.NOTEBOOK) {
       await this.shareNotebook(existing.notebookId, {
         slugOverride: existing.slug,
@@ -7541,12 +8558,17 @@ class SiYuanSharePlugin extends Plugin {
         clearExpires,
         visitorLimit,
         clearVisitorLimit,
+        excludedDocIds: excludedDocIdsValue,
         allowRequestError: false,
       });
       return;
     }
     const includeChildrenValue =
-      typeof includeChildren === "boolean" ? includeChildren : !!existing.includeChildren;
+      typeof includeChildren === "boolean"
+        ? includeChildren
+        : typeof option?.includeChildren === "boolean"
+          ? option.includeChildren
+          : !!existing.includeChildren;
     await this.shareDoc(existing.docId, {
       slugOverride: existing.slug,
       password,
@@ -7556,6 +8578,7 @@ class SiYuanSharePlugin extends Plugin {
       visitorLimit,
       clearVisitorLimit,
       includeChildren: includeChildrenValue,
+      excludedDocIds: excludedDocIdsValue,
       allowRequestError: false,
     });
   }
@@ -7729,21 +8752,51 @@ class SiYuanSharePlugin extends Plugin {
 
   applyShareOptions(shares) {
     if (!Array.isArray(shares)) return shares;
-    const optionMap = this.shareOptions || {};
+    const optionMap = this.normalizeShareOptionsMap(this.shareOptions || {});
+    let changed = false;
     const nextShares = shares.map((share) => {
       const id = share?.id;
       if (!id) return share;
       const key = String(id);
-      if (typeof share.includeChildren === "boolean") {
-        if (optionMap[key] !== share.includeChildren) {
-          optionMap[key] = share.includeChildren;
-        }
-        return share;
+      const hasRemoteIncludeChildren = typeof share?.includeChildren === "boolean";
+      const hasRemoteExcluded =
+        share && Object.prototype.hasOwnProperty.call(share, "excludedDocIds");
+      const option = this.normalizeShareOptionValue(optionMap[key], {
+        fallbackIncludeChildren: hasRemoteIncludeChildren ? !!share.includeChildren : false,
+      });
+      const includeChildren = hasRemoteIncludeChildren
+        ? !!share.includeChildren
+        : !!option?.includeChildren;
+      const excludedDocIds = hasRemoteExcluded
+        ? normalizeDocIdList(share?.excludedDocIds || [])
+        : normalizeDocIdList(option?.excludedDocIds || []);
+      const nextOption = this.normalizeShareOptionValue(
+        {
+          includeChildren,
+          excludedDocIds,
+        },
+        {fallbackIncludeChildren: includeChildren},
+      );
+      const prevOption = this.normalizeShareOptionValue(optionMap[key], {
+        fallbackIncludeChildren: includeChildren,
+      });
+      const sameInclude = !!prevOption?.includeChildren === !!nextOption?.includeChildren;
+      const sameExcluded =
+        JSON.stringify(prevOption?.excludedDocIds || []) === JSON.stringify(nextOption?.excludedDocIds || []);
+      if (!sameInclude || !sameExcluded) {
+        optionMap[key] = nextOption;
+        changed = true;
       }
-      if (Object.prototype.hasOwnProperty.call(optionMap, key)) {
-        return {...share, includeChildren: !!optionMap[key]};
-      }
-      return share;
+      const needPatchInclude = !hasRemoteIncludeChildren;
+      const needPatchExcluded =
+        !hasRemoteExcluded ||
+        JSON.stringify(normalizeDocIdList(share?.excludedDocIds || [])) !== JSON.stringify(excludedDocIds);
+      if (!needPatchInclude && !needPatchExcluded) return share;
+      return {
+        ...share,
+        ...(needPatchInclude ? {includeChildren} : {}),
+        ...(needPatchExcluded ? {excludedDocIds} : {}),
+      };
     });
     const existingIds = new Set(
       shares.map((share) => String(share?.id || "")).filter((id) => id !== ""),
@@ -7755,7 +8808,7 @@ class SiYuanSharePlugin extends Plugin {
         cleaned = true;
       }
     });
-    if (cleaned) {
+    if (cleaned || changed || this.shareOptions !== optionMap) {
       this.shareOptions = optionMap;
     }
     return nextShares;
