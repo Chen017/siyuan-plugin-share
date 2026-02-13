@@ -1,18 +1,40 @@
 # 🔗 Siyuan Share
 
-**Siyuan Share** is a **free and open-source** SiYuan Notes plugin that allows you to generate **accessible sharing links for notebooks, individual documents, and documents with their sub-documents**. 
-It supports **access passwords, expiration time, visitor limits**, and provides **access statistics**, making it ideal for knowledge sharing, collaboration, and temporary public publishing.
+**Siyuan Share** is a **free and open-source** plugin for Siyuan Note that allows you to generate **accessible share links for notebooks, single documents, or documents with their subdocuments**.  
+It supports **access passwords, expiration time, and visitor limits**, and provides an **access statistics overview**, making it suitable for knowledge sharing, collaboration, and temporary public publishing.
 
 🌍 Documentation Languages:  
 [中文 README](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/README_zh_CN.md) ｜ [English README](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/README.md)
 
 ---
 
-## ✨ How to Use
+## 🚀 Plugin Advantages
+
+- **Free & Open Source, Ready to Use**  
+  The plugin itself is free and open source. No additional payment is required to use the core sharing features.
+
+- **Public Service Ready-to-Use + Optional Self-Hosting**  
+  You can directly use `share.b0x.top` to get started quickly. Private deployment is also supported, including Docker deployment, NAS deployment, and deployment via BaoTa Panel or other hosting panels.
+
+- **More Flexible Sharing Scope**  
+  Supports sharing at three levels: **notebook**, **single document**, and **document with subdocuments**.
+
+- **Incremental Updates Supported (No Full Re-upload Required)**  
+  Content updates use incremental synchronization, reducing duplicate uploads for faster speed and lower bandwidth usage.
+
+- **Support for Excluding Specific Documents**  
+  You can exclude specific documents when sharing to prevent unnecessary content from being published.
+
+- **Built-in Access Statistics Overview**  
+  View share statistics including **Page Views (PV)**, **Unique Visitors (UV)**, **IP count**, and **visitor geographic distribution**, helping you evaluate sharing performance.
+
+---
+
+## ✨ Usage Guide
 
 ### 📌 Entry Point
 
-In the **document tree**, right-click on a **notebook or document** → open the **plugin menu**, where you can:
+In the **Document Tree**, right-click on a **notebook or document** → open the **Plugin Menu** to access the following features:
 
 - 🆕 Create Share / Manage Share  
 - 🔄 Update Share  
@@ -21,7 +43,7 @@ In the **document tree**, right-click on a **notebook or document** → open the
 
 ### 🗂️ Share Management
 
-Open the **plugin settings page** to view and manage **all created shares** in one place.
+Go to the **Plugin Settings page** to view the **list of all created shares** and manage them centrally.
 
 ---
 
@@ -31,86 +53,97 @@ Open the **plugin settings page** to view and manage **all created shares** in o
   Set a password for the share. Visitors must enter the correct password to view the content.
 
 - **Expiration Time**  
-  After the expiration time, the share will be marked as **expired** and become inaccessible.
+  After the expiration time, the share will be marked as **expired** and cannot be accessed.  
 
-  > ⚠️ Cloud data is **not automatically deleted**. You can manually clean it up to save storage space.
+  > ⚠️ Cloud data will not be automatically deleted. You can manually clean it up to save storage space.
 
 - **Visitor Limit**  
-  Set the maximum number of visitors.
+  Set the maximum number of visitors.  
 
-  - New visitors will be blocked once the limit is reached  
-  - Existing visitors can continue to access  
-  - Multiple visits from the same browser count as **one visitor**
+  - Once the limit is reached, new visitors cannot access the share  
+  - Visitors who have already accessed it can continue to visit  
+  - Multiple visits from the same browser are counted as **one visitor**
+
+- **Link Suffix**
+
+  Customize the suffix of the share link.
 
 ---
 
-## ⚠️ Notes & Best Practices
+## ⚠️ Notes
 
-- **Content Update Mechanism**
-  - If you **modify the document or notebook content**, use **“Update Share”**  
-    → Keeps the same share link while syncing the latest content
-  - If you only **change access settings** (password / expiration, etc.), use **“Update Access Settings”**  
+- **Content Update Mechanism**  
+
+  - If you **modify the document or notebook content**, please use **"Update Share"**  
+    → This keeps the original share link unchanged while synchronizing the latest content  
+  - If you only **modify access settings (password / expiration time / visitor limit / link suffix)**, please use **"Update Access Settings"**  
     → No need to re-upload content, saving time and bandwidth
 
-- **Link Change Rules**
-  If you **delete a share and then create a new one**,  
-  👉 A **new share link** will be generated and the old link will become invalid immediately.
+- **Link Change Rules**  
+  If you **"Delete Share" and then "Create Share" again**,  
+  👉 The system will generate a **new share link**, and the old link will immediately become invalid.
+
+  👉 If needed, you can restore the previous link format by modifying the **link suffix** in the access settings.
 
 ---
 
 ## ⚙️ Plugin Configuration
 
-This plugin relies on a server-side service:  
+This plugin relies on a server-side website:  
 🌐 **[share.b0x.top](https://share.b0x.top)** (used for data storage and access)
 
-### 1️⃣ Configuration Steps
+### 1️⃣ Setup Steps
 
 1. Register an account on the server website  
+
 2. Generate an **API Key** on the website  
-3. Enter the API Key in the plugin settings  
+
+3. Enter the API Key into the plugin settings  
+
 4. After configuration, you can start sharing  
 
-   > Sharing essentially uploads the selected document or notebook to the server
+   > Sharing essentially uploads the corresponding document or notebook to the server
 
-### 2️⃣ Server Notes
+### 2️⃣ Server Information
 
-- **Public Service Disclaimer**  
+- **Public Service**  
   The current `share.b0x.top` is a **public server provided by the author**,  
-  mainly for **feature testing and short-term use**.
+  mainly intended for **feature experience and short-term use**.
 
 - **Data Cleanup Policy**  
   Due to bandwidth and storage limitations,  
-  **large documents or notebooks may be cleaned up** periodically.
+  large documents or notebooks **may be cleaned up** periodically.
 
-- **Private Deployment (Strongly Recommended)**  
+- **Private Deployment Recommendation (Strongly Recommended)**  
   If you need **long-term sharing**,  
   please refer to 👉 **[Server Deployment Guide](https://ccnwc9xa9692.feishu.cn/wiki/MQCtwMtQaifPuak4zl3cIMCqnLx)**  
   to deploy your own private server.
 
 ---
 
-## 📖 Feature Demo(GIF from GitHub; "magic" may be required)
+## 📖 Feature Demonstration (GIFs hosted on GitHub, may require proxy access)
 
-### ① Generate an API Key and configure the plugin
+### ① Generate API Key and Enter It into the Plugin
 
 ![Generate API Key](https://github.com/user-attachments/assets/8ad5e431-8a60-4e83-a594-ff1de28af68d)
 
 ---
 
-### ② Share a Document / Notebook
-Using sharing a notebook as an example. You can also share a single document, or a document together with its sub-documents.
+### ② Share Document / Notebook
+
+Using notebook sharing as an example. Single document or document with subdocuments sharing is also supported.
 
 ![Share Notebook](https://github.com/user-attachments/assets/62faf774-16e7-4b48-9dff-d738749ee4d5)
 
 ---
 
-### ③ Open the Shared Link to View the Content
+### ③ Open the Share Link to View Content
 
-![Open Shared Link](https://github.com/user-attachments/assets/155ee85c-1a73-49e4-b03e-69b9a31f2727)
+![Open Share Link](https://github.com/user-attachments/assets/155ee85c-1a73-49e4-b03e-69b9a31f2727)
 
 ---
 
-### ④ Access statistics overview
+### ④ Access Statistics Overview
 
 ![Access statistics](https://github.com/user-attachments/assets/b2690a03-6e97-4845-87be-1ab3e5406847)
 
@@ -119,14 +152,13 @@ Using sharing a notebook as an example. You can also share a single document, or
 ## ☕ Support the Author
 
 If you find this project helpful, feel free to support the author ❤️  
-Your support motivates me to **continue maintaining and improving** the plugin.
+Your support motivates me to **continuously maintain and improve** this tool.
 
 <div align="center">
     <a href="https://github.com/b8l8u8e8/siyuan-plugin-share">
         <img src="https://img.shields.io/github/stars/b8l8u8e8/siyuan-plugin-share?style=for-the-badge&color=ffd700&label=Give%20a%20Star" alt="Github Star">
     </a>
 </div>
-
 
 <div align="center" style="margin-top: 40px;">
     <div style="display: flex; justify-content: center; align-items: center; gap: 30px;">
@@ -143,14 +175,14 @@ Your support motivates me to **continue maintaining and improving** the plugin.
             <b style="color: #1677ff; margin-top: 10px; display: block;">Alipay</b>
         </div>
     </div>
-    <p style="margin-top: 20px;"><i>Your support is my greatest motivation to keep improving 🙏</i></p>
+    <p style="margin-top: 20px;"><i>Your support is the greatest motivation for continuous iteration 🙏</i></p>
 </div>
 
 ---
 
-## 🛠️ Additional Information
+## 🛠️ Other Information
 
-- 🐞 Issue Tracking:  
+- 🐞 Issue Reporting:  
   [GitHub Issues](https://github.com/b8l8u8e8/siyuan-plugin-share/issues)
 
 - 📄 License:  
@@ -158,11 +190,9 @@ Your support motivates me to **continue maintaining and improving** the plugin.
 
 - 🧾 Changelog:  
   [CHANGELOG.md](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/CHANGELOG.md)
-  
-- 🏅 Contributors:
 
+- 🏅 Contributors:  
   [Contributors List](https://github.com/b8l8u8e8/siyuan-plugin-share/graphs/contributors)
 
-- 💖 Sponsor List:  
+- 💖 Sponsors:  
   [Sponsor List](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/sponsor-list.md)
-
