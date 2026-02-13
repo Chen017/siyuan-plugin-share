@@ -81,7 +81,7 @@
 
 .sps-share-doc-options {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   align-items: start;
 }
@@ -103,7 +103,13 @@
   margin-top: 0;
   justify-content: flex-start;
   align-items: flex-start;
+  justify-self: end;
+  text-align: left;
   padding-top: 2px;
+}
+
+.sps-share-doc-options .sps-share-exclude .sps-share-exclude__actions {
+  justify-content: flex-start;
 }
 
 .sps-share-exclude--doc {
@@ -183,6 +189,16 @@
 @media (max-width: 720px) {
   .sps-share-doc-options {
     grid-template-columns: 1fr;
+  }
+
+  .sps-share-doc-options .sps-share-exclude {
+    justify-self: stretch;
+    align-items: flex-start;
+    text-align: left;
+  }
+
+  .sps-share-doc-options .sps-share-exclude .sps-share-exclude__actions {
+    justify-content: flex-start;
   }
 }
 
