@@ -8,7 +8,7 @@ This repository is a fork of [siyuan-plugin-share](https://github.com/b8l8u8e8/s
 
 ### 🛠️ Branch Change Description
 
-#### 1. Introduced **Lite Mode**, which when enabled will:
+#### Introduced **Lite Mode**, which will:
 
 - Disable features such as comments, reports, banned words, SMTP, CAPTCHA, registration, ICP, share link prefixes, and back-end user management.
 - Streamline the share page: hide creation time, report button, comment section, and visit counts.
