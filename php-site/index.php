@@ -1366,12 +1366,76 @@ function render_captcha_image(): void {
     exit;
 }
 
+const SHARE_SLUG_MIN_LENGTH = 6;
+const SHARE_SLUG_MAX_LENGTH = 32;
+
 function sanitize_slug(string $slug): string {
-    $slug = strtolower(trim($slug));
-    $slug = preg_replace('/[^a-z0-9_-]+/', '-', $slug);
-    $slug = preg_replace('/-+/', '-', $slug);
-    $slug = trim($slug, '-.');
-    return substr($slug, 0, 64);
+    return strtolower(trim($slug));
+}
+
+function parse_requested_share_slug_or_fail($raw): string {
+    $slug = sanitize_slug((string)$raw);
+    if ($slug === '') {
+        return '';
+    }
+    if (!preg_match('/^[a-z0-9]+$/', $slug)) {
+        api_response(400, [
+            'errorKey' => 'share.slug.invalid_chars',
+            'min' => SHARE_SLUG_MIN_LENGTH,
+            'max' => SHARE_SLUG_MAX_LENGTH,
+        ], 'Invalid share link suffix');
+    }
+    $len = strlen($slug);
+    if ($len < SHARE_SLUG_MIN_LENGTH || $len > SHARE_SLUG_MAX_LENGTH) {
+        api_response(400, [
+            'errorKey' => 'share.slug.invalid_length',
+            'min' => SHARE_SLUG_MIN_LENGTH,
+            'max' => SHARE_SLUG_MAX_LENGTH,
+        ], 'Invalid share link suffix length');
+    }
+    return $slug;
+}
+
+function share_slug_exists(PDO $pdo, string $slug, int $excludeShareId = 0): bool {
+    if ($slug === '') {
+        return false;
+    }
+    if ($excludeShareId > 0) {
+        $stmt = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL AND id != :id LIMIT 1');
+        $stmt->execute([
+            ':slug' => $slug,
+            ':id' => $excludeShareId,
+        ]);
+        return !!$stmt->fetchColumn();
+    }
+    $stmt = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL LIMIT 1');
+    $stmt->execute([':slug' => $slug]);
+    return !!$stmt->fetchColumn();
+}
+
+function ensure_share_slug_available_or_fail(PDO $pdo, string $slug, int $excludeShareId = 0): void {
+    if (!share_slug_exists($pdo, $slug, $excludeShareId)) {
+        return;
+    }
+    api_response(409, [
+        'errorKey' => 'share.slug.conflict',
+        'min' => SHARE_SLUG_MIN_LENGTH,
+        'max' => SHARE_SLUG_MAX_LENGTH,
+    ], 'Share link already exists');
+}
+
+function allocate_random_share_slug_or_fail(PDO $pdo): string {
+    for ($i = 0; $i < 20; $i++) {
+        $slug = sanitize_slug(bin2hex(random_bytes(4)));
+        if (!share_slug_exists($pdo, $slug)) {
+            return $slug;
+        }
+    }
+    api_response(500, [
+        'errorKey' => 'share.slug.generate_failed',
+        'min' => SHARE_SLUG_MIN_LENGTH,
+        'max' => SHARE_SLUG_MAX_LENGTH,
+    ], 'Unable to allocate unique share link');
 }
 
 function generate_api_key(): array {
@@ -4964,6 +5028,7 @@ function handle_api(string $path): void {
         $clearExpires = !empty($payload['clearExpires']);
         $visitorLimit = parse_visitor_limit($payload['visitorLimit'] ?? null);
         $clearVisitorLimit = !empty($payload['clearVisitorLimit']);
+        $slug = parse_requested_share_slug_or_fail($payload['slug'] ?? '');
 
         $passwordHash = $share['password_hash'] ?? null;
         $expiresValue = isset($share['expires_at']) ? (int)$share['expires_at'] : null;
@@ -4983,9 +5048,15 @@ function handle_api(string $path): void {
         } elseif ($visitorLimit !== null) {
             $visitorValue = $visitorLimit;
         }
+        $newSlug = (string)($share['slug'] ?? '');
+        if ($slug !== '' && $slug !== $newSlug) {
+            ensure_share_slug_available_or_fail($pdo, $slug, (int)$share['id']);
+            $newSlug = $slug;
+        }
 
-        $stmt = $pdo->prepare('UPDATE shares SET password_hash = :password_hash, expires_at = :expires_at, visitor_limit = :visitor_limit, updated_at = :updated_at WHERE id = :id AND user_id = :uid');
+        $stmt = $pdo->prepare('UPDATE shares SET slug = :slug, password_hash = :password_hash, expires_at = :expires_at, visitor_limit = :visitor_limit, updated_at = :updated_at WHERE id = :id AND user_id = :uid');
         $stmt->execute([
+            ':slug' => $newSlug,
             ':password_hash' => $passwordHash,
             ':expires_at' => $expiresValue,
             ':visitor_limit' => $visitorValue,
@@ -4998,8 +5069,8 @@ function handle_api(string $path): void {
         }
         api_response(200, ['share' => [
             'id' => (int)$share['id'],
-            'slug' => $share['slug'],
-            'url' => share_url($share['slug']),
+            'slug' => $newSlug,
+            'url' => share_url($newSlug),
             'hasPassword' => !empty($passwordHash),
             'expiresAt' => $expiresValue ? ($expiresValue * 1000) : null,
             'visitorLimit' => $visitorValue,
@@ -5060,7 +5131,7 @@ function handle_api(string $path): void {
                 }
             }
         }
-        $slug = sanitize_slug((string)($meta['slug'] ?? ''));
+        $slug = parse_requested_share_slug_or_fail($meta['slug'] ?? '');
         $assets = normalize_asset_manifest($payload['assets'] ?? []);
         $assetSize = 0;
         foreach ($assets as $asset) {
@@ -5225,31 +5296,16 @@ function handle_api(string $path): void {
         $finalSlug = $slug;
         if ($existing) {
             if ($finalSlug && $finalSlug !== $existing['slug']) {
-                $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL AND id != :id');
-                $check->execute([':slug' => $finalSlug, ':id' => $existing['id']]);
-                if ($check->fetch()) {
-                    api_response(409, null, 'Share link already exists');
-                }
+                ensure_share_slug_available_or_fail($pdo, $finalSlug, (int)$existing['id']);
             }
             if (!$finalSlug) {
                 $finalSlug = (string)$existing['slug'];
             }
         } else {
             if (!$finalSlug) {
-                for ($i = 0; $i < 10; $i++) {
-                    $finalSlug = sanitize_slug(bin2hex(random_bytes(4)));
-                    $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL');
-                    $check->execute([':slug' => $finalSlug]);
-                    if (!$check->fetch()) {
-                        break;
-                    }
-                }
+                $finalSlug = allocate_random_share_slug_or_fail($pdo);
             } else {
-                $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL');
-                $check->execute([':slug' => $finalSlug]);
-                if ($check->fetch()) {
-                    api_response(409, null, 'Share link already exists');
-                }
+                ensure_share_slug_available_or_fail($pdo, $finalSlug);
             }
         }
 
@@ -5346,7 +5402,7 @@ function handle_api(string $path): void {
                 }
             }
         }
-        $slug = sanitize_slug((string)($meta['slug'] ?? ''));
+        $slug = parse_requested_share_slug_or_fail($meta['slug'] ?? '');
         $assets = normalize_asset_manifest($payload['assets'] ?? []);
         $assetSize = 0;
         foreach ($assets as $asset) {
@@ -5443,31 +5499,16 @@ function handle_api(string $path): void {
         $finalSlug = $slug;
         if ($existing) {
             if ($finalSlug && $finalSlug !== $existing['slug']) {
-                $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL AND id != :id');
-                $check->execute([':slug' => $finalSlug, ':id' => $existing['id']]);
-                if ($check->fetch()) {
-                    api_response(409, null, 'Share link already exists');
-                }
+                ensure_share_slug_available_or_fail($pdo, $finalSlug, (int)$existing['id']);
             }
             if (!$finalSlug) {
                 $finalSlug = (string)$existing['slug'];
             }
         } else {
             if (!$finalSlug) {
-                for ($i = 0; $i < 10; $i++) {
-                    $finalSlug = sanitize_slug(bin2hex(random_bytes(4)));
-                    $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL');
-                    $check->execute([':slug' => $finalSlug]);
-                    if (!$check->fetch()) {
-                        break;
-                    }
-                }
+                $finalSlug = allocate_random_share_slug_or_fail($pdo);
             } else {
-                $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL');
-                $check->execute([':slug' => $finalSlug]);
-                if ($check->fetch()) {
-                    api_response(409, null, 'Share link already exists');
-                }
+                ensure_share_slug_available_or_fail($pdo, $finalSlug);
             }
         }
 
@@ -5933,21 +5974,9 @@ function handle_api(string $path): void {
 
         $slug = sanitize_slug((string)($upload['slug'] ?? ''));
         if ($slug === '') {
-            for ($i = 0; $i < 10; $i++) {
-                $slug = sanitize_slug(bin2hex(random_bytes(4)));
-                $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL');
-                $check->execute([':slug' => $slug]);
-                if (!$check->fetch()) {
-                    break;
-                }
-            }
+            $slug = allocate_random_share_slug_or_fail($pdo);
         } else {
-            $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL');
-            $check->execute([':slug' => $slug]);
-            $rowId = (int)($check->fetchColumn() ?: 0);
-            if ($rowId && (!$share || $rowId !== (int)$share['id'])) {
-                api_response(409, null, 'Share link already exists');
-            }
+            ensure_share_slug_available_or_fail($pdo, $slug, $share ? (int)$share['id'] : 0);
         }
 
         $title = trim((string)($upload['title'] ?? ''));
@@ -6280,7 +6309,7 @@ function handle_api(string $path): void {
                 }
             }
         }
-        $slug = sanitize_slug((string)($meta['slug'] ?? ''));
+        $slug = parse_requested_share_slug_or_fail($meta['slug'] ?? '');
         $paths = $_POST['assetPaths'] ?? [];
         $docIds = $_POST['assetDocIds'] ?? [];
         $paths = is_array($paths) ? $paths : [$paths];
@@ -6398,11 +6427,7 @@ function handle_api(string $path): void {
 
         if ($existing) {
             if ($slug && $slug !== $existing['slug']) {
-                $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL AND id != :id');
-                $check->execute([':slug' => $slug, ':id' => $existing['id']]);
-                if ($check->fetch()) {
-                    api_response(409, null, '分享链接已被占用');
-                }
+                ensure_share_slug_available_or_fail($pdo, $slug, (int)$existing['id']);
             }
             $newSlug = $slug ?: $existing['slug'];
             $stmt = $pdo->prepare('UPDATE shares SET title = :title, slug = :slug, password_hash = :password_hash, expires_at = :expires_at, visitor_limit = :visitor_limit, updated_at = :updated_at, deleted_at = NULL WHERE id = :id');
@@ -6419,20 +6444,9 @@ function handle_api(string $path): void {
             $slug = $newSlug;
         } else {
             if (!$slug) {
-                for ($i = 0; $i < 10; $i++) {
-                    $slug = sanitize_slug(bin2hex(random_bytes(4)));
-                    $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL');
-                    $check->execute([':slug' => $slug]);
-                    if (!$check->fetch()) {
-                        break;
-                    }
-                }
+                $slug = allocate_random_share_slug_or_fail($pdo);
             } else {
-                $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL');
-                $check->execute([':slug' => $slug]);
-                if ($check->fetch()) {
-                    api_response(409, null, '分享链接已被占用');
-                }
+                ensure_share_slug_available_or_fail($pdo, $slug);
             }
             $shareId = allocate_share_id($pdo);
             if ($shareId > 0) {
@@ -6548,7 +6562,7 @@ function handle_api(string $path): void {
                 }
             }
         }
-        $slug = sanitize_slug((string)($meta['slug'] ?? ''));
+        $slug = parse_requested_share_slug_or_fail($meta['slug'] ?? '');
         $paths = $_POST['assetPaths'] ?? [];
         $docIds = $_POST['assetDocIds'] ?? [];
         $paths = is_array($paths) ? $paths : [$paths];
@@ -6639,11 +6653,7 @@ function handle_api(string $path): void {
 
         if ($existing) {
             if ($slug && $slug !== $existing['slug']) {
-                $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL AND id != :id');
-                $check->execute([':slug' => $slug, ':id' => $existing['id']]);
-                if ($check->fetch()) {
-                    api_response(409, null, '分享链接已被占用');
-                }
+                ensure_share_slug_available_or_fail($pdo, $slug, (int)$existing['id']);
             }
             $newSlug = $slug ?: $existing['slug'];
             $stmt = $pdo->prepare('UPDATE shares SET title = :title, slug = :slug, password_hash = :password_hash, expires_at = :expires_at, visitor_limit = :visitor_limit, updated_at = :updated_at, deleted_at = NULL WHERE id = :id');
@@ -6660,20 +6670,9 @@ function handle_api(string $path): void {
             $slug = $newSlug;
         } else {
             if (!$slug) {
-                for ($i = 0; $i < 10; $i++) {
-                    $slug = sanitize_slug(bin2hex(random_bytes(4)));
-                    $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL');
-                    $check->execute([':slug' => $slug]);
-                    if (!$check->fetch()) {
-                        break;
-                    }
-                }
+                $slug = allocate_random_share_slug_or_fail($pdo);
             } else {
-                $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL');
-                $check->execute([':slug' => $slug]);
-                if ($check->fetch()) {
-                    api_response(409, null, '分享链接已被占用');
-                }
+                ensure_share_slug_available_or_fail($pdo, $slug);
             }
             $shareId = allocate_share_id($pdo);
             if ($shareId > 0) {

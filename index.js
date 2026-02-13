@@ -77,6 +77,9 @@ const TREE_SHARE_CLASS = "sps-tree-share";
 const TREE_SHARED_CLASS = "sps-tree-item--shared";
 const TREE_SHARE_ICON_ID = "iconSiyuanShare";
 const HASH_HEX_RE = /^[a-f0-9]{64}$/i;
+const SHARE_SLUG_MIN_LENGTH = 6;
+const SHARE_SLUG_MAX_LENGTH = 32;
+const SHARE_SLUG_ALLOWED_RE = /^[a-z0-9]+$/;
 
 let globalI18nProvider = null;
 
@@ -702,15 +705,22 @@ function normalizeUrlBase(url) {
   return url.trim().replace(/\s+/g, "").replace(/\/$/, "");
 }
 
-function sanitizeSlug(name) {
-  const raw = String(name || "").trim();
-  if (!raw) return "";
-  const cleaned = raw
-    .replace(/[^a-z0-9_-]/gi, "-")
-    .replace(/-+/g, "-")
-    .replace(/^[.-]+/g, "")
-    .replace(/[.-]+$/g, "");
-  return cleaned.slice(0, 64);
+function normalizeShareSlugInput(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function getShareSlugValidationResult(value, {allowEmpty = true} = {}) {
+  const slug = normalizeShareSlugInput(value);
+  if (!slug) {
+    return allowEmpty ? {ok: true, value: ""} : {ok: false, value: "", reason: "required"};
+  }
+  if (!SHARE_SLUG_ALLOWED_RE.test(slug)) {
+    return {ok: false, value: slug, reason: "chars"};
+  }
+  if (slug.length < SHARE_SLUG_MIN_LENGTH || slug.length > SHARE_SLUG_MAX_LENGTH) {
+    return {ok: false, value: slug, reason: "length"};
+  }
+  return {ok: true, value: slug};
 }
 
 function normalizeAssetPath(input) {
@@ -2977,6 +2987,7 @@ class SiYuanSharePlugin extends Plugin {
     const buildViewState = () => {
       const share = getShare();
       const url = share ? this.getShareUrl(share) : "";
+      const slugInputValue = normalizeShareSlugInput(share?.slug || "");
       const hasPassword = !!share?.hasPassword;
       const expiresAt = normalizeTimestampMs(share?.expiresAt || 0);
       const expiresInputValue = expiresAt ? toDateTimeLocalInput(expiresAt) : "";
@@ -3022,6 +3033,7 @@ class SiYuanSharePlugin extends Plugin {
         currentPasswordLabel,
         currentExpiresLabel,
         currentVisitorLabel,
+        slugInputValue,
         passwordInputValue,
         passwordPlaceholder,
         includeChildrenDefault,
@@ -3039,6 +3051,7 @@ class SiYuanSharePlugin extends Plugin {
       const currentPasswordLabel = state.currentPasswordLabel;
       const currentExpiresLabel = state.currentExpiresLabel;
       const currentVisitorLabel = state.currentVisitorLabel;
+      const slugInputValue = state.slugInputValue;
       const passwordInputValue = state.passwordInputValue;
       const passwordPlaceholder = state.passwordPlaceholder;
       const includeChildrenDefault = !!state.includeChildrenDefault;
@@ -3101,6 +3114,15 @@ class SiYuanSharePlugin extends Plugin {
       <input id="sps-share-visitor-limit" type="number" min="0" step="1" class="b3-text-field" value="${escapeAttr(
         visitorInputValue,
       )}" placeholder="${escapeAttr(t("siyuanShare.hint.visitorLimit"))}" />
+      <div class="siyuan-plugin-share__muted">${escapeHtml(t("siyuanShare.label.linkSuffix"))}</div>
+      <input id="sps-share-slug" type="text" class="b3-text-field" value="${escapeAttr(
+        slugInputValue,
+      )}" placeholder="${escapeAttr(
+        t("siyuanShare.hint.linkSuffixPlaceholder", {
+          min: SHARE_SLUG_MIN_LENGTH,
+          max: SHARE_SLUG_MAX_LENGTH,
+        }),
+      )}" minlength="${SHARE_SLUG_MIN_LENGTH}" maxlength="${SHARE_SLUG_MAX_LENGTH}" pattern="[a-z0-9]*" autocomplete="off" autocapitalize="off" spellcheck="false" />
     </div>
     <div class="siyuan-plugin-share__muted">${escapeHtml(
       currentPasswordLabel,
@@ -3283,6 +3305,7 @@ class SiYuanSharePlugin extends Plugin {
       const passwordInput = root?.querySelector?.("#sps-share-password");
       const expiresInput = root?.querySelector?.("#sps-share-expires");
       const visitorInput = root?.querySelector?.("#sps-share-visitor-limit");
+      const slugInput = root?.querySelector?.("#sps-share-slug");
       const includeChildrenInput = root?.querySelector?.("#sps-share-include-children");
       const excludedInput = root?.querySelector?.("#sps-share-excluded-doc-ids");
       const passwordRaw = (passwordInput?.value || "").trim();
@@ -3296,9 +3319,12 @@ class SiYuanSharePlugin extends Plugin {
       const hasExistingPassword = !!currentShare?.hasPassword;
       const hasExistingExpires = normalizeTimestampMs(currentShare?.expiresAt || 0) > 0;
       const hasExistingVisitorLimit = Number(currentShare?.visitorLimit || 0) > 0;
+      const currentSlug = normalizeShareSlugInput(currentShare?.slug || "");
+      const requestedSlug = normalizeShareSlugInput(slugInput?.value || "");
       const password = passwordRaw === passwordKeepToken ? "" : passwordRaw;
       const includeChildren = !!includeChildrenInput?.checked;
       return {
+        slugOverride: requestedSlug && requestedSlug !== currentSlug ? requestedSlug : "",
         password,
         clearPassword: !!currentShare && hasExistingPassword && passwordRaw === "",
         expiresAt,
@@ -6585,6 +6611,47 @@ class SiYuanSharePlugin extends Plugin {
     return null;
   }
 
+  normalizeShareSlugOverrideOrThrow(slugOverride, {allowEmpty = true} = {}) {
+    const t = this.t.bind(this);
+    const result = getShareSlugValidationResult(slugOverride, {allowEmpty});
+    if (result.ok) return result.value;
+    if (result.reason === "chars") {
+      throw new Error(t("siyuanShare.error.shareSlugInvalidChars"));
+    }
+    if (result.reason === "length") {
+      throw new Error(
+        t("siyuanShare.error.shareSlugInvalidLength", {
+          min: SHARE_SLUG_MIN_LENGTH,
+          max: SHARE_SLUG_MAX_LENGTH,
+        }),
+      );
+    }
+    throw new Error(t("siyuanShare.error.shareSlugInvalidChars"));
+  }
+
+  resolveRemoteErrorMessage(response, status) {
+    const t = this.t.bind(this);
+    const errorKey = String(response?.data?.errorKey || response?.errorKey || "").trim();
+    if (errorKey === "share.slug.conflict") {
+      return t("siyuanShare.error.shareSlugConflict");
+    }
+    if (errorKey === "share.slug.invalid_chars") {
+      return t("siyuanShare.error.shareSlugInvalidChars");
+    }
+    if (errorKey === "share.slug.invalid_length") {
+      const min = Number(response?.data?.min);
+      const max = Number(response?.data?.max);
+      return t("siyuanShare.error.shareSlugInvalidLength", {
+        min: Number.isFinite(min) && min > 0 ? Math.floor(min) : SHARE_SLUG_MIN_LENGTH,
+        max: Number.isFinite(max) && max > 0 ? Math.floor(max) : SHARE_SLUG_MAX_LENGTH,
+      });
+    }
+    if (errorKey === "share.slug.generate_failed") {
+      return t("siyuanShare.error.shareSlugGenerateFailed");
+    }
+    return response?.msg || t("siyuanShare.error.remoteRequestFailed", {status});
+  }
+
   supportsIncrementalShare() {
     return !!this.remoteFeatures?.incrementalShare;
   }
@@ -7630,7 +7697,7 @@ class SiYuanSharePlugin extends Plugin {
                 }
               : {docs: []}),
           };
-      const slug = sanitizeSlug(slugOverride);
+      const slug = this.normalizeShareSlugOverrideOrThrow(slugOverride);
       if (slug) payload.slug = slug;
       if (clearPassword) {
         payload.clearPassword = true;
@@ -8003,7 +8070,7 @@ class SiYuanSharePlugin extends Plugin {
         title,
         docs: docPayloads,
       };
-      const slug = sanitizeSlug(slugOverride);
+      const slug = this.normalizeShareSlugOverrideOrThrow(slugOverride);
       if (slug) payload.slug = slug;
       if (clearPassword) {
         payload.clearPassword = true;
@@ -8529,6 +8596,7 @@ class SiYuanSharePlugin extends Plugin {
   async updateShare(
     shareId,
     {
+      slugOverride = "",
       password = "",
       clearPassword = false,
       expiresAt = null,
@@ -8549,9 +8617,12 @@ class SiYuanSharePlugin extends Plugin {
     const excludedDocIdsValue = Array.isArray(excludedDocIds)
       ? normalizeDocIdList(excludedDocIds)
       : normalizeDocIdList(option?.excludedDocIds || existing?.excludedDocIds || []);
+    const currentSlug = normalizeShareSlugInput(existing?.slug || "");
+    const requestedSlug = normalizeShareSlugInput(slugOverride);
+    const slugOverrideValue = requestedSlug && requestedSlug !== currentSlug ? requestedSlug : "";
     if (existing.type === SHARE_TYPES.NOTEBOOK) {
       await this.shareNotebook(existing.notebookId, {
-        slugOverride: existing.slug,
+        slugOverride: slugOverrideValue,
         password,
         clearPassword,
         expiresAt,
@@ -8570,7 +8641,7 @@ class SiYuanSharePlugin extends Plugin {
           ? option.includeChildren
           : !!existing.includeChildren;
     await this.shareDoc(existing.docId, {
-      slugOverride: existing.slug,
+      slugOverride: slugOverrideValue,
       password,
       clearPassword,
       expiresAt,
@@ -8586,6 +8657,7 @@ class SiYuanSharePlugin extends Plugin {
   async updateShareAccess(
     shareId,
     {
+      slugOverride = "",
       password = "",
       clearPassword = false,
       expiresAt = null,
@@ -8605,6 +8677,11 @@ class SiYuanSharePlugin extends Plugin {
       await this.verifyRemote({controller, progress});
       throwIfAborted(controller, t("siyuanShare.message.cancelled"));
       const payload = {shareId: existing.id};
+      const currentSlug = normalizeShareSlugInput(existing?.slug || "");
+      const requestedSlugRaw = normalizeShareSlugInput(slugOverride);
+      if (requestedSlugRaw && requestedSlugRaw !== currentSlug) {
+        payload.slug = this.normalizeShareSlugOverrideOrThrow(requestedSlugRaw);
+      }
       if (clearPassword) {
         payload.clearPassword = true;
       } else if (password) {
@@ -8914,7 +8991,7 @@ class SiYuanSharePlugin extends Plugin {
       const resp = await fetch(`${base}${path}`, options);
       const json = await resp.json().catch(() => null);
       if (!resp.ok || !json || json.code !== 0) {
-        const message = json?.msg || t("siyuanShare.error.remoteRequestFailed", {status: resp.status});
+        const message = this.resolveRemoteErrorMessage(json, resp.status);
         const error = new Error(message);
         error.status = resp.status;
         error.code = typeof json?.code !== "undefined" ? json.code : resp.status;
