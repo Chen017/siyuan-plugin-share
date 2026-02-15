@@ -1018,6 +1018,117 @@
       }
     });
 
+  const shareDangerousStyleRe =
+    /expression\s*\(|javascript\s*:|vbscript\s*:|url\s*\(\s*['"]?\s*data\s*:\s*text\/html/i;
+
+  const isSafeShareUrl = (value, {tag = "", attr = ""} = {}) => {
+    const raw = String(value || "").trim();
+    if (!raw) return true;
+    const compact = raw.replace(/[\u0000-\u0020\u007f\s]+/g, "") || raw;
+    const safeTag = String(tag || "").toLowerCase();
+    const safeAttr = String(attr || "").toLowerCase();
+
+    if (/^(?:javascript|vbscript)\s*:/i.test(compact)) return false;
+    if (/^data\s*:/i.test(compact)) {
+      if (
+        safeTag === "img" &&
+        safeAttr === "src" &&
+        /^data:image\/(?:png|gif|jpe?g|webp|bmp|avif);base64,[a-z0-9+/=\r\n]+$/i.test(compact)
+      ) {
+        return true;
+      }
+      return false;
+    }
+    if (safeTag === "iframe" && safeAttr === "src") {
+      if (!compact) return true;
+      if (/^(?:https?:)?\/\//i.test(compact)) return true;
+      if (compact.startsWith("/") || compact.startsWith("./") || compact.startsWith("../")) {
+        return true;
+      }
+      if (/^about:blank(?:[?#].*)?$/i.test(compact)) return true;
+      return false;
+    }
+    if (compact.startsWith("#")) return true;
+    if (compact.startsWith("/") && !compact.startsWith("//")) return true;
+    if (compact.startsWith("./") || compact.startsWith("../")) return true;
+    if (compact.startsWith("//")) return true;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(compact)) {
+      return /^(?:https?|mailto|tel):/i.test(compact);
+    }
+    return true;
+  };
+
+  const sanitizeShareHtml = (html) => {
+    const template = document.createElement("template");
+    template.innerHTML = String(html || "");
+    const blockedTags = new Set([
+      "script",
+      "object",
+      "embed",
+      "svg",
+      "math",
+      "base",
+      "meta",
+      "link",
+    ]);
+    const urlAttrs = new Set(["href", "src", "xlink:href", "formaction", "action", "poster"]);
+    const iframeAllowedAttrs = new Set([
+      "src",
+      "width",
+      "height",
+      "title",
+      "allow",
+      "allowfullscreen",
+      "loading",
+      "referrerpolicy",
+      "sandbox",
+      "frameborder",
+    ]);
+
+    const nodes = Array.from(template.content.querySelectorAll("*"));
+    nodes.forEach((node) => {
+      if (!(node instanceof Element)) return;
+      const tag = node.tagName.toLowerCase();
+      if (blockedTags.has(tag)) {
+        node.remove();
+        return;
+      }
+
+      Array.from(node.attributes).forEach((attribute) => {
+        const name = String(attribute.name || "").toLowerCase();
+        const value = String(attribute.value || "");
+        if (name.startsWith("on")) {
+          node.removeAttribute(attribute.name);
+          return;
+        }
+        if (name === "srcdoc") {
+          node.removeAttribute(attribute.name);
+          return;
+        }
+        if (name === "style" && shareDangerousStyleRe.test(value)) {
+          node.removeAttribute(attribute.name);
+          return;
+        }
+        if (tag === "iframe" && !iframeAllowedAttrs.has(name)) {
+          node.removeAttribute(attribute.name);
+          return;
+        }
+        if (urlAttrs.has(name) && !isSafeShareUrl(value, {tag, attr: name})) {
+          node.removeAttribute(attribute.name);
+        }
+      });
+
+      if (tag === "iframe") {
+        const src = (node.getAttribute("src") || "").trim();
+        if (src && !isSafeShareUrl(src, {tag: "iframe", attr: "src"})) {
+          node.remove();
+        }
+      }
+    });
+
+    return template.innerHTML;
+  };
+
   const parseFootnoteIndexLoose = (value) => {
     const raw = String(value || "").trim();
     if (!raw) return 0;
@@ -5306,7 +5417,7 @@ const initImageViewer = () => {
         );
         if (!target) return;
         const raw = source.value || "";
-        target.innerHTML = md.render(raw);
+        target.innerHTML = sanitizeShareHtml(md.render(raw));
         renderMindmap(target);
         renderEcharts(target);
         rehydrateEcharts(target);

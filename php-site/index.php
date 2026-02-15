@@ -7197,6 +7197,187 @@ function strip_duplicate_title_heading(string $markdown, string $title): string 
     return implode("\n", $lines);
 }
 
+function share_style_is_dangerous(string $style): bool {
+    $value = strtolower((string)$style);
+    $compact = preg_replace('/[\x00-\x1f\x7f]+/u', '', $value);
+    if (!is_string($compact)) {
+        $compact = $value;
+    }
+    return (bool)preg_match('/expression\s*\(|javascript\s*:|vbscript\s*:|url\s*\(\s*[\'"]?\s*data\s*:\s*text\/html/i', $compact);
+}
+
+function is_safe_share_url(string $value, string $tag = '', string $attr = ''): bool {
+    $raw = trim((string)$value);
+    if ($raw === '') {
+        return true;
+    }
+    $compact = preg_replace('/[\x00-\x20\x7f\s]+/u', '', $raw);
+    if (!is_string($compact) || $compact === '') {
+        $compact = $raw;
+    }
+    $tag = strtolower($tag);
+    $attr = strtolower($attr);
+
+    if (preg_match('/^(?:javascript|vbscript)\s*:/i', $compact)) {
+        return false;
+    }
+    if (preg_match('/^data\s*:/i', $compact)) {
+        if ($tag === 'img' && $attr === 'src') {
+            return (bool)preg_match('/^data:image\/(?:png|gif|jpe?g|webp|bmp|avif);base64,[a-z0-9+\/=\r\n]+$/i', $compact);
+        }
+        return false;
+    }
+    if ($tag === 'iframe' && $attr === 'src') {
+        if ($compact === '') {
+            return true;
+        }
+        if (preg_match('/^(?:https?:)?\/\//i', $compact)) {
+            return true;
+        }
+        if (str_starts_with($compact, '/') || str_starts_with($compact, './') || str_starts_with($compact, '../')) {
+            return true;
+        }
+        if (preg_match('/^about:blank(?:[?#].*)?$/i', $compact)) {
+            return true;
+        }
+        return false;
+    }
+    if ($compact[0] === '#') {
+        return true;
+    }
+    if (str_starts_with($compact, '/') && !str_starts_with($compact, '//')) {
+        return true;
+    }
+    if (str_starts_with($compact, './') || str_starts_with($compact, '../')) {
+        return true;
+    }
+    if (str_starts_with($compact, '//')) {
+        return true;
+    }
+    if (preg_match('/^[a-zA-Z][a-zA-Z0-9+.\-]*:/', $compact)) {
+        return (bool)preg_match('/^(?:https?|mailto|tel):/i', $compact);
+    }
+    return true;
+}
+
+function sanitize_share_html(string $html): string {
+    $source = (string)$html;
+    if ($source === '') {
+        return '';
+    }
+    if (!class_exists('DOMDocument')) {
+        return htmlspecialchars($source, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    }
+
+    $libxmlBackup = libxml_use_internal_errors(true);
+    $dom = new DOMDocument('1.0', 'UTF-8');
+    $wrapperId = '__sps_share_html_root__';
+    $loaded = $dom->loadHTML(
+        '<?xml encoding="UTF-8"><!doctype html><html><body><div id="' . $wrapperId . '">' . $source . '</div></body></html>',
+        LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD | LIBXML_NOERROR | LIBXML_NOWARNING,
+    );
+    libxml_clear_errors();
+    libxml_use_internal_errors($libxmlBackup);
+    if (!$loaded) {
+        return htmlspecialchars($source, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    }
+
+    $root = null;
+    $xpath = new DOMXPath($dom);
+    $rootNodes = $xpath->query('//*[@id="' . $wrapperId . '"]');
+    if ($rootNodes && $rootNodes->length > 0 && $rootNodes->item(0) instanceof DOMElement) {
+        $root = $rootNodes->item(0);
+    }
+    if (!$root) {
+        return htmlspecialchars($source, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    }
+
+    $blockedTags = ['script', 'object', 'embed', 'svg', 'math', 'base', 'meta', 'link'];
+    $urlAttrs = ['href', 'src', 'xlink:href', 'formaction', 'action', 'poster'];
+    $iframeAllowedAttrs = [
+        'src',
+        'width',
+        'height',
+        'title',
+        'allow',
+        'allowfullscreen',
+        'loading',
+        'referrerpolicy',
+        'sandbox',
+        'frameborder',
+    ];
+
+    $elements = [];
+    foreach ($root->getElementsByTagName('*') as $node) {
+        $elements[] = $node;
+    }
+
+    foreach ($elements as $element) {
+        if (!($element instanceof DOMElement)) {
+            continue;
+        }
+
+        $tag = strtolower($element->tagName);
+        if (in_array($tag, $blockedTags, true)) {
+            if ($element->parentNode) {
+                $element->parentNode->removeChild($element);
+            }
+            continue;
+        }
+
+        $attrNames = [];
+        if ($element->hasAttributes()) {
+            foreach ($element->attributes as $attribute) {
+                $attrNames[] = $attribute->name;
+            }
+        }
+
+        foreach ($attrNames as $attrNameRaw) {
+            $attrName = strtolower($attrNameRaw);
+            $attrValue = (string)$element->getAttribute($attrNameRaw);
+
+            if (str_starts_with($attrName, 'on')) {
+                $element->removeAttribute($attrNameRaw);
+                continue;
+            }
+            if ($attrName === 'srcdoc') {
+                $element->removeAttribute($attrNameRaw);
+                continue;
+            }
+            if ($attrName === 'style' && share_style_is_dangerous($attrValue)) {
+                $element->removeAttribute($attrNameRaw);
+                continue;
+            }
+            if ($tag === 'iframe' && !in_array($attrName, $iframeAllowedAttrs, true)) {
+                $element->removeAttribute($attrNameRaw);
+                continue;
+            }
+            if (in_array($attrName, $urlAttrs, true) && !is_safe_share_url($attrValue, $tag, $attrName)) {
+                $element->removeAttribute($attrNameRaw);
+            }
+        }
+
+        if ($tag === 'iframe') {
+            $iframeSrc = trim((string)$element->getAttribute('src'));
+            if ($iframeSrc !== '' && !is_safe_share_url($iframeSrc, 'iframe', 'src')) {
+                if ($element->parentNode) {
+                    $element->parentNode->removeChild($element);
+                }
+            }
+        }
+    }
+
+    $output = '';
+    foreach ($root->childNodes as $child) {
+        $rendered = $dom->saveHTML($child);
+        if (is_string($rendered)) {
+            $output .= $rendered;
+        }
+    }
+
+    return $output;
+}
+
 function render_markdown(string $markdown): string {
     static $parser = null;
     if (!$parser) {
@@ -7205,7 +7386,7 @@ function render_markdown(string $markdown): string {
             $parser->setSafeMode(false);
         }
     }
-    return $parser->text($markdown);
+    return sanitize_share_html($parser->text($markdown));
 }
 
 function share_requires_password(array $share): bool {
