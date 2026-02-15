@@ -8721,7 +8721,7 @@ class SiYuanSharePlugin extends Plugin {
     const existing = this.getShareById(shareId);
     if (!existing) throw new Error(t("siyuanShare.error.shareNotFound"));
 
-    await new Promise((resolve) => {
+    const ok = await new Promise((resolve) => {
       confirm(
         t("siyuanShare.confirm.deleteShareTitle"),
         t("siyuanShare.confirm.deleteShareMessage", {
@@ -8730,39 +8730,39 @@ class SiYuanSharePlugin extends Plugin {
         () => resolve(true),
         () => resolve(false),
       );
-    }).then(async (ok) => {
-      if (!ok) return;
-      await this.verifyRemote();
-      await this.remoteRequest(REMOTE_API.deleteShare, {
-        method: "POST",
-        body: {shareId: existing.id, hardDelete: true},
-        progressText: t("siyuanShare.progress.deletingShare"),
-      });
-      await this.syncRemoteShares({silent: true});
-      const key = String(existing.id || "");
-      if (key && Object.prototype.hasOwnProperty.call(this.shareOptions, key)) {
-        delete this.shareOptions[key];
-        await this.saveData(STORAGE_SHARE_OPTIONS, this.shareOptions);
-      }
-      if (key) {
-        await this.clearIncrementalCursor(key);
-      }
-      if (existing?.type === SHARE_TYPES.DOC && isValidDocId(existing?.docId)) {
-        await this.removeExportRetryCacheForTarget({
-          type: SHARE_TYPES.DOC,
-          targetId: String(existing.docId || ""),
-          siteId: this.getActiveSiteId(),
-        });
-      } else if (existing?.type === SHARE_TYPES.NOTEBOOK && isValidNotebookId(existing?.notebookId)) {
-        await this.removeExportRetryCacheForTarget({
-          type: SHARE_TYPES.NOTEBOOK,
-          targetId: String(existing.notebookId || ""),
-          siteId: this.getActiveSiteId(),
-        });
-      }
-      this.renderSettingCurrent();
-      this.notify(t("siyuanShare.message.deleteSuccess"));
     });
+    if (!ok) return;
+
+    await this.verifyRemote();
+    await this.remoteRequest(REMOTE_API.deleteShare, {
+      method: "POST",
+      body: {shareId: existing.id, hardDelete: true},
+      progressText: t("siyuanShare.progress.deletingShare"),
+    });
+    await this.syncRemoteShares({silent: true});
+    const key = String(existing.id || "");
+    if (key && Object.prototype.hasOwnProperty.call(this.shareOptions, key)) {
+      delete this.shareOptions[key];
+      await this.saveData(STORAGE_SHARE_OPTIONS, this.shareOptions);
+    }
+    if (key) {
+      await this.clearIncrementalCursor(key);
+    }
+    if (existing?.type === SHARE_TYPES.DOC && isValidDocId(existing?.docId)) {
+      await this.removeExportRetryCacheForTarget({
+        type: SHARE_TYPES.DOC,
+        targetId: String(existing.docId || ""),
+        siteId: this.getActiveSiteId(),
+      });
+    } else if (existing?.type === SHARE_TYPES.NOTEBOOK && isValidNotebookId(existing?.notebookId)) {
+      await this.removeExportRetryCacheForTarget({
+        type: SHARE_TYPES.NOTEBOOK,
+        targetId: String(existing.notebookId || ""),
+        siteId: this.getActiveSiteId(),
+      });
+    }
+    this.renderSettingCurrent();
+    this.notify(t("siyuanShare.message.deleteSuccess"));
   }
 
   async copyShareLink(shareId) {

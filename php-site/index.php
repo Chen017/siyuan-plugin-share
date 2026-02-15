@@ -8064,7 +8064,7 @@ if ($path === '/email-code' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         redirect('/register');
     }
     $captchaInput = (string)($_POST['captcha'] ?? '');
-    if (captcha_enabled() && $captchaInput !== '' && !check_captcha($captchaInput)) {
+    if (captcha_enabled() && !check_captcha($captchaInput)) {
         flash('error', '验证码错误');
         redirect('/register?step=verify');
     }
@@ -8778,7 +8778,7 @@ if ($path === '/account') {
         ]);
         unset($_SESSION['user_id'], $_SESSION['password_hash']);
         session_regenerate_id(true);
-        flash('info', '???????????');
+        flash('info', '密码修改成功，请重新登录');
         redirect('/login');
     }
 
