@@ -7461,15 +7461,77 @@ function share_is_expired(array $share): bool {
     return time() > (int)$share['expires_at'];
 }
 
+function share_password_hash_by_id(int $shareId): string {
+    static $cache = [];
+    if ($shareId <= 0) {
+        return '';
+    }
+    if (array_key_exists($shareId, $cache)) {
+        return (string)$cache[$shareId];
+    }
+    $pdo = db();
+    $stmt = $pdo->prepare('SELECT password_hash FROM shares WHERE id = :id AND deleted_at IS NULL LIMIT 1');
+    $stmt->execute([':id' => $shareId]);
+    $value = $stmt->fetchColumn();
+    $hash = is_string($value) ? trim($value) : '';
+    $cache[$shareId] = $hash;
+    return $hash;
+}
+
+function share_access_signature(string $passwordHash): string {
+    $raw = trim($passwordHash);
+    if ($raw === '') {
+        return '';
+    }
+    return hash('sha256', $raw);
+}
+
 function share_access_granted(int $shareId): bool {
-    return !empty($_SESSION['share_access'][$shareId]);
+    if ($shareId <= 0) {
+        return false;
+    }
+    $entry = $_SESSION['share_access'][$shareId] ?? null;
+    if (empty($entry)) {
+        return false;
+    }
+    $passwordHash = share_password_hash_by_id($shareId);
+    if ($passwordHash === '') {
+        // No password now: old session entries are irrelevant.
+        return true;
+    }
+    $expected = share_access_signature($passwordHash);
+    if ($expected === '') {
+        return false;
+    }
+    if ($entry === true) {
+        // Legacy boolean session format; force one re-verification for protected shares.
+        return false;
+    }
+    if (is_string($entry) && $entry !== '') {
+        return hash_equals($expected, $entry);
+    }
+    if (is_array($entry)) {
+        $token = trim((string)($entry['token'] ?? ''));
+        if ($token !== '') {
+            return hash_equals($expected, $token);
+        }
+    }
+    return false;
 }
 
 function grant_share_access(int $shareId): void {
-    if (!isset($_SESSION['share_access'])) {
+    if ($shareId <= 0) {
+        return;
+    }
+    if (!isset($_SESSION['share_access']) || !is_array($_SESSION['share_access'])) {
         $_SESSION['share_access'] = [];
     }
-    $_SESSION['share_access'][$shareId] = true;
+    $passwordHash = share_password_hash_by_id($shareId);
+    if ($passwordHash === '') {
+        $_SESSION['share_access'][$shareId] = true;
+        return;
+    }
+    $_SESSION['share_access'][$shareId] = share_access_signature($passwordHash);
 }
 
 function share_visitor_limit(array $share): int {
