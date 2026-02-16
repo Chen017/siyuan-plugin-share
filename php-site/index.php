@@ -866,20 +866,48 @@ function extract_comment_asset_paths(string $content, int $shareId): array {
         return [];
     }
     $prefix = comment_asset_prefix() . $shareId . '/';
-    $pattern = "#uploads/" . preg_quote($prefix, '#') . "([^\\s\\)\"'<>]+)#i";
-    if (!preg_match_all($pattern, $content, $matches)) {
-        return [];
-    }
     $paths = [];
-    foreach ($matches[1] as $suffix) {
-        $suffix = preg_replace('/[?#].*$/', '', $suffix);
-        $path = sanitize_asset_path($prefix . $suffix);
-        if ($path === '') {
+    $patterns = [
+        '#(?:https?://[^\s\)\"\'<>]+)?[^\s\)\"\'<>]*?(?:/uploads/|uploads/)' . preg_quote($prefix, '#') . '([^\s\)\"\'<>]+)#i',
+        '#(?:https?://[^\s\)\"\'<>]+)?[^\s\)\"\'<>]*?(?:/res/|res/)' . preg_quote($prefix, '#') . '([^\s\)\"\'<>]+)#i',
+    ];
+    foreach ($patterns as $pattern) {
+        if (!preg_match_all($pattern, $content, $matches)) {
             continue;
         }
-        $paths[$path] = true;
+        foreach ($matches[1] as $suffix) {
+            $suffix = preg_replace('/[?#].*$/', '', (string)$suffix);
+            $decoded = rawurldecode((string)$suffix);
+            $path = sanitize_asset_path($prefix . $decoded);
+            if ($path === '') {
+                continue;
+            }
+            $paths[$path] = true;
+        }
     }
     return array_keys($paths);
+}
+
+function comment_asset_reference_needles(string $path): array {
+    $normalized = ltrim(sanitize_asset_path($path), '/');
+    if ($normalized === '') {
+        return [];
+    }
+    $encoded = encode_path_segments($normalized);
+    $needles = [
+        'uploads/' . $normalized,
+        'uploads/' . $encoded,
+        '/res/' . $normalized,
+        '/res/' . $encoded,
+    ];
+    $out = [];
+    foreach ($needles as $needle) {
+        if ($needle === '' || isset($out[$needle])) {
+            continue;
+        }
+        $out[$needle] = true;
+    }
+    return array_keys($out);
 }
 
 function filter_unused_comment_assets(int $shareId, array $paths, array $excludeIds): array {
@@ -889,9 +917,17 @@ function filter_unused_comment_assets(int $shareId, array $paths, array $exclude
     $pdo = db();
     $unused = [];
     foreach ($paths as $path) {
-        $needle = 'uploads/' . ltrim($path, '/');
-        $sql = 'SELECT COUNT(*) FROM share_comments WHERE share_id = ? AND content LIKE ?';
-        $params = [$shareId, '%' . $needle . '%'];
+        $needles = comment_asset_reference_needles((string)$path);
+        if (empty($needles)) {
+            continue;
+        }
+        $likeSql = [];
+        $params = [$shareId];
+        foreach ($needles as $needle) {
+            $likeSql[] = 'content LIKE ?';
+            $params[] = '%' . $needle . '%';
+        }
+        $sql = 'SELECT COUNT(*) FROM share_comments WHERE share_id = ? AND (' . implode(' OR ', $likeSql) . ')';
         if (!empty($excludeIds)) {
             $sql .= ' AND id NOT IN (' . implode(',', array_fill(0, count($excludeIds), '?')) . ')';
             $params = array_merge($params, $excludeIds);
@@ -3851,6 +3887,31 @@ function find_share_by_slug(string $slug): ?array {
     $pdo = db();
     $stmt = $pdo->prepare('SELECT * FROM shares WHERE slug = :slug AND deleted_at IS NULL LIMIT 1');
     $stmt->execute([':slug' => $slug]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $row ?: null;
+}
+
+function find_share_by_id(int $shareId): ?array {
+    if ($shareId <= 0) {
+        return null;
+    }
+    $pdo = db();
+    $stmt = $pdo->prepare('SELECT * FROM shares WHERE id = :id AND deleted_at IS NULL LIMIT 1');
+    $stmt->execute([':id' => $shareId]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $row ?: null;
+}
+
+function find_share_asset_row(int $shareId, string $assetPath): ?array {
+    if ($shareId <= 0 || $assetPath === '') {
+        return null;
+    }
+    $pdo = db();
+    $stmt = $pdo->prepare('SELECT asset_path, file_path, size_bytes FROM share_assets WHERE share_id = :sid AND asset_path = :asset_path LIMIT 1');
+    $stmt->execute([
+        ':sid' => $shareId,
+        ':asset_path' => $assetPath,
+    ]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     return $row ?: null;
 }
@@ -7482,6 +7543,238 @@ function register_share_visitor(int $shareId, string $visitorId): void {
     ]);
 }
 
+function share_inline_asset_extensions(): array {
+    return [
+        'avif',
+        'bmp',
+        'gif',
+        'jpg',
+        'jpeg',
+        'png',
+        'webp',
+        'mp3',
+        'wav',
+        'ogg',
+        'mp4',
+        'webm',
+        'txt',
+        'md',
+        'pdf',
+    ];
+}
+
+function share_asset_extension(string $assetPath): string {
+    $ext = strtolower((string)pathinfo($assetPath, PATHINFO_EXTENSION));
+    return $ext !== '' ? $ext : '';
+}
+
+function share_asset_allow_inline(string $assetPath): bool {
+    $ext = share_asset_extension($assetPath);
+    if ($ext === '') {
+        return false;
+    }
+    return in_array($ext, share_inline_asset_extensions(), true);
+}
+
+function detect_share_asset_mime(string $fullPath, string $assetPath): string {
+    $ext = share_asset_extension($assetPath);
+    $map = [
+        'txt' => 'text/plain; charset=UTF-8',
+        'md' => 'text/markdown; charset=UTF-8',
+        'pdf' => 'application/pdf',
+        'jpg' => 'image/jpeg',
+        'jpeg' => 'image/jpeg',
+        'png' => 'image/png',
+        'gif' => 'image/gif',
+        'webp' => 'image/webp',
+        'bmp' => 'image/bmp',
+        'avif' => 'image/avif',
+        'mp3' => 'audio/mpeg',
+        'wav' => 'audio/wav',
+        'ogg' => 'audio/ogg',
+        'mp4' => 'video/mp4',
+        'webm' => 'video/webm',
+    ];
+    $fallback = $map[$ext] ?? 'application/octet-stream';
+    if (function_exists('finfo_open')) {
+        $finfo = @finfo_open(FILEINFO_MIME_TYPE);
+        if ($finfo) {
+            $detected = (string)@finfo_file($finfo, $fullPath);
+            @finfo_close($finfo);
+            if ($detected !== '' && strtolower($detected) !== 'application/octet-stream') {
+                return $detected;
+            }
+        }
+    }
+    return $fallback;
+}
+
+function render_share_asset_not_found(): void {
+    http_response_code(404);
+    header('Content-Type: text/plain; charset=UTF-8');
+    echo 'Resource not found';
+    exit;
+}
+
+function build_share_asset_public_path(array $share, string $assetPath): string {
+    $shareId = (int)($share['id'] ?? 0);
+    $assetPath = sanitize_asset_path($assetPath);
+    if ($shareId <= 0 || $assetPath === '') {
+        return '';
+    }
+    if (str_starts_with($assetPath, comment_asset_prefix())) {
+        return '/uploads/' . $assetPath;
+    }
+    return '/uploads/shares/' . $shareId . '/' . $assetPath;
+}
+
+function resolve_asset_resume_redirect_path(array $share): string {
+    $raw = trim((string)($_GET['asset'] ?? ''));
+    if ($raw === '') {
+        return '';
+    }
+    $shareId = (int)($share['id'] ?? 0);
+    if ($shareId <= 0) {
+        return '';
+    }
+    $assetPath = sanitize_asset_path(rawurldecode($raw));
+    if ($assetPath === '') {
+        return '';
+    }
+    $asset = find_share_asset_row($shareId, $assetPath);
+    if (!$asset) {
+        return '';
+    }
+    return build_share_asset_public_path($share, $assetPath);
+}
+
+function redirect_to_share_page(array $share, string $assetPath = ''): void {
+    $slug = trim((string)($share['slug'] ?? ''));
+    if ($slug === '') {
+        render_share_asset_not_found();
+    }
+    $path = '/s/' . rawurlencode($slug);
+    $cleanAsset = sanitize_asset_path($assetPath);
+    if ($cleanAsset !== '') {
+        $path .= '?asset=' . rawurlencode($cleanAsset);
+    }
+    redirect($path);
+}
+
+function serve_share_asset(array $share, string $assetPath): void {
+    global $config;
+    $shareId = (int)($share['id'] ?? 0);
+    if ($shareId <= 0) {
+        render_share_asset_not_found();
+    }
+    $assetPath = sanitize_asset_path(rawurldecode($assetPath));
+    if ($assetPath === '') {
+        render_share_asset_not_found();
+    }
+    if (share_is_expired($share) || share_visitor_limit_reached($share)) {
+        redirect_to_share_page($share, $assetPath);
+    }
+    if (share_requires_password($share) && !share_access_granted($shareId)) {
+        redirect_to_share_page($share, $assetPath);
+    }
+    if (share_visitor_limit($share) > 0) {
+        register_share_visitor($shareId, get_visitor_id());
+    }
+    $asset = find_share_asset_row($shareId, $assetPath);
+    if (!$asset) {
+        render_share_asset_not_found();
+    }
+    $filePath = sanitize_asset_path((string)($asset['file_path'] ?? ''));
+    if ($filePath === '') {
+        render_share_asset_not_found();
+    }
+    $uploadsDir = rtrim((string)($config['uploads_dir'] ?? (__DIR__ . '/uploads')), '/\\');
+    $fullPath = $uploadsDir . '/' . ltrim($filePath, '/');
+    if (!is_file($fullPath) || !is_readable($fullPath)) {
+        render_share_asset_not_found();
+    }
+    $inline = share_asset_allow_inline($assetPath);
+    $mime = $inline ? detect_share_asset_mime($fullPath, $assetPath) : 'application/octet-stream';
+    $disposition = $inline ? 'inline' : 'attachment';
+    $filename = basename($assetPath);
+    if ($filename === '' || $filename === '.' || $filename === '..') {
+        $filename = 'download.bin';
+    }
+    $escapedFilename = str_replace(
+        ['\\', '"', "\r", "\n"],
+        ['\\\\', '\\"', '', ''],
+        $filename
+    );
+    $size = @filesize($fullPath);
+    header('Content-Type: ' . $mime);
+    header('X-Content-Type-Options: nosniff');
+    header('Content-Disposition: ' . $disposition . '; filename="' . $escapedFilename . '"; filename*=UTF-8\'\'' . rawurlencode($filename));
+    header('Cache-Control: private, max-age=3600');
+    header('Accept-Ranges: bytes');
+    if (is_int($size) && $size >= 0) {
+        header('Content-Length: ' . (string)$size);
+    }
+    @readfile($fullPath);
+    exit;
+}
+
+function parse_legacy_upload_asset_request(string $path): ?array {
+    $normalized = ltrim(str_replace('\\', '/', $path), '/');
+    if ($normalized === '' || !str_starts_with($normalized, 'uploads/')) {
+        return null;
+    }
+    $relative = substr($normalized, strlen('uploads/'));
+    if (!is_string($relative) || $relative === '') {
+        return null;
+    }
+    if (preg_match('#^shares/(\d+)/(.*)$#', $relative, $matches)) {
+        $shareId = (int)($matches[1] ?? 0);
+        $assetSuffix = rawurldecode((string)($matches[2] ?? ''));
+        $assetPath = sanitize_asset_path($assetSuffix);
+        if ($shareId > 0 && $assetPath !== '') {
+            return [
+                'shareId' => $shareId,
+                'assetPath' => $assetPath,
+            ];
+        }
+    }
+    $commentPrefix = trim(comment_asset_prefix(), '/');
+    if ($commentPrefix !== '' && preg_match('#^' . preg_quote($commentPrefix, '#') . '/(\d+)/(.*)$#', $relative, $matches)) {
+        $shareId = (int)($matches[1] ?? 0);
+        $assetSuffix = rawurldecode((string)($matches[2] ?? ''));
+        $assetPath = sanitize_asset_path($commentPrefix . '/' . $shareId . '/' . $assetSuffix);
+        if ($shareId > 0 && $assetPath !== '') {
+            return [
+                'shareId' => $shareId,
+                'assetPath' => $assetPath,
+            ];
+        }
+    }
+    return null;
+}
+
+function handle_share_asset_request(string $slug, string $assetPath): void {
+    $share = find_share_by_slug($slug);
+    if (!$share) {
+        render_share_asset_not_found();
+    }
+    serve_share_asset($share, $assetPath);
+}
+
+function handle_legacy_upload_asset_request(string $path): void {
+    $parsed = parse_legacy_upload_asset_request($path);
+    if (!$parsed) {
+        render_share_asset_not_found();
+    }
+    $shareId = (int)($parsed['shareId'] ?? 0);
+    $assetPath = (string)($parsed['assetPath'] ?? '');
+    $share = find_share_by_id($shareId);
+    if (!$share) {
+        render_share_asset_not_found();
+    }
+    serve_share_asset($share, $assetPath);
+}
+
 function build_doc_tree(array $docs, ?string $activeId = null): array {
     $useParent = false;
     foreach ($docs as $doc) {
@@ -7705,7 +7998,7 @@ function build_doc_icon_src(string $icon, string $assetBasePath): string {
     if ($prefix !== '' && substr($prefix, -1) !== '/') {
         $prefix .= '/';
     }
-    return $prefix . $path;
+    return $prefix . encode_path_segments($path);
 }
 
 function render_doc_tree_icon(?array $doc, string $assetBasePath): string {
@@ -7802,6 +8095,7 @@ function route_share(string $slug, ?string $docId = null): void {
     $shareTitleRaw = (string)$share['title'];
     $shareTitle = htmlspecialchars($shareTitleRaw);
     $redirectPath = '/s/' . $slug . ($docId ? '/' . rawurlencode($docId) : '');
+    $resumeAssetPath = resolve_asset_resume_redirect_path($share);
     $isPartial = is_share_partial_request();
 
     if (share_is_expired($share)) {
@@ -7830,6 +8124,9 @@ function route_share(string $slug, ?string $docId = null): void {
             $input = trim((string)($_POST['share_password'] ?? ''));
             if ($input !== '' && password_verify($input, (string)$share['password_hash'])) {
                 grant_share_access($shareId);
+                if ($resumeAssetPath !== '') {
+                    redirect($resumeAssetPath);
+                }
                 redirect($redirectPath);
             }
             $error = '访问密码错误';
@@ -8193,6 +8490,14 @@ if ($path === '/api/instances/stats') {
 
 if (strpos($path, '/api/v1/') === 0) {
     handle_api($path);
+}
+
+if (preg_match('#^/s/([a-zA-Z0-9_-]+)/res/(.+)$#', $path, $matches)) {
+    handle_share_asset_request($matches[1], $matches[2]);
+}
+
+if (str_starts_with($path, '/uploads/')) {
+    handle_legacy_upload_asset_request($path);
 }
 
 if (preg_match('#^/s/([a-zA-Z0-9_-]+)/comment$#', $path, $matches) && $_SERVER['REQUEST_METHOD'] === 'POST') {
