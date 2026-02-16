@@ -10,23 +10,17 @@ It supports **access passwords, expiration time, and visitor limits**, and provi
 
 ## 🚀 Plugin Advantages
 
-- **Free & Open Source, Ready to Use**  
-  The plugin itself is free and open source. No additional payment is required to use the core sharing features.
+🌐 **Ready to Use, Flexible Deployment**
 
-- **Public Service Ready-to-Use + Optional Self-Hosting**  
-  You can directly use `share.b0x.top` to get started quickly. Private deployment is also supported, including Docker deployment, NAS deployment, and deployment via BaoTa Panel or other hosting panels.
+The tool is **completely free and open-source**. You can start instantly via `share.b0x.top` or choose self-hosting (supports **Docker / NAS / BT-Panel / other panels**).
 
-- **More Flexible Sharing Scope**  
-  Supports sharing at three levels: **notebook**, **single document**, and **document with subdocuments**.
+🎯 **Flexible Sharing, Precise Control**
 
-- **Incremental Updates Supported (No Full Re-upload Required)**  
-  Content updates use incremental synchronization, reducing duplicate uploads for faster speed and lower bandwidth usage.
+Share a **single page, sub-documents, or an entire notebook**. You can **exclude specific documents** with one click to ensure private content stays private.
 
-- **Support for Excluding Specific Documents**  
-  You can exclude specific documents when sharing to prevent unnecessary content from being published.
+⚡ **Efficient Sync, Built-in Analytics**
 
-- **Built-in Access Statistics Overview**  
-  View share statistics including **Page Views (PV)**, **Unique Visitors (UV)**, **IP count**, and **visitor geographic distribution**, helping you evaluate sharing performance.
+Uses an **incremental update** algorithm (faster and saves data). Features built-in analytics, allowing you to track **visitor counts, locations, and other key insights** at a glance.
 
 ---
 
