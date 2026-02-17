@@ -184,5 +184,7 @@
   "siyuanShare.title.processing": "Processing",
   "siyuanShare.title.selectExcludedDocs": "Select excluded documents",
   "siyuanShare.title.shareListCount": "Share list ({count})",
-  "siyuanShare.title.shareManagement": "Share management"
+  "siyuanShare.title.shareManagement": "Share management",
+  "siyuanShare.qr.title": "Share QR Code",
+  "siyuanShare.qr.download": "Download QR Code"
 }

@@ -64,6 +64,269 @@ const SHARE_TYPES = {
   DOC: "doc",
   NOTEBOOK: "notebook",
 };
+
+// === Compact QR Code matrix generator (byte mode, EC level M, versions 1-10) ===
+const SPS_QR = (() => {
+  const EXP = new Uint8Array(256), LOG = new Uint8Array(256);
+  {
+    let x = 1;
+    for (let i = 0; i < 255; i++) { EXP[i] = x; LOG[x] = i; x <<= 1; if (x & 256) x ^= 0x11d; }
+    EXP[255] = EXP[0];
+  }
+  const gfMul = (a, b) => (a === 0 || b === 0) ? 0 : EXP[(LOG[a] + LOG[b]) % 255];
+
+  function rsEncode(data, n) {
+    let g = [1];
+    for (let i = 0; i < n; i++) {
+      const r = new Array(g.length + 1).fill(0);
+      for (let j = 0; j < g.length; j++) { r[j] ^= gfMul(g[j], EXP[i]); r[j + 1] ^= g[j]; }
+      g = r;
+    }
+    const out = new Array(data.length + n).fill(0);
+    for (let i = 0; i < data.length; i++) out[i] = data[i];
+    for (let i = 0; i < data.length; i++) {
+      const c = out[i];
+      if (c) for (let j = 1; j <= n; j++) out[i + j] ^= gfMul(g[n - j], c);
+    }
+    return out.slice(data.length);
+  }
+
+  // EC table: [totalCW, ecPerBlock, g1Blocks, g1Data, g2Blocks, g2Data]
+  const EC = [
+    null,
+    [26,10,1,16,0,0],[44,16,1,28,0,0],[70,26,1,44,0,0],[100,18,2,32,0,0],
+    [134,24,2,43,0,0],[172,16,4,27,0,0],[196,18,4,31,0,0],[242,22,2,38,2,39],
+    [292,22,3,36,2,37],[346,26,4,43,1,44],
+  ];
+  const ALIGN = [null,[],[6,18],[6,22],[6,26],[6,30],[6,34],[6,22,38],[6,24,42],[6,26,46],[6,28,50]];
+
+  function chooseVersion(len) {
+    for (let v = 1; v <= 10; v++) {
+      const d = EC[v][2] * EC[v][3] + EC[v][4] * EC[v][5];
+      if (4 + (v <= 9 ? 8 : 16) + len * 8 <= d * 8) return v;
+    }
+    return -1;
+  }
+
+  function encodeData(text, ver) {
+    const bytes = new TextEncoder().encode(text);
+    const totalData = EC[ver][2] * EC[ver][3] + EC[ver][4] * EC[ver][5];
+    const cntBits = ver <= 9 ? 8 : 16;
+    const bits = [];
+    const push = (v, n) => { for (let i = n - 1; i >= 0; i--) bits.push((v >> i) & 1); };
+    push(0b0100, 4);
+    push(bytes.length, cntBits);
+    for (const b of bytes) push(b, 8);
+    const tLen = Math.min(4, totalData * 8 - bits.length);
+    for (let i = 0; i < tLen; i++) bits.push(0);
+    while (bits.length % 8) bits.push(0);
+    const pads = [0xEC, 0x11];
+    let pi = 0;
+    while (bits.length < totalData * 8) { push(pads[pi % 2], 8); pi++; }
+    const cw = new Uint8Array(totalData);
+    for (let i = 0; i < totalData; i++) {
+      let b = 0;
+      for (let j = 0; j < 8; j++) b = (b << 1) | (bits[i * 8 + j] || 0);
+      cw[i] = b;
+    }
+    return cw;
+  }
+
+  function computeBlocks(dataCW, ver) {
+    const [, ecPB, g1b, g1d, g2b, g2d] = EC[ver];
+    const blocks = [];
+    let off = 0;
+    for (let i = 0; i < g1b; i++) { blocks.push(dataCW.slice(off, off + g1d)); off += g1d; }
+    for (let i = 0; i < g2b; i++) { blocks.push(dataCW.slice(off, off + g2d)); off += g2d; }
+    return blocks.map(d => ({ data: d, ec: new Uint8Array(rsEncode(Array.from(d), ecPB)) }));
+  }
+
+  function interleave(blocks) {
+    const res = [];
+    const maxD = Math.max(...blocks.map(b => b.data.length));
+    for (let i = 0; i < maxD; i++) for (const b of blocks) if (i < b.data.length) res.push(b.data[i]);
+    const ecL = blocks[0].ec.length;
+    for (let i = 0; i < ecL; i++) for (const b of blocks) res.push(b.ec[i]);
+    return res;
+  }
+
+  function generate(text) {
+    const bytes = new TextEncoder().encode(text);
+    const ver = chooseVersion(bytes.length);
+    if (ver < 0) return null;
+    const size = 17 + 4 * ver;
+    const dataCW = encodeData(text, ver);
+    const blocks = computeBlocks(dataCW, ver);
+    const stream = interleave(blocks);
+    const dataBits = [];
+    for (const byte of stream) for (let i = 7; i >= 0; i--) dataBits.push((byte >> i) & 1);
+
+    let bestMask = 0, bestPenalty = Infinity, bestMod = null;
+    for (let mask = 0; mask < 8; mask++) {
+      const mod = Array.from({length: size}, () => Array(size).fill(null));
+      const fn = Array.from({length: size}, () => Array(size).fill(false));
+      const set = (r, c, dark, isF) => {
+        if (r >= 0 && r < size && c >= 0 && c < size) { mod[r][c] = dark; if (isF) fn[r][c] = true; }
+      };
+      // Finder patterns
+      const placeFinder = (cr, cc) => {
+        for (let dr = -4; dr <= 4; dr++) for (let dc = -4; dc <= 4; dc++) {
+          const m = Math.max(Math.abs(dr), Math.abs(dc));
+          set(cr + dr, cc + dc, m === 4 ? false : m === 2 ? false : true, true);
+        }
+      };
+      placeFinder(3, 3);
+      placeFinder(3, size - 4);
+      placeFinder(size - 4, 3);
+      // Timing patterns
+      for (let i = 8; i < size - 8; i++) {
+        if (mod[6][i] === null) set(6, i, i % 2 === 0, true);
+        if (mod[i][6] === null) set(i, 6, i % 2 === 0, true);
+      }
+      // Dark module
+      set(4 * ver + 9, 8, true, true);
+      // Alignment patterns
+      const ap = ALIGN[ver];
+      if (ap.length) {
+        for (const row of ap) for (const col of ap) {
+          if (row <= 8 && col <= 8) continue;
+          if (row <= 8 && col >= size - 8) continue;
+          if (row >= size - 8 && col <= 8) continue;
+          for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) {
+            const m = Math.max(Math.abs(dr), Math.abs(dc));
+            set(row + dr, col + dc, m === 2 || m === 0, true);
+          }
+        }
+      }
+      // Reserve format areas
+      for (let i = 0; i <= 8; i++) {
+        if (mod[8][i] === null) set(8, i, false, true);
+        if (mod[i][8] === null) set(i, 8, false, true);
+      }
+      for (let i = 0; i <= 7; i++) {
+        if (mod[8][size - 1 - i] === null) set(8, size - 1 - i, false, true);
+        if (mod[size - 1 - i][8] === null) set(size - 1 - i, 8, false, true);
+      }
+      // Reserve version areas
+      if (ver >= 7) {
+        for (let i = 0; i < 18; i++) {
+          const r1 = size - 11 + (i % 3), c1 = Math.floor(i / 3);
+          if (mod[r1][c1] === null) set(r1, c1, false, true);
+          const r2 = Math.floor(i / 3), c2 = size - 11 + (i % 3);
+          if (mod[r2][c2] === null) set(r2, c2, false, true);
+        }
+      }
+      // Place data bits (zigzag)
+      let bi = 0, col = size - 1, up = true;
+      while (col >= 1) {
+        if (col === 6) col--;
+        const rows = up ? Array.from({length: size}, (_, i) => size - 1 - i) : Array.from({length: size}, (_, i) => i);
+        for (const row of rows) {
+          for (const c of [col, col - 1]) {
+            if (c >= 0 && c < size && !fn[row][c]) {
+              mod[row][c] = bi < dataBits.length ? !!dataBits[bi] : false;
+              bi++;
+            }
+          }
+        }
+        col -= 2;
+        up = !up;
+      }
+      // Apply mask
+      const maskFns = [
+        (r, c) => (r + c) % 2 === 0,
+        (r, c) => r % 2 === 0,
+        (r, c) => c % 3 === 0,
+        (r, c) => (r + c) % 3 === 0,
+        (r, c) => (Math.floor(r / 2) + Math.floor(c / 3)) % 2 === 0,
+        (r, c) => (r * c) % 2 + (r * c) % 3 === 0,
+        (r, c) => ((r * c) % 2 + (r * c) % 3) % 2 === 0,
+        (r, c) => ((r + c) % 2 + (r * c) % 3) % 2 === 0,
+      ];
+      for (let r = 0; r < size; r++) for (let c = 0; c < size; c++) {
+        if (!fn[r][c] && maskFns[mask](r, c)) mod[r][c] = !mod[r][c];
+      }
+      // Place format info
+      const ecBits = 0; // M
+      let fd = (ecBits << 3) | mask, bch = fd << 10;
+      for (let i = 4; i >= 0; i--) if (bch & (1 << (i + 10))) bch ^= 0x537 << i;
+      const fmt = ((fd << 10) | bch) ^ 0x5412;
+      for (let i = 0; i < 15; i++) {
+        const dark = !!((fmt >> i) & 1);
+        if (i < 6) mod[i][8] = dark;
+        else if (i < 8) mod[i + 1][8] = dark;
+        else mod[size - 15 + i][8] = dark;
+
+        if (i < 8) mod[8][size - i - 1] = dark;
+        else if (i < 9) mod[8][7] = dark;
+        else mod[8][15 - i - 1] = dark;
+      }
+      // Place version info
+      if (ver >= 7) {
+        let vd = ver, vb = vd << 12;
+        for (let i = 5; i >= 0; i--) if (vb & (1 << (i + 12))) vb ^= 0x1F25 << i;
+        const vi = (vd << 12) | vb;
+        for (let i = 0; i < 18; i++) {
+          const dark = !!((vi >> i) & 1);
+          mod[size - 11 + (i % 3)][Math.floor(i / 3)] = dark;
+          mod[Math.floor(i / 3)][size - 11 + (i % 3)] = dark;
+        }
+      }
+      // Penalty scoring
+      let penalty = 0;
+      // Rule 1: runs
+      for (let r = 0; r < size; r++) {
+        let cnt = 1;
+        for (let c = 1; c < size; c++) { if (mod[r][c] === mod[r][c-1]) cnt++; else { if (cnt >= 5) penalty += cnt - 2; cnt = 1; } }
+        if (cnt >= 5) penalty += cnt - 2;
+      }
+      for (let c = 0; c < size; c++) {
+        let cnt = 1;
+        for (let r = 1; r < size; r++) { if (mod[r][c] === mod[r-1][c]) cnt++; else { if (cnt >= 5) penalty += cnt - 2; cnt = 1; } }
+        if (cnt >= 5) penalty += cnt - 2;
+      }
+      // Rule 2: 2x2 blocks
+      for (let r = 0; r < size - 1; r++) for (let c = 0; c < size - 1; c++) {
+        const v = mod[r][c]; if (v === mod[r][c+1] && v === mod[r+1][c] && v === mod[r+1][c+1]) penalty += 3;
+      }
+      // Rule 3: finder-like patterns
+      const p1 = [1,0,1,1,1,0,1,0,0,0,0], p2 = [0,0,0,0,1,0,1,1,1,0,1];
+      for (let r = 0; r < size; r++) for (let c = 0; c <= size - 11; c++) {
+        let m1 = true, m2 = true;
+        for (let k = 0; k < 11; k++) { if (!!mod[r][c+k] !== !!p1[k]) m1 = false; if (!!mod[r][c+k] !== !!p2[k]) m2 = false; }
+        if (m1 || m2) penalty += 40;
+      }
+      for (let c = 0; c < size; c++) for (let r = 0; r <= size - 11; r++) {
+        let m1 = true, m2 = true;
+        for (let k = 0; k < 11; k++) { if (!!mod[r+k][c] !== !!p1[k]) m1 = false; if (!!mod[r+k][c] !== !!p2[k]) m2 = false; }
+        if (m1 || m2) penalty += 40;
+      }
+      // Rule 4: dark proportion
+      let dk = 0; for (let r = 0; r < size; r++) for (let c = 0; c < size; c++) if (mod[r][c]) dk++;
+      const pct = (dk * 100) / (size * size);
+      penalty += Math.min(Math.abs(Math.floor(pct / 5) * 5 - 50), Math.abs(Math.ceil(pct / 5) * 5 - 50)) * 2;
+
+      if (penalty < bestPenalty) { bestPenalty = penalty; bestMask = mask; bestMod = mod.map(row => row.map(v => !!v)); }
+    }
+    return { modules: bestMod, size };
+  }
+
+  return { generate };
+})();
+
+const SPS_QR_STYLES = [
+  { id: "classic", bg: "#ffffff", fg: "#000000", finderFg: "#000000" },
+  { id: "blue", bg: "#ffffff", fg: "#1565c0", finderFg: "#0d47a1", finderRadius: 0.8 },
+  { id: "green", bg: "#ffffff", fg: "#2e7d32", finderFg: "#1b5e20", finderRadius: 0.8 },
+  { id: "coral", bg: "#ffffff", fg: "#d84315", finderFg: "#bf360c", finderRadius: 0.8 },
+  { id: "purple", bg: "#ffffff", fg: "#7b1fa2", finderFg: "#6a1b9a", finderRadius: 0.8 },
+  { id: "gradient_blue", bg: "#ffffff", gradientStart: "#1e88e5", gradientEnd: "#0d47a1", finderFg: "#1565c0", finderRadius: 0.8 },
+  { id: "gradient_rainbow", bg: "#ffffff", gradientStart: "#ff6b35", gradientEnd: "#04c2c9", finderFg: "#f57c00", finderRadius: 0.8 },
+  { id: "gradient_warm", bg: "#ffffff", gradientStart: "#e53935", gradientEnd: "#ff8f00", finderFg: "#d32f2f", finderRadius: 0.8 },
+  { id: "gradient_purple", bg: "#ffffff", gradientStart: "#8e24aa", gradientEnd: "#3f51b5", finderFg: "#7b1fa2", finderRadius: 0.8 },
+  { id: "dark", bg: "#1a1a1a", fg: "#e0e0e0", finderFg: "#64b5f6", finderRadius: 0.8 },
+];
+const SPS_QR_ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="16" height="16" fill="currentColor"><path d="M48.384 45.376l412.224 0 0 84.992-412.224 0 0-84.992ZM565.44 45.376l238.656 0 0 84.992-238.656 0 0-84.992ZM891.584 45.376l86.72 0 0 86.72-86.72 0 0-86.72ZM48.384 374.4l412.224 0 0 85.056-412.224 0 0-85.056ZM45.696 45.376l84.992 0 0 412.224-84.992 0 0-412.224ZM375.616 45.376l84.992 0 0 412.224-84.992 0 0-412.224ZM189.376 200.832l115.712 0 0 115.712-115.712 0 0-115.712ZM565.44 130.368l82.752 0 0 87.232-82.752 0 0-87.232ZM804.032 130.368l90.752 0 0 160.512-90.752 0 0-160.512ZM891.584 217.6l86.72 0 0 151.872-86.72 0 0-151.872ZM651.328 282.688l152.768 0 0 109.312-152.768 0 0-109.312ZM736.832 369.408l155.392 0 0 88.128-155.392 0 0-88.128ZM565.952 372.16l85.376 0 0 85.376-85.376 0 0-85.376ZM45.696 542.784l84.992 0 0 192.576-84.992 0 0-192.576ZM130.88 717.248l91.968 0 0 92.032-91.968 0 0-92.032ZM45.696 805.632l85.184 0 0 173.056-85.184 0 0-173.056ZM217.664 542.784l261.696 0 0 105.728-261.696 0 0-105.728ZM281.344 639.104l109.184 0 0 100.48-109.184 0 0-100.48ZM370.176 717.248l109.184 0 0 174.848-109.184 0 0-174.848ZM285.44 805.632l105.088 0 0 173.056-105.088 0 0-173.056ZM197.952 869.12l102.016 0 0 109.568-102.016 0 0-109.568ZM629.184 542.784l195.264 0 0 174.464-195.264 0 0-174.464ZM871.168 542.784l107.136 0 0 107.136-107.136 0 0-107.136ZM545.088 630.016l107.136 0 0 194.304-107.136 0 0-194.304ZM716.672 692.8l107.776 0 0 111.872-107.776 0 0-111.872ZM545.088 869.12l107.136 0 0 109.568-107.136 0 0-109.568ZM802.816 892.096l175.488 0 0 86.592-175.488 0 0-86.592ZM890.56 804.672l87.744 0 0 105.728-87.744 0 0-105.728Z"/></svg>';
 const DEFAULT_DOC_ICON_LEAF = "📄";
 const DEFAULT_DOC_ICON_PARENT = "📑";
 const BLOCK_REF_ID_PATTERN = "[0-9]{14}-[0-9a-z]{7,}";
@@ -3152,6 +3415,7 @@ class SiYuanSharePlugin extends Plugin {
           )}: <span class="siyuan-plugin-share__mono">${escapeHtml(share.slug || "")}</span></div>
       <div class="siyuan-plugin-share__actions" style="align-items: center;">
         <input class="b3-text-field fn__flex-1 siyuan-plugin-share__mono" readonly value="${escapeAttr(url)}" />
+        <span class="sps-qr-btn" data-action="show-qr" data-url="${escapeAttr(url)}" title="${escapeAttr(t("siyuanShare.qr.title"))}">${SPS_QR_ICON_SVG}</span>
         <button class="b3-button b3-button--outline" data-action="copy" data-share-id="${escapeAttr(
           share.id,
         )}">${escapeHtml(t("siyuanShare.action.copyLink"))}</button>
@@ -3356,6 +3620,11 @@ class SiYuanSharePlugin extends Plugin {
           if (action === "copy") {
             const shareId = btn.getAttribute("data-share-id");
             await this.copyShareLink(shareId);
+            return;
+          }
+          if (action === "show-qr") {
+            const qrUrl = btn.getAttribute("data-url");
+            if (qrUrl) this.showQRCodeDialog(qrUrl);
             return;
           }
           if (action === "copy-info") {
@@ -3589,6 +3858,11 @@ class SiYuanSharePlugin extends Plugin {
         if (action === "copy-link") {
           const shareId = target.getAttribute("data-share-id");
           await this.copyShareLink(shareId);
+          return;
+        }
+        if (action === "show-qr") {
+          const qrUrl = target.getAttribute("data-url");
+          if (qrUrl) this.showQRCodeDialog(qrUrl);
           return;
         }
         if (action === "update") {
@@ -6039,6 +6313,11 @@ class SiYuanSharePlugin extends Plugin {
         const docId = this.currentDoc.id;
         if (!isValidDocId(docId)) throw new Error(t("siyuanShare.message.noCurrentDoc"));
 
+        if (action === "show-qr") {
+          const qrUrl = btn.getAttribute("data-url");
+          if (qrUrl) this.showQRCodeDialog(qrUrl);
+          return;
+        }
         const share = this.getShareByDocId(docId);
         if (!share) throw new Error(t("siyuanShare.message.currentDocNoShare"));
         if (action === "copy-link") return await this.copyShareLink(share.id);
@@ -6058,8 +6337,14 @@ class SiYuanSharePlugin extends Plugin {
     const btn = event.target.closest("[data-action]");
     if (!btn) return;
     const action = btn.getAttribute("data-action");
+    if (!action) return;
+    if (action === "show-qr") {
+      const qrUrl = btn.getAttribute("data-url");
+      if (qrUrl) this.showQRCodeDialog(qrUrl);
+      return;
+    }
     const shareId = btn.getAttribute("data-share-id");
-    if (!action || !shareId) return;
+    if (!shareId) return;
     void (async () => {
       try {
         if (action === "copy-link") return await this.copyShareLink(shareId);
@@ -6126,6 +6411,7 @@ class SiYuanSharePlugin extends Plugin {
         )} | ${escapeHtml(expiresLabel)} | ${escapeHtml(visitorLabel)}</div>
   <div class="siyuan-plugin-share__actions" style="align-items: center;">
     <input class="b3-text-field fn__flex-1 siyuan-plugin-share__mono" readonly value="${escapeAttr(url)}" />
+    <span class="sps-qr-btn" data-action="show-qr" data-url="${escapeAttr(url)}" title="${escapeAttr(t("siyuanShare.qr.title"))}">${SPS_QR_ICON_SVG}</span>
     <button class="b3-button b3-button--outline" data-action="copy-link">${escapeHtml(
       t("siyuanShare.action.copyLink"),
     )}</button>
@@ -6196,6 +6482,7 @@ class SiYuanSharePlugin extends Plugin {
     </div>
     <div class="sps-share-item__link">
       <input class="b3-text-field fn__flex-1 siyuan-plugin-share__mono" readonly value="${escapeAttr(url)}" />
+      <span class="sps-qr-btn" data-action="show-qr" data-url="${escapeAttr(url)}" title="${escapeAttr(t("siyuanShare.qr.title"))}">${SPS_QR_ICON_SVG}</span>
       <button class="b3-button b3-button--outline" data-action="copy-link" data-share-id="${escapeAttr(
           s.id,
         )}">${escapeHtml(t("siyuanShare.action.copyLink"))}</button>
@@ -8805,6 +9092,137 @@ class SiYuanSharePlugin extends Plugin {
     this.notify(t("siyuanShare.message.copyShareInfoSuccess"));
   }
 
+  drawQRCode(canvas, url, styleId) {
+    const qr = SPS_QR.generate(url);
+    if (!qr) return;
+    const style = SPS_QR_STYLES.find(s => s.id === styleId) || SPS_QR_STYLES[0];
+    const {modules, size: qrSize} = qr;
+    const quiet = 4;
+    const totalModules = qrSize + quiet * 2;
+    const scale = Math.floor(840 / totalModules);
+    const canvasSize = scale * totalModules;
+    canvas.width = canvasSize;
+    canvas.height = canvasSize;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = style.bg;
+    ctx.fillRect(0, 0, canvasSize, canvasSize);
+    let fgColor = style.fg || "#000000";
+    if (style.gradientStart && style.gradientEnd) {
+      const grad = ctx.createLinearGradient(0, 0, canvasSize, canvasSize);
+      grad.addColorStop(0, style.gradientStart);
+      grad.addColorStop(1, style.gradientEnd);
+      fgColor = grad;
+    }
+    const isFinderModule = (r, c) => {
+      if (r < 7 && c < 7) return true;
+      if (r < 7 && c >= qrSize - 7) return true;
+      if (r >= qrSize - 7 && c < 7) return true;
+      return false;
+    };
+    ctx.fillStyle = fgColor;
+    for (let r = 0; r < qrSize; r++) {
+      for (let c = 0; c < qrSize; c++) {
+        if (!modules[r][c]) continue;
+        if (isFinderModule(r, c)) continue;
+        ctx.fillRect((c + quiet) * scale, (r + quiet) * scale, scale, scale);
+      }
+    }
+    const drawRoundRect = (x, y, w, h, rad, color) => {
+      ctx.fillStyle = color;
+      if (rad <= 0) { ctx.fillRect(x, y, w, h); return; }
+      ctx.beginPath();
+      ctx.moveTo(x + rad, y);
+      ctx.lineTo(x + w - rad, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + rad);
+      ctx.lineTo(x + w, y + h - rad);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - rad, y + h);
+      ctx.lineTo(x + rad, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - rad);
+      ctx.lineTo(x, y + rad);
+      ctx.quadraticCurveTo(x, y, x + rad, y);
+      ctx.fill();
+    };
+    const drawFinder = (startR, startC) => {
+      const ox = (startC + quiet) * scale;
+      const oy = (startR + quiet) * scale;
+      const ff = style.finderFg || (typeof fgColor === "string" ? fgColor : "#000000");
+      const rad = (style.finderRadius || 0) * scale;
+      drawRoundRect(ox, oy, 7 * scale, 7 * scale, rad, ff);
+      drawRoundRect(ox + scale, oy + scale, 5 * scale, 5 * scale, rad * 0.7, style.bg);
+      drawRoundRect(ox + 2 * scale, oy + 2 * scale, 3 * scale, 3 * scale, rad * 0.5, ff);
+    };
+    drawFinder(0, 0);
+    drawFinder(0, qrSize - 7);
+    drawFinder(qrSize - 7, 0);
+  }
+
+  showQRCodeDialog(url) {
+    if (!url) return;
+    const t = this.t.bind(this);
+    let styleIndex = 0;
+    const total = SPS_QR_STYLES.length;
+    const canvasSize = 840;
+    const renderContent = () => {
+      return `<div class="sps-qr-dialog">
+  <span class="sps-qr-nav-btn" data-action="qr-prev">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+  </span>
+  <div class="sps-qr-center">
+    <div class="sps-qr-preview">
+      <canvas id="sps-qr-canvas" width="${canvasSize}" height="${canvasSize}"></canvas>
+    </div>
+    <span class="sps-qr-nav-index">${styleIndex + 1} / ${total}</span>
+  </div>
+  <span class="sps-qr-nav-btn" data-action="qr-next">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 6 15 12 9 18"/></svg>
+  </span>
+</div>
+<div class="b3-dialog__action" style="justify-content: center;">
+  <button class="b3-button b3-button--outline" data-action="download-qr">${escapeHtml(t("siyuanShare.qr.download"))}</button>
+</div>`;
+    };
+    const content = `<div class="sps-qr-dialog-content">${renderContent()}</div>`;
+    const redraw = (root) => {
+      const canvas = root?.querySelector?.("#sps-qr-canvas");
+      if (canvas) this.drawQRCode(canvas, url, SPS_QR_STYLES[styleIndex].id);
+    };
+    const updateView = () => {
+      const contentEl = dlg?.element?.querySelector?.(".sps-qr-dialog-content");
+      if (contentEl) { contentEl.innerHTML = renderContent(); redraw(dlg.element); }
+    };
+    const onClick = (event) => {
+      if (event.target.closest("[data-action='qr-prev']")) {
+        styleIndex = (styleIndex - 1 + total) % total;
+        updateView();
+        return;
+      }
+      if (event.target.closest("[data-action='qr-next']")) {
+        styleIndex = (styleIndex + 1) % total;
+        updateView();
+        return;
+      }
+      if (event.target.closest("[data-action='download-qr']")) {
+        const canvas = dlg?.element?.querySelector?.("#sps-qr-canvas");
+        if (!canvas) return;
+        const link = document.createElement("a");
+        link.download = "qrcode.png";
+        link.href = canvas.toDataURL("image/png");
+        link.click();
+        return;
+      }
+    };
+    const dlg = new Dialog({
+      title: t("siyuanShare.qr.title"),
+      content,
+      width: "min(420px, 90vw)",
+      destroyCallback: () => {
+        dlg.element.removeEventListener("click", onClick);
+      },
+    });
+    dlg.element.addEventListener("click", onClick);
+    redraw(dlg.element);
+  }
+
   collectSharePasswords(shares) {
     const map = {};
     if (!Array.isArray(shares)) return map;
@@ -9471,6 +9889,7 @@ class SiYuanSharePlugin extends Plugin {
   </td>
   <td>
     <div class="siyuan-plugin-share__actions">
+      <span class="sps-qr-btn" data-action="show-qr" data-url="${escapeAttr(url)}" title="${escapeAttr(t("siyuanShare.qr.title"))}">${SPS_QR_ICON_SVG}</span>
       <button class="b3-button b3-button--outline" data-action="copy-link" data-share-id="${escapeAttr(
           s.id,
         )}">${escapeHtml(t("siyuanShare.action.copyLink"))}</button>

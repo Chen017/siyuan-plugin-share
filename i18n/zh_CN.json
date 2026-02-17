@@ -184,5 +184,7 @@
   "siyuanShare.error.shareSlugInvalidLength": "链接后缀长度需在 {min} 到 {max} 个字符之间。",
   "siyuanShare.hint.linkSuffix": "新分享可留空自动生成；已分享内容留空表示保持不变。仅支持小写字母和数字，长度 {min}-{max}。",
   "siyuanShare.hint.linkSuffixPlaceholder": "可选：留空自动随机；自定义仅限小写字母和数字（{min}-{max}位）",
-  "siyuanShare.label.linkSuffix": "链接后缀"
+  "siyuanShare.label.linkSuffix": "链接后缀",
+  "siyuanShare.qr.title": "分享二维码",
+  "siyuanShare.qr.download": "下载二维码"
 }
