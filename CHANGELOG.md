@@ -3,8 +3,11 @@
 ## 0.4.3 2026/2/18
 
 - [x] 插件端新增分享链接二维码，移动场景常见需求，方便现场扫码访问
+![分享链接二维码](https://github.com/user-attachments/assets/41923cd8-e94d-43fd-890c-55caf620f8f1)
 - [x] 修复部分bug
 - [x] 服务端分享页新增搜索功能
+![分享页搜索功能](https://github.com/user-attachments/assets/2f60c3aa-f66e-430d-9986-3efb3932c847)
+
 
 ## 0.4.2 2026/2/16
 
@@ -181,4 +184,5 @@
 
 - [x] 插件初版
 - [x] 服务端初版
+
 
