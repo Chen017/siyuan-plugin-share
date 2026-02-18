@@ -7607,22 +7607,103 @@ function register_share_visitor(int $shareId, string $visitorId): void {
 
 function share_inline_asset_extensions(): array {
     return [
+        // Images
+        'apng',
         'avif',
         'bmp',
         'gif',
+        'ico',
         'jpg',
         'jpeg',
+        'jxl',
         'png',
+        'svg',
+        'tif',
+        'tiff',
         'webp',
+        // Audio
+        'aac',
+        'flac',
+        'm4a',
         'mp3',
+        'oga',
         'wav',
         'ogg',
+        'opus',
+        'weba',
+        // Video
+        'avi',
+        'm4v',
+        'mkv',
+        'mov',
         'mp4',
+        'ogv',
         'webm',
+        // Text / documents
+        'csv',
+        'json',
+        'log',
+        'srt',
         'txt',
         'md',
         'pdf',
+        'vtt',
+        'xml',
+        'yaml',
+        'yml',
     ];
+}
+
+function share_executable_asset_extensions(): array {
+    return [
+        'bat',
+        'cgi',
+        'cmd',
+        'com',
+        'cpl',
+        'dll',
+        'exe',
+        'hta',
+        'htm',
+        'html',
+        'jar',
+        'js',
+        'jse',
+        'mjs',
+        'msi',
+        'php',
+        'php3',
+        'php4',
+        'php5',
+        'php7',
+        'php8',
+        'phar',
+        'phtml',
+        'pl',
+        'ps1',
+        'psd1',
+        'psm1',
+        'py',
+        'rb',
+        'scr',
+        'sh',
+        'ts',
+        'tsx',
+        'vb',
+        'vbe',
+        'vbs',
+        'wsf',
+        'wsh',
+        'xhtml',
+    ];
+}
+
+function share_asset_is_executable(string $assetPath): bool {
+    $ext = share_asset_extension($assetPath);
+    if ($ext === '') {
+        return false;
+    }
+    return in_array($ext, share_executable_asset_extensions(), true);
 }
 
 function share_asset_extension(string $assetPath): string {
@@ -7631,6 +7712,9 @@ function share_asset_extension(string $assetPath): string {
 }
 
 function share_asset_allow_inline(string $assetPath): bool {
+    if (share_asset_is_executable($assetPath)) {
+        return false;
+    }
     $ext = share_asset_extension($assetPath);
     if ($ext === '') {
         return false;
@@ -7641,20 +7725,45 @@ function share_asset_allow_inline(string $assetPath): bool {
 function detect_share_asset_mime(string $fullPath, string $assetPath): string {
     $ext = share_asset_extension($assetPath);
     $map = [
+        'csv' => 'text/csv; charset=UTF-8',
+        'json' => 'application/json; charset=UTF-8',
+        'log' => 'text/plain; charset=UTF-8',
+        'srt' => 'text/plain; charset=UTF-8',
         'txt' => 'text/plain; charset=UTF-8',
         'md' => 'text/markdown; charset=UTF-8',
+        'vtt' => 'text/vtt; charset=UTF-8',
+        'xml' => 'application/xml; charset=UTF-8',
+        'yaml' => 'text/yaml; charset=UTF-8',
+        'yml' => 'text/yaml; charset=UTF-8',
         'pdf' => 'application/pdf',
+        'apng' => 'image/apng',
         'jpg' => 'image/jpeg',
         'jpeg' => 'image/jpeg',
         'png' => 'image/png',
         'gif' => 'image/gif',
+        'ico' => 'image/x-icon',
+        'jxl' => 'image/jxl',
+        'svg' => 'image/svg+xml',
+        'tif' => 'image/tiff',
+        'tiff' => 'image/tiff',
         'webp' => 'image/webp',
         'bmp' => 'image/bmp',
         'avif' => 'image/avif',
+        'aac' => 'audio/aac',
+        'flac' => 'audio/flac',
+        'm4a' => 'audio/mp4',
         'mp3' => 'audio/mpeg',
         'wav' => 'audio/wav',
+        'oga' => 'audio/ogg',
         'ogg' => 'audio/ogg',
+        'opus' => 'audio/ogg',
+        'weba' => 'audio/webm',
+        'avi' => 'video/x-msvideo',
+        'm4v' => 'video/mp4',
+        'mkv' => 'video/x-matroska',
+        'mov' => 'video/quicktime',
         'mp4' => 'video/mp4',
+        'ogv' => 'video/ogg',
         'webm' => 'video/webm',
     ];
     $fallback = $map[$ext] ?? 'application/octet-stream';
