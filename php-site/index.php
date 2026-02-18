@@ -3160,6 +3160,81 @@ function handle_share_comment_upload(string $slug): void {
     api_response(200, ['url' => $url, 'size' => $actualSize]);
 }
 
+function handle_share_search(string $slug): void {
+    $share = find_share_by_slug($slug);
+    if (!$share) {
+        api_response(404, null, '分享不存在');
+    }
+    if (share_is_expired($share) || share_visitor_limit_reached($share)) {
+        api_response(403, null, '分享已关闭');
+    }
+    if (share_requires_password($share) && !share_access_granted((int)$share['id'])) {
+        api_response(403, null, '请先输入访问密码');
+    }
+    $q = trim((string)($_GET['q'] ?? ''));
+    if (mb_strlen($q) < 1) {
+        api_response(200, ['results' => []]);
+    }
+    $pdo = db();
+    $shareId = (int)$share['id'];
+    $words = preg_split('/\s+/u', $q, -1, PREG_SPLIT_NO_EMPTY);
+    if (empty($words)) {
+        api_response(200, ['results' => []]);
+    }
+    $wordConditions = [];
+    $params = [':sid' => $shareId];
+    foreach ($words as $i => $word) {
+        $pk = ':qw' . $i;
+        $likeVal = '%' . str_replace(['%', '_'], ['\\%', '\\_'], $word) . '%';
+        $wordConditions[] = "(title LIKE {$pk} ESCAPE \"\\\" OR markdown LIKE {$pk} ESCAPE \"\\\")";
+        $params[$pk] = $likeVal;
+    }
+    $firstWord = $words[0];
+    $params[':q_raw'] = $firstWord;
+    $params[':q_raw2'] = $firstWord;
+    $whereWords = implode(' AND ', $wordConditions);
+    $stmt = $pdo->prepare("
+        SELECT doc_id, title, hpath,
+            CASE
+                WHEN INSTR(markdown, :q_raw) > 50 THEN
+                    SUBSTR(markdown, INSTR(markdown, :q_raw) - 40, 200)
+                WHEN INSTR(markdown, :q_raw) > 0 THEN
+                    SUBSTR(markdown, 1, 200)
+                ELSE
+                    SUBSTR(markdown, 1, 200)
+            END AS snippet_raw,
+            INSTR(markdown, :q_raw2) AS match_pos
+        FROM share_docs
+        WHERE share_id = :sid
+          AND {$whereWords}
+        ORDER BY sort_order ASC, id ASC
+        LIMIT 30
+    ");
+    $stmt->execute($params);
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $results = [];
+    foreach ($rows as $row) {
+        $raw = $row['snippet_raw'] ?? '';
+        $raw = preg_replace('/^---\s*\n.*?\n---\s*\n/s', '', $raw);
+        $snippet = preg_replace('/[#*`~>\[\]!]+/', '', $raw);
+        $snippet = trim(preg_replace('/\s+/', ' ', $snippet));
+        $matchPos = (int)($row['match_pos'] ?? 0);
+        if ($matchPos > 50) {
+            $snippet = '...' . $snippet;
+        }
+        if (mb_strlen($snippet) > 120) {
+            $snippet = mb_substr($snippet, 0, 120) . '...';
+        }
+        $results[] = [
+            'docId'   => $row['doc_id'],
+            'title'   => $row['title'],
+            'hpath'   => $row['hpath'] ?? '',
+            'snippet' => $snippet,
+        ];
+    }
+    api_response(200, ['results' => $results]);
+}
+
 function handle_share_comment_submit(string $slug): void {
     check_csrf();
     $share = find_share_by_slug($slug);
@@ -8186,6 +8261,18 @@ function render_doc_tree_icon(?array $doc, string $assetBasePath): string {
     return '';
 }
 
+function render_share_search_box(string $slug): string {
+    $html  = '<div class="kb-search" data-share-search>';
+    $html .= '<div class="kb-search-input-wrap">';
+    $html .= '<svg class="kb-search-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.35-4.35"/></svg>';
+    $html .= '<input class="kb-search-input" type="search" placeholder="搜索..." data-share-search-input autocomplete="off" spellcheck="false">';
+    $html .= '<button class="kb-search-clear" type="button" data-share-search-clear hidden aria-label="清除搜索">&times;</button>';
+    $html .= '</div>';
+    $html .= '<div class="kb-search-results" data-share-search-results hidden></div>';
+    $html .= '</div>';
+    return $html;
+}
+
 function render_doc_tree(array $nodes, string $slug, ?string $activeId = null, int $level = 0, string $path = '', string $assetBasePath = ''): string {
     if (empty($nodes)) {
         return '';
@@ -8389,6 +8476,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $reportModalHtml = render_share_report_form($share, $viewer, (string)$activeDocId);
             $treeHtml = render_doc_tree(build_doc_tree($docs, $activeDocId), $slug, $activeDocId, 0, '', $assetBasePath);
             $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
+            $sidebar .= render_share_search_box($slug);
             $sidebar .= '<div class="kb-side-tabs" data-share-tabs data-share-default="tree">';
             $sidebar .= '<button class="kb-side-tab is-active" type="button" data-share-tab="tree">文档树</button>';
             $sidebar .= '<button class="kb-side-tab" type="button" data-share-tab="toc">目录</button>';
@@ -8473,6 +8561,7 @@ function route_share(string $slug, ?string $docId = null): void {
         $commentHtml = render_share_comments($share, $viewer, null);
         $reportModalHtml = render_share_report_form($share, $viewer, null);
         $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
+        $sidebar .= render_share_search_box($slug);
         $sidebar .= '<div class="kb-side-tabs" data-share-tabs data-share-default="toc">';
         $sidebar .= '<button class="kb-side-tab is-active" type="button" data-share-tab="toc">目录</button>';
         $sidebar .= '</div>';
@@ -8502,6 +8591,7 @@ function route_share(string $slug, ?string $docId = null): void {
     if ($share['type'] === 'notebook') {
         $treeHtml = render_doc_tree(build_doc_tree($docs, $docId), $slug, $docId, 0, '', $assetBasePath);
         $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
+        $sidebar .= render_share_search_box($slug);
         $sidebar .= '<div class="kb-side-tabs" data-share-tabs data-share-default="tree">';
         $sidebar .= '<button class="kb-side-tab is-active" type="button" data-share-tab="tree">文档树</button>';
         $sidebar .= '<button class="kb-side-tab" type="button" data-share-tab="toc">目录</button>';
@@ -8689,6 +8779,10 @@ if (preg_match('#^/s/([a-zA-Z0-9_-]+)/comment/delete$#', $path, $matches) && $_S
 
 if (preg_match('#^/s/([a-zA-Z0-9_-]+)/report$#', $path, $matches) && $_SERVER['REQUEST_METHOD'] === 'POST') {
     handle_share_report_submit($matches[1]);
+}
+
+if (preg_match('#^/s/([a-zA-Z0-9_-]+)/search$#', $path, $matches) && $_SERVER['REQUEST_METHOD'] === 'GET') {
+    handle_share_search($matches[1]);
 }
 
 if (preg_match('#^/s/([a-zA-Z0-9_-]+)(?:/([^/]+))?$#', $path, $matches)) {

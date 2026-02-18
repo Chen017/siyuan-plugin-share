@@ -5447,7 +5447,550 @@ const initImageViewer = () => {
         fitMarkdownIframes(target);
         initIframeFullscreen(target);
         fitMarkdownVideos(target);
+        target.setAttribute("data-sps-rendered", "1");
       });
+  };
+
+  const initShareSearch = () => {
+    const searchContainer = document.querySelector("[data-share-search]");
+    if (!searchContainer) return;
+
+    const input = searchContainer.querySelector("[data-share-search-input]");
+    const clearBtn = searchContainer.querySelector("[data-share-search-clear]");
+    const resultsEl = searchContainer.querySelector("[data-share-search-results]");
+    if (!input || !resultsEl) return;
+
+    const sidebar = searchContainer.closest("[data-share-sidebar]");
+    const slug = sidebar?.dataset?.shareSlug || "";
+    if (!slug) return;
+
+    let debounceTimer = null;
+    let abortController = null;
+
+    const getBasePath = () => {
+      const pathMatch = window.location.pathname.match(/^(.*?)\/s\//);
+      return pathMatch ? pathMatch[1] : "";
+    };
+
+    const escapeHtml = (str) => {
+      const div = document.createElement("div");
+      div.textContent = str;
+      return div.innerHTML;
+    };
+
+    const highlightText = (text, query) => {
+      if (!query) return escapeHtml(text);
+      const escaped = escapeHtml(text);
+      const words = query.split(/\s+/).filter(w => w.length > 0);
+      if (!words.length) return escaped;
+      const pattern = words.map(w => {
+        const wEscaped = escapeHtml(w);
+        return wEscaped.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      }).join("|");
+      const regex = new RegExp("(" + pattern + ")", "gi");
+      return escaped.replace(regex, '<mark class="kb-search-mark">$1</mark>');
+    };
+
+    const hideTabsAndPanels = (hide) => {
+      const tabs = sidebar?.querySelector("[data-share-tabs]");
+      const panels = sidebar?.querySelectorAll("[data-share-panel]");
+      if (tabs) tabs.hidden = !!hide;
+      if (panels) panels.forEach(p => { if (hide) p.hidden = true; });
+      if (!hide) {
+        if (tabs) tabs.hidden = false;
+        const activeTab = tabs?.querySelector(".kb-side-tab.is-active");
+        if (activeTab) activeTab.click();
+      }
+    };
+
+    const doSearch = async (query) => {
+      if (abortController) abortController.abort();
+      if (!query || query.length < 1) {
+        resultsEl.hidden = true;
+        resultsEl.innerHTML = "";
+        hideTabsAndPanels(false);
+        return;
+      }
+      abortController = new AbortController();
+      const base = getBasePath();
+      const url = base + "/s/" + encodeURIComponent(slug) + "/search?q=" + encodeURIComponent(query);
+      try {
+        const resp = await fetch(url, {
+          credentials: "same-origin",
+          signal: abortController.signal,
+        });
+        const payload = await resp.json().catch(() => null);
+        if (!payload || payload.code !== 0) {
+          resultsEl.innerHTML = '<div class="kb-search-empty">搜索失败</div>';
+          resultsEl.hidden = false;
+          hideTabsAndPanels(true);
+          return;
+        }
+        const results = payload.data?.results || [];
+        renderResults(results, query);
+      } catch (err) {
+        if (err?.name === "AbortError") return;
+        resultsEl.innerHTML = '<div class="kb-search-empty">搜索出错</div>';
+        resultsEl.hidden = false;
+        hideTabsAndPanels(true);
+      }
+    };
+
+    const renderResults = (results, query) => {
+      if (!results.length) {
+        resultsEl.innerHTML = '<div class="kb-search-empty">没有找到结果</div>';
+        resultsEl.hidden = false;
+        hideTabsAndPanels(true);
+        return;
+      }
+      const base = getBasePath();
+      let html = '<ul class="kb-search-list">';
+      results.forEach((r) => {
+        const titleHtml = highlightText(r.title, query);
+        const snippetHtml = highlightText(r.snippet, query);
+        const pathHtml = r.hpath ? escapeHtml(r.hpath) : '';
+        const href = base + "/s/" + encodeURIComponent(slug) + "/" + encodeURIComponent(r.docId) + "?highlight=" + encodeURIComponent(query);
+        html += '<li class="kb-search-item">';
+        html += '<a class="kb-search-link" href="' + escapeHtml(href) + '" target="_blank" rel="noopener">';
+        html += '<div class="kb-search-title">' + titleHtml + '</div>';
+        if (pathHtml) {
+          html += '<div class="kb-search-path">' + pathHtml + '</div>';
+        }
+        html += '<div class="kb-search-snippet">' + snippetHtml + '</div>';
+        html += '</a></li>';
+      });
+      html += '</ul>';
+      resultsEl.innerHTML = html;
+      resultsEl.hidden = false;
+      hideTabsAndPanels(true);
+    };
+
+    const clearSearch = () => {
+      input.value = "";
+      if (clearBtn) clearBtn.hidden = true;
+      resultsEl.hidden = true;
+      resultsEl.innerHTML = "";
+      hideTabsAndPanels(false);
+    };
+
+    input.addEventListener("input", () => {
+      const val = input.value.trim();
+      if (clearBtn) clearBtn.hidden = val.length === 0;
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => doSearch(val), 300);
+    });
+
+    if (clearBtn) {
+      clearBtn.addEventListener("click", () => {
+        clearSearch();
+        input.focus();
+      });
+    }
+  };
+
+  const initSearchHighlight = () => {
+    let highlightedMarks = [];
+    let markerBuildRaf = 0;
+    let markerResizeObserver = null;
+    let highlightBuildRaf = 0;
+    let highlightRetryTimer = 0;
+    let highlightAttempt = 0;
+    let autoScrollKey = "";
+    let autoScrollPending = false;
+    let autoScrollLastTop = null;
+    let autoScrollStableCount = 0;
+    let autoScrollAdjustCount = 0;
+    let autoScrollDeadline = 0;
+    let autoScrollDebounceTimer = 0;
+    let highlightDeferredUntilLoad = false;
+    const highlightMaxAttempts = 8;
+    const autoScrollMaxAdjustments = 6;
+    const autoScrollTolerancePx = 6;
+
+    const getHighlightQueryFromUrl = () => {
+      const params = new URLSearchParams(window.location.search);
+      return String(params.get("highlight") || "").trim();
+    };
+
+    // Disable browser scroll restoration when highlight is present,
+    // so our scroll-to-mark logic is not overridden on refresh.
+    if (getHighlightQueryFromUrl() && "scrollRestoration" in history) {
+      history.scrollRestoration = "manual";
+    }
+
+    const clearScrollbarMarkers = () => {
+      const existing = document.querySelector(".kb-search-scrollbar-track");
+      if (existing) existing.remove();
+    };
+
+    const resetAutoScrollState = () => {
+      autoScrollKey = "";
+      autoScrollPending = false;
+      autoScrollLastTop = null;
+      autoScrollStableCount = 0;
+      autoScrollAdjustCount = 0;
+      autoScrollDeadline = 0;
+      clearTimeout(autoScrollDebounceTimer);
+    };
+
+    const getScrollMetrics = () => {
+      const scroller = document.scrollingElement || document.documentElement;
+      const docHeight = Math.max(scroller?.scrollHeight || 0, 1);
+      const viewHeight = Math.max(scroller?.clientHeight || window.innerHeight || 0, 1);
+      const maxScroll = Math.max(docHeight - viewHeight, 0);
+      const scrollbarWidth = Math.max(window.innerWidth - document.documentElement.clientWidth, 0);
+      return {scroller, docHeight, viewHeight, maxScroll, scrollbarWidth};
+    };
+
+    const getViewportOffset = () => {
+      const topbar = document.querySelector(".app-topbar");
+      if (!topbar) return 20;
+      return topbar.getBoundingClientRect().height + 16;
+    };
+
+    const getTargetScrollTop = (mark, metrics) => {
+      if (!metrics) return null;
+      if (!mark?.isConnected) return null;
+      const rect = mark.getBoundingClientRect();
+      const currentTop = metrics.scroller?.scrollTop ?? window.scrollY;
+      const absTop = rect.top + currentTop;
+      const rawMarginTop = window.getComputedStyle(mark).scrollMarginTop;
+      const scrollMarginTop = Number.parseFloat(rawMarginTop) || 0;
+      return Math.min(Math.max(absTop - scrollMarginTop, 0), metrics.maxScroll);
+    };
+
+    const wrapTextMatches = (root, query) => {
+      const marks = [];
+      const words = query.split(/\s+/).filter(w => w.length > 0);
+      if (!words.length) return marks;
+      const lowerWords = words.map(w => w.toLowerCase());
+      const shouldSkipTextNode = (node) => {
+        const parent = node?.parentElement;
+        if (!parent) return true;
+        if (parent.closest("script,style,textarea,template")) return true;
+        if (parent.closest("[hidden],[aria-hidden='true'],details:not([open])")) return true;
+        if (parent.closest(".code-lines,.code-header")) return true;
+        return false;
+      };
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+        acceptNode: (node) => {
+          if (shouldSkipTextNode(node)) return NodeFilter.FILTER_REJECT;
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      });
+      const textNodes = [];
+      while (walker.nextNode()) textNodes.push(walker.currentNode);
+      if (!textNodes.length) return marks;
+
+      // Concatenate all text nodes into one string so we can match across element boundaries
+      let fullText = "";
+      const nodeInfo = [];
+      for (const node of textNodes) {
+        const text = node.textContent || "";
+        nodeInfo.push({ node, start: fullText.length, len: text.length });
+        fullText += text;
+      }
+      const lowerFull = fullText.toLowerCase();
+
+      // Find all match positions for each word in the concatenated text
+      const matchRanges = [];
+      for (const lw of lowerWords) {
+        let pos = 0;
+        while (true) {
+          const idx = lowerFull.indexOf(lw, pos);
+          if (idx < 0) break;
+          matchRanges.push([idx, idx + lw.length]);
+          pos = idx + lw.length;
+        }
+      }
+      if (!matchRanges.length) return marks;
+
+      // Sort and merge overlapping ranges
+      matchRanges.sort((a, b) => a[0] - b[0]);
+      const merged = [[matchRanges[0][0], matchRanges[0][1]]];
+      for (let i = 1; i < matchRanges.length; i++) {
+        const last = merged[merged.length - 1];
+        if (matchRanges[i][0] <= last[1]) {
+          last[1] = Math.max(last[1], matchRanges[i][1]);
+        } else {
+          merged.push([matchRanges[i][0], matchRanges[i][1]]);
+        }
+      }
+
+      // Map match ranges back to individual text nodes, process in reverse to preserve offsets
+      for (let ni = nodeInfo.length - 1; ni >= 0; ni--) {
+        const info = nodeInfo[ni];
+        const nStart = info.start;
+        const nEnd = info.start + info.len;
+        // Collect overlapping highlight ranges for this node (in local offsets)
+        const overlaps = [];
+        for (const [ms, me] of merged) {
+          if (me <= nStart || ms >= nEnd) continue;
+          overlaps.push([Math.max(ms, nStart) - nStart, Math.min(me, nEnd) - nStart]);
+        }
+        if (!overlaps.length) continue;
+        const text = info.node.textContent || "";
+        const frag = document.createDocumentFragment();
+        let lastEnd = 0;
+        for (const [os, oe] of overlaps) {
+          if (os > lastEnd) {
+            frag.appendChild(document.createTextNode(text.substring(lastEnd, os)));
+          }
+          const mark = document.createElement("mark");
+          mark.className = "kb-search-hl";
+          mark.textContent = text.substring(os, oe);
+          marks.push(mark);
+          frag.appendChild(mark);
+          lastEnd = oe;
+        }
+        if (lastEnd < text.length) {
+          frag.appendChild(document.createTextNode(text.substring(lastEnd)));
+        }
+        info.node.parentNode.replaceChild(frag, info.node);
+      }
+      // Marks were collected in reverse order, fix it
+      marks.reverse();
+      return marks;
+    };
+
+    const clearTextMatches = (root) => {
+      if (!root) return;
+      root.querySelectorAll("mark.kb-search-hl").forEach((mark) => {
+        const textNode = document.createTextNode(mark.textContent || "");
+        mark.replaceWith(textNode);
+      });
+      if (typeof root.normalize === "function") {
+        root.normalize();
+      }
+    };
+
+    const buildScrollbarMarkers = (marks) => {
+      clearScrollbarMarkers();
+      if (!marks.length) return;
+      const metrics = getScrollMetrics();
+      const {docHeight, viewHeight, maxScroll, scrollbarWidth} = metrics;
+      if (maxScroll <= 0) return;
+      const track = document.createElement("div");
+      track.className = "kb-search-scrollbar-track";
+      if (scrollbarWidth > 0) {
+        track.style.right = "0";
+        track.style.width = `${scrollbarWidth}px`;
+      }
+      const scrollbarInset = scrollbarWidth > 0 ? scrollbarWidth : 0;
+      const trackLength = Math.max(viewHeight - scrollbarInset * 2, 1);
+      const thumbSize = Math.min(
+        trackLength,
+        Math.max((viewHeight / docHeight) * trackLength, 8),
+      );
+      const thumbTravel = Math.max(trackLength - thumbSize, 0);
+      marks.forEach((mark) => {
+        const targetScrollTop = getTargetScrollTop(mark, metrics);
+        if (targetScrollTop === null) return;
+        // Align marker to native scrollbar thumb center trajectory.
+        const progress = Math.min(Math.max(targetScrollTop / maxScroll, 0), 1);
+        const thumbTop = scrollbarInset + progress * thumbTravel;
+        const markerY = thumbTop + thumbSize / 2;
+        const pct = Math.min((markerY / viewHeight) * 100, 100);
+        const dot = document.createElement("div");
+        dot.className = "kb-search-scrollbar-mark";
+        if (scrollbarWidth > 0) {
+          dot.style.left = "1px";
+          dot.style.right = "1px";
+          dot.style.width = "auto";
+        }
+        dot.style.top = pct + "%";
+        dot.style.transform = "translateY(-50%)";
+        dot.addEventListener("click", () => {
+          const nextMetrics = getScrollMetrics();
+          const nextTarget = getTargetScrollTop(mark, nextMetrics);
+          if (nextTarget === null) return;
+          const offset = getViewportOffset();
+          window.scrollTo({ top: Math.max(nextTarget - offset, 0), behavior: "smooth" });
+        });
+        track.appendChild(dot);
+      });
+      document.body.appendChild(track);
+    };
+
+    const scheduleMarkerBuild = () => {
+      if (markerBuildRaf) return;
+      markerBuildRaf = window.requestAnimationFrame(() => {
+        markerBuildRaf = 0;
+        buildScrollbarMarkers(highlightedMarks);
+      });
+    };
+
+    const setupMarkerAutoRefresh = () => {
+      window.addEventListener("resize", scheduleMarkerBuild, {passive: true});
+      if (typeof window.ResizeObserver !== "function") return;
+      markerResizeObserver = new window.ResizeObserver(() => {
+        scheduleMarkerBuild();
+        rearmAutoScrollIfNeeded();
+        if (autoScrollPending) {
+          clearTimeout(autoScrollDebounceTimer);
+          autoScrollDebounceTimer = setTimeout(() => {
+            applyAutoScrollCorrection();
+          }, 150);
+        }
+      });
+      if (document.documentElement) markerResizeObserver.observe(document.documentElement);
+      if (document.body) markerResizeObserver.observe(document.body);
+    };
+
+    const applyAutoScrollCorrection = ({behavior = "auto"} = {}) => {
+      if (!autoScrollPending) return;
+      if (autoScrollDeadline > 0 && Date.now() > autoScrollDeadline) {
+        autoScrollPending = false;
+        return;
+      }
+      const firstMark = highlightedMarks[0];
+      if (!firstMark?.isConnected) return;
+      const metrics = getScrollMetrics();
+      const nextTop = getTargetScrollTop(firstMark, metrics);
+      if (nextTop === null) return;
+      const offset = getViewportOffset();
+      const scrollTarget = Math.max(nextTop - offset, 0);
+      if (autoScrollLastTop === null || Math.abs(scrollTarget - autoScrollLastTop) > autoScrollTolerancePx) {
+        window.scrollTo({top: scrollTarget, behavior});
+        autoScrollLastTop = scrollTarget;
+        autoScrollStableCount = 0;
+        autoScrollAdjustCount += 1;
+        if (autoScrollAdjustCount >= autoScrollMaxAdjustments) {
+          autoScrollPending = false;
+        }
+        return;
+      }
+      autoScrollStableCount += 1;
+      if (autoScrollStableCount >= 2) {
+        autoScrollPending = false;
+      }
+    };
+
+    const rearmAutoScrollIfNeeded = () => {
+      if (autoScrollPending) return;
+      if (!highlightedMarks.length) return;
+      if (autoScrollDeadline <= 0 || Date.now() > autoScrollDeadline) return;
+      const firstMark = highlightedMarks[0];
+      if (!firstMark?.isConnected) return;
+      const metrics = getScrollMetrics();
+      const nextTop = getTargetScrollTop(firstMark, metrics);
+      if (nextTop === null) return;
+      const offset = getViewportOffset();
+      const scrollTarget = Math.max(nextTop - offset, 0);
+      const currentTop = metrics.scroller?.scrollTop ?? window.scrollY;
+      if (Math.abs(scrollTarget - currentTop) <= autoScrollTolerancePx) return;
+      autoScrollPending = true;
+      autoScrollLastTop = null;
+      autoScrollStableCount = 0;
+      autoScrollAdjustCount = 0;
+    };
+
+    const scheduleHighlightAfterLayoutStable = () => {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          scheduleHighlightRun();
+        });
+      });
+    };
+
+    const runHighlight = () => {
+      if (highlightRetryTimer) {
+        window.clearTimeout(highlightRetryTimer);
+        highlightRetryTimer = 0;
+      }
+      const highlight = getHighlightQueryFromUrl();
+      const allMarks = [];
+      const title = document.querySelector("h1.kb-title, .share-header h1");
+      const body = document.querySelector(".markdown-body");
+      if (!body) {
+        if (highlight && highlightAttempt < highlightMaxAttempts) {
+          highlightAttempt += 1;
+          const delay = Math.min(120 * highlightAttempt, 800);
+          highlightRetryTimer = window.setTimeout(() => {
+            scheduleHighlightRun();
+          }, delay);
+        }
+        return;
+      }
+      const hasMarkdownSource = !!document.querySelector("textarea.markdown-source[data-md-id]");
+      const markdownRendered = body.getAttribute("data-sps-rendered") === "1";
+      if (highlight && hasMarkdownSource && !markdownRendered) {
+        if (highlightAttempt < highlightMaxAttempts) {
+          highlightAttempt += 1;
+          const delay = Math.min(120 * highlightAttempt, 800);
+          highlightRetryTimer = window.setTimeout(() => {
+            scheduleHighlightRun();
+          }, delay);
+        }
+        return;
+      }
+      clearTextMatches(title);
+      clearTextMatches(body);
+      if (!highlight) {
+        highlightedMarks = [];
+        resetAutoScrollState();
+        scheduleMarkerBuild();
+        return;
+      }
+      if (title) {
+        const titleMarks = wrapTextMatches(title, highlight);
+        allMarks.push(...titleMarks);
+      }
+      const bodyMarks = wrapTextMatches(body, highlight);
+      allMarks.push(...bodyMarks);
+      highlightedMarks = allMarks.filter((mark) => mark?.isConnected);
+      if (highlightedMarks.length > 0) {
+        highlightAttempt = 0;
+        highlightedMarks[0].classList.add("kb-search-hl-first");
+        const key = `${window.location.pathname}?${window.location.search}`;
+        if (autoScrollKey !== key) {
+          autoScrollKey = key;
+          autoScrollPending = true;
+          autoScrollLastTop = null;
+          autoScrollStableCount = 0;
+          autoScrollAdjustCount = 0;
+          autoScrollDeadline = Date.now() + 10000;
+        } else {
+          rearmAutoScrollIfNeeded();
+        }
+        applyAutoScrollCorrection({behavior: "auto"});
+      }
+      scheduleMarkerBuild();
+      if (!markerResizeObserver) setupMarkerAutoRefresh();
+      if (!highlightedMarks.length && highlightAttempt < highlightMaxAttempts) {
+        highlightAttempt += 1;
+        const delay = Math.min(120 * highlightAttempt, 800);
+        highlightRetryTimer = window.setTimeout(() => {
+          scheduleHighlightRun();
+        }, delay);
+      }
+    };
+
+    const scheduleHighlightRun = () => {
+      if (highlightBuildRaf) return;
+      highlightBuildRaf = window.requestAnimationFrame(() => {
+        highlightBuildRaf = 0;
+        runHighlight();
+      });
+    };
+
+    const triggerHighlight = () => {
+      highlightAttempt = 0;
+      const highlight = getHighlightQueryFromUrl();
+      if (highlight && document.readyState !== "complete") {
+        if (!highlightDeferredUntilLoad) {
+          highlightDeferredUntilLoad = true;
+          window.addEventListener("load", () => {
+            highlightDeferredUntilLoad = false;
+            scheduleHighlightAfterLayoutStable();
+          }, {once: true});
+        }
+        return;
+      }
+      scheduleHighlightAfterLayoutStable();
+    };
+
+    window.addEventListener("sps:share-dynamic-ready", triggerHighlight);
   };
 
   const refreshShareDynamicContent = () => {
@@ -5472,6 +6015,11 @@ const initImageViewer = () => {
       }
       try {
         initShareFootnotePreview();
+      } catch (err) {
+        console.error(err);
+      }
+      try {
+        window.dispatchEvent(new Event("sps:share-dynamic-ready"));
       } catch (err) {
         console.error(err);
       }
@@ -5510,6 +6058,8 @@ const initImageViewer = () => {
   initFlashToast();
   initAdminCommentModal();
   initScanProgress();
+  initShareSearch();
+  initSearchHighlight();
   initShareSidebarTabs();
   initShareDrawer();
   initShareDocNavigation();
