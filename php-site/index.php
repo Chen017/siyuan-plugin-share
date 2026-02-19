@@ -83,7 +83,7 @@ function base_path(): string {
 function base_url(): string {
     static $customBaseUrl = null;
     if ($customBaseUrl === null) {
-        $customBaseUrl = '';
+        $customBaseUrl = trim((string)get_setting('site_base_url', ''));
         if ($customBaseUrl !== '') {
             $customBaseUrl = rtrim($customBaseUrl, '/');
         }
@@ -472,6 +472,7 @@ function seed_default_settings(PDO $pdo): void {
     ensure_setting($pdo, 'smtp_pass', (string)$config['smtp_pass']);
     ensure_setting($pdo, 'banned_words', '');
     ensure_setting($pdo, 'site_icp', '');
+    ensure_setting($pdo, 'site_contact_email', '');
     ensure_setting($pdo, 'site_base_url', '');
     ensure_setting($pdo, 'site_head_html', '');
     ensure_setting($pdo, 'access_stats_default_enabled', '1');
@@ -518,15 +519,6 @@ function check_csrf(): void {
         echo 'CSRF 校验失败。';
         exit;
     }
-}
-
-function require_feature_enabled(bool $enabled): void {
-    if ($enabled) {
-        return;
-    }
-    http_response_code(404);
-    echo '未找到。';
-    exit;
 }
 
 function flash(string $key, ?string $value = null): ?string {
@@ -626,19 +618,19 @@ function access_stats_retention_days(int $userId): int {
 }
 
 function allow_registration(): bool {
-    return false;
+    return get_bool_setting('allow_registration', true);
 }
 
 function captcha_enabled(): bool {
-    return false;
+    return get_bool_setting('captcha_enabled', true);
 }
 
 function email_verification_enabled(): bool {
-    return false;
+    return get_bool_setting('email_verification_enabled', false);
 }
 
 function smtp_enabled(): bool {
-    return false;
+    return get_bool_setting('smtp_enabled', false);
 }
 
 function email_verification_available(): bool {
@@ -651,7 +643,7 @@ function default_storage_limit_bytes(): int {
 }
 
 function get_banned_words_raw(): string {
-    return '';
+    return (string)get_setting('banned_words', '');
 }
 
 function get_banned_words(): array {
@@ -684,20 +676,6 @@ function string_sub(string $text, int $start, int $length): string {
         return (string)mb_substr($text, $start, $length, 'UTF-8');
     }
     return substr($text, $start, $length);
-}
-
-function format_url_label(string $url, int $max = 48): string {
-    $raw = trim($url);
-    if ($raw === '' || $max <= 0) {
-        return $raw;
-    }
-    if (function_exists('mb_strimwidth')) {
-        return (string)mb_strimwidth($raw, 0, $max, '…', 'UTF-8');
-    }
-    if (strlen($raw) <= $max) {
-        return $raw;
-    }
-    return substr($raw, 0, max(0, $max - 1)) . '…';
 }
 
 function find_banned_word(string $text, array $words): ?array {
@@ -1030,6 +1008,10 @@ function render_share_stats(array $share, string $extraHtml = ''): string {
     $expiresAt = (int)($share['expires_at'] ?? 0);
     $visitorLimit = (int)($share['visitor_limit'] ?? 0);
     $chips = [];
+    $chips[] = ['label' => '访问次数', 'value' => $count . ' 次'];
+    if ($created !== '') {
+        $chips[] = ['label' => '创建时间', 'value' => $created];
+    }
     if ($expiresAt > 0) {
         $chips[] = ['label' => '到期时间', 'value' => date('Y-m-d H:i', $expiresAt)];
     }
@@ -1127,17 +1109,6 @@ function build_access_stats_query_url(array $overrides = []): string {
     return base_path() . '/dashboard' . ($qs ? '?' . $qs : '') . '#access-stats';
 }
 
-function build_admin_home_query_url(array $overrides = []): string {
-    $query = array_merge($_GET, $overrides);
-    foreach ($query as $key => $value) {
-        if ($value === null || $value === '') {
-            unset($query[$key]);
-        }
-    }
-    $qs = http_build_query($query);
-    return base_path() . '/admin-home' . ($qs ? '?' . $qs : '');
-}
-
 function render_hidden_inputs(array $values): string {
     $html = '';
     foreach ($values as $key => $value) {
@@ -1232,7 +1203,7 @@ function render_page(string $title, string $content, ?array $user = null, string
         echo "<div class='share-page'>";
         echo render_share_icon_defs();
         echo $content;
-        echo "<footer class='share-footer'><a href='https://github.com/b8l8u8e8/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>b8l8u8e8</a> 提供上游支持 | 来自 <a href='https://github.com/Chen017/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Fork</a></footer>";
+        echo "<footer class='share-footer'>由 <a href='https://github.com/b8l8u8e8/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>b8l8u8e8</a> 提供支持</footer>";
         echo "<button class='share-side-trigger' type='button' data-share-drawer-open aria-label='打开侧边栏'><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='currentColor' d='M4 6h16v2H4zM4 11h16v2H4zM4 16h16v2H4z'/></svg><span>导航</span></button>";
         echo "<div class='share-side-backdrop' data-share-drawer-close></div>";
         echo "<button class='scroll-top' type='button' data-scroll-top aria-label='回到顶部'><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='currentColor' d='M12 2c-2.76 0-5 2.24-5 5v2.5L4 13l4.5 1L12 22l3.5-8L20 13l-3-3.5V7c0-2.76-2.24-5-5-5zm0 3a2 2 0 0 1 2 2v1.5l-2 2-2-2V7a2 2 0 0 1 2-2z'/></svg></button>";
@@ -1245,12 +1216,18 @@ function render_page(string $title, string $content, ?array $user = null, string
             ['key' => 'account', 'label' => '账号设置', 'href' => $base . '/account'],
         ];
         if (($user['role'] ?? '') === 'admin') {
+            $reportBadge = pending_report_count();
             $navItems = [
+                ['key' => 'dashboard', 'label' => '控制台', 'href' => $base . '/dashboard'],
                 ['key' => 'account', 'label' => '账号设置', 'href' => $base . '/account'],
                 ['key' => 'admin-home', 'label' => '数据统计', 'href' => $base . '/admin-home'],
                 ['key' => 'admin-settings', 'label' => '站点设置', 'href' => $base . '/admin#settings'],
                 ['key' => 'admin-announcements', 'label' => '公告管理', 'href' => $base . '/admin#announcements'],
+                ['key' => 'admin-reports', 'label' => '举报管理', 'href' => $base . '/admin#reports', 'badge' => $reportBadge],
+                ['key' => 'admin-users', 'label' => '用户管理', 'href' => $base . '/admin#users'],
                 ['key' => 'admin-shares', 'label' => '分享管理', 'href' => $base . '/admin#shares'],
+                ['key' => 'admin-chunks', 'label' => '分片清理', 'href' => $base . '/admin#chunks'],
+                ['key' => 'admin-scan', 'label' => '违禁词扫描', 'href' => $base . '/admin#scan'],
             ];
         }
         echo "<div class='app-shell'>";
@@ -1296,7 +1273,7 @@ function render_page(string $title, string $content, ?array $user = null, string
         echo "<main class='app-content'>";
         echo $content;
         echo "</main>";
-        echo "<footer class='share-footer'><a href='https://github.com/b8l8u8e8/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>b8l8u8e8</a> 提供上游支持 | 来自 <a href='https://github.com/Chen017/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Fork</a></footer>";
+        echo "<footer class='app-footer'>由 <a href='https://github.com/b8l8u8e8/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>b8l8u8e8</a> 提供支持</footer>";
         echo "</div>";
         echo "</div>";
         echo "<div class='app-side-backdrop' data-app-drawer-close></div>";
@@ -1306,7 +1283,7 @@ function render_page(string $title, string $content, ?array $user = null, string
         echo "</div>";
     }
 
-    if ($layout !== 'app' && $layout !== 'auth') {
+    if ($user && $layout === 'app') {
         $announcements = get_active_announcements();
         if (should_show_announcement_modal($announcements)) {
             echo render_announcement_modal($announcements);
@@ -2132,7 +2109,7 @@ function country_code_zh_map(): array {
         'HT' => '海地',
         'HM' => '赫德岛和麦克唐纳群岛',
         'HN' => '洪都拉斯',
-        'HK' => '香港',
+        'HK' => '中国香港',
         'HU' => '匈牙利',
         'IS' => '冰岛',
         'IN' => '印度',
@@ -2163,7 +2140,7 @@ function country_code_zh_map(): array {
         'LI' => '列支敦士登',
         'LT' => '立陶宛',
         'LU' => '卢森堡',
-        'MO' => '澳门',
+        'MO' => '中国澳门',
         'MK' => '北马其顿',
         'MG' => '马达加斯加',
         'MW' => '马拉维',
@@ -2249,7 +2226,7 @@ function country_code_zh_map(): array {
         'SE' => '瑞典',
         'CH' => '瑞士',
         'SY' => '叙利亚',
-        'TW' => '台湾',
+        'TW' => '中国台湾',
         'TJ' => '塔吉克斯坦',
         'TZ' => '坦桑尼亚',
         'TH' => '泰国',
@@ -2303,115 +2280,6 @@ function normalize_country_name(string $country, string $countryCode): string {
         }
     }
     return $country;
-}
-
-function normalize_region_stats_label(string $label): string {
-    $label = trim($label);
-    if ($label === '') {
-        return '';
-    }
-    $map = [
-        '中国香港' => '香港',
-        '香港特别行政区' => '香港',
-        '中国澳门' => '澳门',
-        '澳门特别行政区' => '澳门',
-        '中国台湾' => '台湾',
-        '台湾省' => '台湾',
-    ];
-    return $map[$label] ?? $label;
-}
-
-function normalize_domestic_region_label(string $label): string {
-    $label = normalize_region_stats_label(trim($label));
-    if ($label === '') {
-        return '';
-    }
-    $suffixes = [
-        '特别行政区',
-        '维吾尔自治区',
-        '壮族自治区',
-        '回族自治区',
-        '自治区',
-        '省',
-        '市',
-    ];
-    foreach ($suffixes as $suffix) {
-        if ($suffix !== '' && substr($label, -strlen($suffix)) === $suffix) {
-            $label = substr($label, 0, -strlen($suffix));
-            break;
-        }
-    }
-    return trim($label);
-}
-
-function aggregate_domestic_region_rows(array $rows): array {
-    $merged = [];
-    foreach ($rows as $row) {
-        $label = normalize_domestic_region_label((string)($row['label'] ?? ''));
-        if ($label === '') {
-            continue;
-        }
-        $total = (int)($row['total'] ?? 0);
-        if (!isset($merged[$label])) {
-            $merged[$label] = 0;
-        }
-        $merged[$label] += $total;
-    }
-    arsort($merged);
-    $result = [];
-    foreach ($merged as $label => $total) {
-        $result[] = ['label' => $label, 'total' => $total];
-    }
-    return array_slice($result, 0, 12);
-}
-
-function normalize_international_country_label(string $label, string $countryCode = ''): string {
-    $countryCode = strtoupper(trim($countryCode));
-    if ($countryCode !== '' && $countryCode !== 'CN') {
-        return normalize_country_name('', $countryCode);
-    }
-    $label = normalize_region_stats_label(trim($label));
-    if ($label === '') {
-        return '';
-    }
-    if (strpos($label, '美国') !== false) {
-        return '美国';
-    }
-    static $countryNames = null;
-    if ($countryNames === null) {
-        $countryNames = array_values(array_unique(country_code_zh_map()));
-        usort($countryNames, fn($a, $b) => mb_strlen($b) - mb_strlen($a));
-    }
-    foreach ($countryNames as $name) {
-        if ($name !== '' && mb_strpos($label, $name) === 0) {
-            return $name;
-        }
-    }
-    return $label;
-}
-
-function aggregate_international_country_rows(array $rows): array {
-    $merged = [];
-    foreach ($rows as $row) {
-        $label = normalize_international_country_label(
-            (string)($row['label'] ?? ''),
-            (string)($row['country_code'] ?? '')
-        );
-        if ($label === '') {
-            continue;
-        }
-        $total = (int)($row['total'] ?? 0);
-        if (!isset($merged[$label])) {
-            $merged[$label] = 0;
-        }
-        $merged[$label] += $total;
-    }
-    arsort($merged);
-    $result = [];
-    foreach ($merged as $label => $total) {
-        $result[] = ['label' => $label, 'total' => $total];
-    }
-    return array_slice($result, 0, 12);
 }
 
 function normalize_us_region(string $region): string {
@@ -2946,7 +2814,118 @@ function render_comment_node(array $comment, array $share, ?array $user, string 
 }
 
 function render_share_comments(array $share, ?array $user, ?string $docId = null): string {
-    return '';
+    $shareId = (int)($share['id'] ?? 0);
+    $slug = (string)($share['slug'] ?? '');
+    if ($shareId <= 0 || $slug === '') {
+        return '';
+    }
+    $comments = fetch_share_comments($shareId);
+    $tree = build_comment_tree($comments);
+    $order = $comments;
+    usort($order, function ($a, $b) {
+        $timeA = strtotime((string)($a['created_at'] ?? '')) ?: 0;
+        $timeB = strtotime((string)($b['created_at'] ?? '')) ?: 0;
+        if ($timeA === $timeB) {
+            return (int)($a['id'] ?? 0) <=> (int)($b['id'] ?? 0);
+        }
+        return $timeA <=> $timeB;
+    });
+    $indexMap = [];
+    $i = 1;
+    foreach ($order as $row) {
+        $id = (int)($row['id'] ?? 0);
+        if ($id > 0) {
+            $indexMap[$id] = $i;
+            $i++;
+        }
+    }
+    $emailValue = $user ? (string)($user['email'] ?? '') : '';
+    $error = flash('comment_error');
+    $info = flash('comment_info');
+    $formStateRaw = flash('comment_form');
+    $formState = [];
+    if ($formStateRaw) {
+        $decoded = json_decode($formStateRaw, true);
+        if (is_array($decoded)) {
+            $formState = $decoded;
+        }
+    }
+    $formMode = (string)($formState['mode'] ?? '');
+    $formEmail = (string)($formState['email'] ?? '');
+    $formContent = (string)($formState['content'] ?? '');
+    $formParentId = (int)($formState['parent_id'] ?? 0);
+    $formNote = (string)($formState['note'] ?? '');
+    $commentFormEmail = $emailValue;
+    $commentFormContent = '';
+    if ($formMode === 'comment') {
+        if ($formEmail !== '') {
+            $commentFormEmail = $formEmail;
+        }
+        $commentFormContent = $formContent;
+    }
+    $modalReopen = $formMode === 'reply';
+    $modalEmail = $modalReopen ? $formEmail : '';
+    $modalContent = $modalReopen ? $formContent : '';
+    $modalParentId = $modalReopen ? $formParentId : 0;
+    $modalNote = $modalReopen ? $formNote : '';
+    $actionBase = base_path() . '/s/' . $slug;
+    $uploadAction = $actionBase . '/comment/upload';
+    $docValue = ($docId !== null && $docId !== '') ? (string)$docId : '';
+    $viewerIsOwner = $user && (int)($user['id'] ?? 0) === (int)$share['user_id'];
+    $html = '<section class="share-comments" id="comments" data-comment-upload="' . htmlspecialchars($uploadAction) . '">';
+    $html .= '<div class="comment-header">';
+    $html .= '<h2>评论</h2>';
+    $html .= '<div class="comment-count">' . count($comments) . ' 条评论</div>';
+    $html .= '</div>';
+    if ($error) {
+        $html .= '<div class="flash comment-flash error">' . htmlspecialchars($error) . '</div>';
+    }
+    if ($info) {
+        $html .= '<div class="flash comment-flash">' . htmlspecialchars($info) . '</div>';
+    }
+    if (empty($tree)) {
+        $html .= '<p class="muted">暂无评论，欢迎第一个留言。</p>';
+    } else {
+        $html .= '<div class="comment-list">';
+        foreach ($tree as $comment) {
+            $html .= render_comment_node($comment, $share, $user, $slug, $docId, 0, $indexMap);
+        }
+        $html .= '</div>';
+    }
+    $html .= render_comment_form($actionBase . '/comment', $docId, $commentFormEmail, null, '发表评论', $commentFormContent);
+    $html .= '<div class="modal comment-modal" data-comment-modal data-comment-action-base="' . htmlspecialchars($actionBase) . '" data-comment-doc-id="' . htmlspecialchars($docValue) . '" data-comment-owner="' . ($viewerIsOwner ? '1' : '0') . '" data-comment-default-email="' . htmlspecialchars($emailValue) . '" data-comment-reopen="' . ($modalReopen ? '1' : '0') . '" data-comment-reopen-mode="reply" data-comment-reopen-parent="' . (int)$modalParentId . '" data-comment-reopen-email="' . htmlspecialchars($modalEmail, ENT_QUOTES) . '" data-comment-reopen-content="' . htmlspecialchars($modalContent, ENT_QUOTES) . '" data-comment-reopen-note="' . htmlspecialchars($modalNote, ENT_QUOTES) . '" hidden>';
+    $html .= '<div class="modal-backdrop" data-modal-close></div>';
+    $html .= '<div class="modal-card">';
+    $html .= '<div class="modal-header" data-comment-modal-title>回复评论</div>';
+    $html .= '<div class="modal-body">';
+    $html .= '<form method="post" action="' . htmlspecialchars($actionBase . '/comment') . '" data-comment-form>';
+    $html .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+    $html .= '<input type="hidden" name="doc_id" value="' . htmlspecialchars($docValue) . '" data-comment-doc>';
+    $html .= '<input type="hidden" name="comment_id" value="" data-comment-id>';
+    $html .= '<input type="hidden" name="parent_id" value="" data-comment-parent>';
+    $html .= '<div class="comment-modal-note" data-comment-modal-note></div>';
+    $html .= '<div class="comment-modal-fields" data-comment-verify>';
+    $html .= '<div><label>邮箱</label><input class="input" name="email" type="email" value="" placeholder="name@example.com" required></div>';
+    if (captcha_enabled()) {
+        $html .= '<div class="comment-captcha"><label>验证码</label><div class="comment-captcha-row">';
+        $html .= '<input class="input" name="captcha" placeholder="验证码" required>';
+        $html .= '<img class="captcha-img" src="' . htmlspecialchars(captcha_url()) . '" alt="验证码" data-captcha>';
+        $html .= '</div></div>';
+    }
+    $html .= '</div>';
+    $html .= '<div class="comment-modal-fields" data-comment-editor-wrapper>';
+    $html .= render_comment_editor_fields($modalContent, 'content');
+    $html .= '</div>';
+    $html .= '<div class="modal-actions">';
+    $html .= '<button class="button ghost" type="button" data-modal-close>取消</button>';
+    $html .= '<button class="button primary" type="submit" data-comment-submit>提交</button>';
+    $html .= '</div>';
+    $html .= '</form>';
+    $html .= '</div>';
+    $html .= '</div>';
+    $html .= '</div>';
+    $html .= '</section>';
+    return $html;
 }
 
 function report_reason_options(): array {
@@ -2972,15 +2951,91 @@ function share_report_modal_id(string $slug): string {
 }
 
 function render_share_report_trigger(array $share): string {
-    return '';
+    $slug = (string)($share['slug'] ?? '');
+    if ($slug === '') {
+        return '';
+    }
+    $modalId = share_report_modal_id($slug);
+    return '<button class="kb-chip report-trigger" id="report" type="button" data-report-open data-report-target="' . htmlspecialchars($modalId) . '">举报</button>';
 }
 
 function render_share_report_form(array $share, ?array $user, ?string $docId = null): string {
-    return '';
+    $slug = (string)($share['slug'] ?? '');
+    if ($slug === '') {
+        return '';
+    }
+    $error = flash('report_error');
+    $info = flash('report_info');
+    $action = base_path() . '/s/' . $slug . '/report';
+    $modalId = share_report_modal_id($slug);
+    $emailValue = $user ? (string)($user['email'] ?? '') : '';
+    $formStateRaw = flash('report_form');
+    $formState = [];
+    if ($formStateRaw) {
+        $decoded = json_decode($formStateRaw, true);
+        if (is_array($decoded)) {
+            $formState = $decoded;
+        }
+    }
+    $reportEmailValue = $emailValue;
+    $formEmail = (string)($formState['email'] ?? '');
+    if ($formEmail !== '') {
+        $reportEmailValue = $formEmail;
+    }
+    $formReason = (string)($formState['reason_type'] ?? '');
+    $formDetail = (string)($formState['reason_detail'] ?? '');
+
+    $html = '';
+    if ($info) {
+        $html .= '<div class="flash report-flash">' . htmlspecialchars($info) . '</div>';
+    }
+    $modalHidden = $error ? '' : ' hidden';
+    $html .= '<div class="modal report-modal" id="' . htmlspecialchars($modalId) . '" data-report-modal' . $modalHidden . '>';
+    $html .= '<div class="modal-backdrop" data-modal-close></div>';
+    $html .= '<div class="modal-card">';
+    $html .= '<div class="modal-header">举报内容</div>';
+    $html .= '<div class="modal-body">';
+    if ($error) {
+        $html .= '<div class="alert error">' . htmlspecialchars($error) . '</div>';
+    }
+    $html .= '<form method="post" action="' . htmlspecialchars($action) . '" class="report-form">';
+    $html .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+    if ($docId !== null && $docId !== '') {
+        $html .= '<input type="hidden" name="doc_id" value="' . htmlspecialchars($docId) . '">';
+    }
+    $html .= '<div class="report-grid">';
+    $html .= '<div><label>举报类型</label><select class="input" name="reason_type" required>';
+    foreach (report_reason_options() as $option) {
+        $value = (string)($option['value'] ?? '');
+        $selected = ($formReason !== '' && $formReason === $value) ? ' selected' : '';
+        $html .= '<option value="' . htmlspecialchars($value) . '"' . $selected . '>' . htmlspecialchars($option['label']) . '</option>';
+    }
+    $html .= '</select></div>';
+    $html .= '<div><label>邮箱</label><input class="input" type="email" name="report_email" value="' . htmlspecialchars($reportEmailValue) . '" placeholder="name@example.com" required></div>';
+    $html .= '<div class="report-wide"><label>补充说明</label><textarea class="input" name="reason_detail" rows="4" placeholder="请补充说明原因" required>' . htmlspecialchars($formDetail) . '</textarea></div>';
+    if (captcha_enabled()) {
+        $html .= '<div class="report-captcha">';
+        $html .= '<label>验证码</label><div class="report-captcha-row">';
+        $html .= '<input class="input" name="captcha" placeholder="验证码" required>';
+        $html .= '<img class="captcha-img" src="' . htmlspecialchars(captcha_url()) . '" alt="验证码" data-captcha>';
+        $html .= '</div></div>';
+    }
+    $html .= '</div>';
+    $html .= '<div class="modal-actions">';
+    $html .= '<button class="button ghost" type="button" data-modal-close>取消</button>';
+    $html .= '<button class="button primary" type="submit">提交举报</button>';
+    $html .= '</div>';
+    $html .= '</form>';
+    $html .= '</div>';
+    $html .= '</div>';
+    $html .= '</div>';
+    return $html;
 }
 
 function pending_report_count(): int {
-    return 0;
+    $pdo = db();
+    $stmt = $pdo->query('SELECT COUNT(*) FROM share_reports WHERE handled_at IS NULL');
+    return (int)$stmt->fetchColumn();
 }
 
 function build_share_redirect_path(string $slug, ?string $docId, string $anchor): string {
@@ -3513,7 +3568,6 @@ function handle_share_comment_edit(string $slug): void {
 }
 
 function handle_share_report_submit(string $slug): void {
-    require_feature_enabled(false);
     check_csrf();
     $share = find_share_by_slug($slug);
     if (!$share) {
@@ -5826,14 +5880,14 @@ function handle_api(string $path): void {
             $docChunkById[(string)($item['docId'] ?? '')] = $item;
         }
 
-        $docStmt = $pdo->prepare('SELECT * FROM share_upload_docs WHERE upload_id = :upload_id ORDER BY id ASC');
+        $bannedWords = get_banned_words();
+        $docStmt = $pdo->prepare('SELECT id, doc_id, title, icon, hpath, parent_id, sort_index, sort_order, size_bytes, content_hash, meta_hash, LENGTH(markdown) AS markdown_len FROM share_upload_docs WHERE upload_id = :upload_id ORDER BY id ASC');
         $docStmt->execute([':upload_id' => $uploadId]);
-        $docRowsRaw = $docStmt->fetchAll(PDO::FETCH_ASSOC);
         $docRows = [];
         $docSizeTotal = 0;
-        foreach ($docRowsRaw as $row) {
+        $chunkFilesToClean = [];
+        while ($row = $docStmt->fetch(PDO::FETCH_ASSOC)) {
             $docIdKey = trim((string)($row['doc_id'] ?? ''));
-            $docMarkdown = (string)($row['markdown'] ?? '');
             $docTitle = (string)($row['title'] ?? '');
             $docIcon = (string)($row['icon'] ?? '');
             $docHpath = (string)($row['hpath'] ?? '');
@@ -5843,20 +5897,16 @@ function handle_api(string $path): void {
             $docChunk = $docIdKey !== '' ? ($docChunkById[$docIdKey] ?? null) : null;
             $chunkHash = '';
             $chunkSize = -1;
+            $chunkFilePath = null;
             if ($docChunk) {
                 $chunkPath = sanitize_asset_path((string)($docChunk['path'] ?? ''));
                 $fullChunkPath = $chunkPath !== '' ? ($stagingDir . '/' . $chunkPath) : '';
                 if ($fullChunkPath === '' || !is_file($fullChunkPath)) {
                     api_response(400, null, 'Missing document: ' . $docIdKey);
                 }
-                $chunkContent = @file_get_contents($fullChunkPath);
-                if ($chunkContent === false) {
-                    api_response(500, null, 'Failed to read document: ' . $docIdKey);
-                }
-                $docMarkdown = (string)$chunkContent;
                 $chunkSize = (int)filesize($fullChunkPath);
                 if ($chunkSize < 0) {
-                    $chunkSize = strlen($docMarkdown);
+                    $chunkSize = 0;
                 }
                 $expectedSize = max(0, (int)($docChunk['size'] ?? 0));
                 if ($expectedSize > 0 && $chunkSize !== $expectedSize) {
@@ -5864,19 +5914,52 @@ function handle_api(string $path): void {
                 }
                 $chunkHash = normalize_hash_hex($docChunk['hash'] ?? '');
                 if ($chunkHash !== '') {
-                    $computedChunkHash = compute_doc_content_hash($docMarkdown);
+                    $computedChunkHash = normalize_hash_hex(hash_file('sha256', $fullChunkPath));
                     if ($computedChunkHash !== $chunkHash) {
                         api_response(400, null, 'Document hash mismatch: ' . $docIdKey);
                     }
                 }
-                @unlink($fullChunkPath);
+                $chunkFilePath = $fullChunkPath;
+                $chunkFilesToClean[] = $fullChunkPath;
+                if (!empty($bannedWords)) {
+                    $chunkContent = @file_get_contents($fullChunkPath);
+                    if ($chunkContent !== false && $chunkContent !== '') {
+                        $hit = find_banned_word((string)$chunkContent, $bannedWords);
+                        if ($hit) {
+                            $displayTitle = trim($docTitle) ?: $docIdKey;
+                            api_response(400, null, 'Banned word detected: ' . $hit['word'] . ' (doc: ' . $displayTitle . ')');
+                        }
+                    }
+                    unset($chunkContent);
+                }
+            } else {
+                if (!empty($bannedWords)) {
+                    $inlineMdStmt = $pdo->prepare('SELECT markdown FROM share_upload_docs WHERE id = :id LIMIT 1');
+                    $inlineMdStmt->execute([':id' => (int)$row['id']]);
+                    $inlineMarkdown = (string)($inlineMdStmt->fetchColumn() ?: '');
+                    if ($inlineMarkdown !== '') {
+                        $hit = find_banned_word($inlineMarkdown, $bannedWords);
+                        if ($hit) {
+                            $displayTitle = trim($docTitle) ?: $docIdKey;
+                            api_response(400, null, 'Banned word detected: ' . $hit['word'] . ' (doc: ' . $displayTitle . ')');
+                        }
+                    }
+                    unset($inlineMarkdown);
+                }
             }
             $docContentHash = normalize_hash_hex($row['content_hash'] ?? '');
             if ($chunkHash !== '') {
                 $docContentHash = $chunkHash;
             }
-            if ($docContentHash === '') {
-                $docContentHash = compute_doc_content_hash($docMarkdown);
+            if ($docContentHash === '' && $chunkFilePath) {
+                $docContentHash = normalize_hash_hex(hash_file('sha256', $chunkFilePath));
+            }
+            if ($docContentHash === '' && !$chunkFilePath) {
+                $inlineMdStmt2 = $pdo->prepare('SELECT markdown FROM share_upload_docs WHERE id = :id LIMIT 1');
+                $inlineMdStmt2->execute([':id' => (int)$row['id']]);
+                $inlineMd2 = (string)($inlineMdStmt2->fetchColumn() ?: '');
+                $docContentHash = compute_doc_content_hash($inlineMd2);
+                unset($inlineMd2);
             }
             $docMetaHash = normalize_hash_hex($row['meta_hash'] ?? '');
             if ($docMetaHash === '') {
@@ -5893,7 +5976,7 @@ function handle_api(string $path): void {
             if ($chunkSize >= 0) {
                 $rowSize = $chunkSize;
             } elseif ($rowSize <= 0) {
-                $rowSize = strlen($docMarkdown);
+                $rowSize = (int)($row['markdown_len'] ?? 0);
             }
             $docRows[] = [
                 'doc_id' => $docIdKey,
@@ -5902,31 +5985,15 @@ function handle_api(string $path): void {
                 'hpath' => $docHpath,
                 'parent_id' => $docParent !== '' ? $docParent : null,
                 'sort_index' => $docSortIndex,
-                'markdown' => $docMarkdown,
                 'sort_order' => $docSortOrder,
                 'size_bytes' => $rowSize,
                 'content_hash' => $docContentHash,
                 'meta_hash' => $docMetaHash,
+                '_chunk_file' => $chunkFilePath,
+                '_upload_row_id' => (int)$row['id'],
             ];
             $docSizeTotal += $rowSize;
-        }
-        $bannedWords = get_banned_words();
-        if (!empty($bannedWords)) {
-            foreach ($docRows as $row) {
-                $docMarkdown = (string)($row['markdown'] ?? '');
-                if ($docMarkdown === '') {
-                    continue;
-                }
-                $hit = find_banned_word($docMarkdown, $bannedWords);
-                if ($hit) {
-                    $docTitle = trim((string)($row['title'] ?? '')) ?: trim((string)($row['doc_id'] ?? ''));
-                    api_response(400, null, 'Banned word detected: ' . $hit['word'] . ' (doc: ' . $docTitle . ')');
-                }
-            }
-        }
-        $docChunkDir = $stagingDir . '/' . rtrim(doc_chunk_prefix(), '/');
-        if (!empty($docManifest) && is_dir($docChunkDir)) {
-            remove_dir($docChunkDir);
+            unset($row);
         }
 
         $manifest = normalize_asset_manifest(json_decode((string)($upload['asset_manifest'] ?? ''), true));
@@ -6154,7 +6221,15 @@ function handle_api(string $path): void {
             if ($uploadMode === 'full') {
                 $insertDoc = $pdo->prepare('INSERT INTO share_docs (share_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, content_hash, meta_hash, created_at, updated_at)
                     VALUES (:share_id, :doc_id, :title, :icon, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :content_hash, :meta_hash, :created_at, :updated_at)');
+                $fetchMdStmt = $pdo->prepare('SELECT markdown FROM share_upload_docs WHERE id = :id LIMIT 1');
                 foreach ($docRows as $row) {
+                    $docMarkdown = '';
+                    if (!empty($row['_chunk_file']) && is_file($row['_chunk_file'])) {
+                        $docMarkdown = (string)@file_get_contents($row['_chunk_file']);
+                    } else {
+                        $fetchMdStmt->execute([':id' => (int)$row['_upload_row_id']]);
+                        $docMarkdown = (string)($fetchMdStmt->fetchColumn() ?: '');
+                    }
                     $insertDoc->execute([
                         ':share_id' => $shareId,
                         ':doc_id' => $row['doc_id'],
@@ -6163,7 +6238,7 @@ function handle_api(string $path): void {
                         ':hpath' => $row['hpath'],
                         ':parent_id' => $row['parent_id'] ?? null,
                         ':sort_index' => $row['sort_index'] ?? 0,
-                        ':markdown' => $row['markdown'],
+                        ':markdown' => $docMarkdown,
                         ':sort_order' => $row['sort_order'] ?? 0,
                         ':size_bytes' => $row['size_bytes'] ?? 0,
                         ':content_hash' => normalize_hash_hex($row['content_hash'] ?? ''),
@@ -6171,6 +6246,12 @@ function handle_api(string $path): void {
                         ':created_at' => now(),
                         ':updated_at' => now(),
                     ]);
+                    unset($docMarkdown);
+                }
+                foreach ($chunkFilesToClean as $cf) {
+                    if (is_file($cf)) {
+                        @unlink($cf);
+                    }
                 }
                 if (is_dir($stagingDir)) {
                     move_dir($stagingDir, $targetDir);
@@ -6209,10 +6290,18 @@ function handle_api(string $path): void {
                 $updateDoc = $pdo->prepare('UPDATE share_docs SET title = :title, icon = :icon, hpath = :hpath, parent_id = :parent_id, sort_index = :sort_index, markdown = :markdown, sort_order = :sort_order, size_bytes = :size_bytes, content_hash = :content_hash, meta_hash = :meta_hash, updated_at = :updated_at WHERE id = :id');
                 $insertDoc = $pdo->prepare('INSERT INTO share_docs (share_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, content_hash, meta_hash, created_at, updated_at)
                     VALUES (:share_id, :doc_id, :title, :icon, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :content_hash, :meta_hash, :created_at, :updated_at)');
+                $fetchMdStmt2 = $pdo->prepare('SELECT markdown FROM share_upload_docs WHERE id = :id LIMIT 1');
                 foreach ($docRows as $row) {
                     $docKey = trim((string)($row['doc_id'] ?? ''));
                     if ($docKey === '') {
                         continue;
+                    }
+                    $docMarkdown = '';
+                    if (!empty($row['_chunk_file']) && is_file($row['_chunk_file'])) {
+                        $docMarkdown = (string)@file_get_contents($row['_chunk_file']);
+                    } else {
+                        $fetchMdStmt2->execute([':id' => (int)$row['_upload_row_id']]);
+                        $docMarkdown = (string)($fetchMdStmt2->fetchColumn() ?: '');
                     }
                     $findDoc->execute([
                         ':share_id' => $shareId,
@@ -6225,13 +6314,14 @@ function handle_api(string $path): void {
                         ':hpath' => $row['hpath'],
                         ':parent_id' => $row['parent_id'] ?? null,
                         ':sort_index' => $row['sort_index'] ?? 0,
-                        ':markdown' => $row['markdown'],
+                        ':markdown' => $docMarkdown,
                         ':sort_order' => $row['sort_order'] ?? 0,
                         ':size_bytes' => $row['size_bytes'] ?? 0,
                         ':content_hash' => normalize_hash_hex($row['content_hash'] ?? ''),
                         ':meta_hash' => normalize_hash_hex($row['meta_hash'] ?? ''),
                         ':updated_at' => now(),
                     ];
+                    unset($docMarkdown);
                     if ($docRowId > 0) {
                         $bind[':id'] = $docRowId;
                         $updateDoc->execute($bind);
@@ -6241,6 +6331,11 @@ function handle_api(string $path): void {
                             ':doc_id' => $docKey,
                             ':created_at' => now(),
                         ]));
+                    }
+                }
+                foreach ($chunkFilesToClean as $cf) {
+                    if (is_file($cf)) {
+                        @unlink($cf);
                     }
                 }
 
@@ -6294,11 +6389,17 @@ function handle_api(string $path): void {
             $pdo->prepare('DELETE FROM share_upload_docs WHERE upload_id = :upload_id')->execute([':upload_id' => $uploadId]);
             $pdo->prepare('DELETE FROM share_uploads WHERE upload_id = :upload_id')->execute([':upload_id' => $uploadId]);
             $pdo->commit();
+            foreach ($chunkFilesToClean as $chunkFile) {
+                if (is_file($chunkFile)) {
+                    @unlink($chunkFile);
+                }
+            }
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();
             }
-            api_response(500, null, 'Upload finalize failed');
+            error_log('Upload finalize failed for uploadId=' . $uploadId . ': ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
+            api_response(500, null, 'Upload finalize failed: ' . $e->getMessage());
         }
 
         if (!empty($visitorValue)) {
@@ -8308,6 +8409,19 @@ function route_share(string $slug, ?string $docId = null): void {
     $stmt = $pdo->prepare('SELECT id, doc_id, title, icon, hpath, parent_id, sort_index, sort_order, updated_at FROM share_docs WHERE share_id = :sid ORDER BY sort_order ASC, id ASC');
     $stmt->execute([':sid' => $shareId]);
     $docs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $docMarkdownStmt = $pdo->prepare('SELECT markdown FROM share_docs WHERE share_id = :sid AND id = :id LIMIT 1');
+    $loadDocMarkdown = function (array $doc) use ($docMarkdownStmt, $shareId): string {
+        $rowId = (int)($doc['id'] ?? 0);
+        if ($rowId <= 0) {
+            return '';
+        }
+        $docMarkdownStmt->execute([
+            ':sid' => $shareId,
+            ':id' => $rowId,
+        ]);
+        $markdown = $docMarkdownStmt->fetchColumn();
+        return is_string($markdown) ? $markdown : '';
+    };
     if (empty($docs)) {
         render_share_not_found_page();
         return;
@@ -8349,7 +8463,7 @@ function route_share(string $slug, ?string $docId = null): void {
             }
             $docTitleRaw = trim((string)($doc['title'] ?? '')) ?: $shareTitleRaw;
             $docTitle = htmlspecialchars($docTitleRaw);
-            $front = extract_front_matter((string)$doc['markdown']);
+            $front = extract_front_matter($loadDocMarkdown($doc));
             $markdown = rewrite_asset_links((string)$front['body'], $assetBasePath);
             $markdown = strip_duplicate_title_heading($markdown, $docTitleRaw);
             $markdown = replace_custom_emoji_tokens($markdown, (int)$shareId, $assetBasePath);
@@ -8435,7 +8549,7 @@ function route_share(string $slug, ?string $docId = null): void {
         $doc = $docs[0];
         $docTitleRaw = trim((string)($doc['title'] ?? '')) ?: $shareTitleRaw;
         $docTitle = htmlspecialchars($docTitleRaw);
-        $front = extract_front_matter((string)$doc['markdown']);
+        $front = extract_front_matter($loadDocMarkdown($doc));
         $markdown = rewrite_asset_links((string)$front['body'], $assetBasePath);
         $markdown = strip_duplicate_title_heading($markdown, $docTitleRaw);
         $markdown = replace_custom_emoji_tokens($markdown, (int)$shareId, $assetBasePath);
@@ -8509,7 +8623,7 @@ function route_share(string $slug, ?string $docId = null): void {
             }
             $docTitleRaw = trim((string)($doc['title'] ?? '')) ?: $shareTitleRaw;
             $docTitle = htmlspecialchars($docTitleRaw);
-            $front = extract_front_matter((string)$doc['markdown']);
+            $front = extract_front_matter($loadDocMarkdown($doc));
             $markdown = rewrite_asset_links((string)$front['body'], $assetBasePath);
             $markdown = strip_duplicate_title_heading($markdown, $docTitleRaw);
             $markdown = replace_custom_emoji_tokens($markdown, (int)$shareId, $assetBasePath);
@@ -8582,7 +8696,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $docPath = $base . '/s/' . $slug . '/' . rawurlencode((string)$doc['doc_id']);
             $hPath = trim((string)($doc['hpath'] ?? ''), '/');
             $pathLabel = $hPath !== '' ? $hPath : '/';
-            $front = extract_front_matter((string)$doc['markdown']);
+            $front = extract_front_matter($loadDocMarkdown($doc));
             $meta = (array)$front['meta'];
             $updatedRaw = $meta['lastmod'] ?? $meta['updated'] ?? $meta['modified'] ?? '';
             $updated = $updatedRaw ? format_meta_date((string)$updatedRaw) : '';
@@ -8655,6 +8769,9 @@ if (preg_match('#^/s/([a-zA-Z0-9_-]+)/comment/upload$#', $path, $matches) && $_S
     handle_share_comment_upload($matches[1]);
 }
 
+if (preg_match('#^/s/([a-zA-Z0-9_-]+)/comment/edit$#', $path, $matches) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    handle_share_comment_edit($matches[1]);
+}
 
 if (preg_match('#^/s/([a-zA-Z0-9_-]+)/comment/delete$#', $path, $matches) && $_SERVER['REQUEST_METHOD'] === 'POST') {
     handle_share_comment_delete($matches[1]);
@@ -8962,9 +9079,7 @@ if ($path === '/login') {
             $content .= '</form>';
         }
     }
-    if (allow_registration()) {
-        $content .= '<div class="auth-footer">没有账号？ <a class="link" href="' . base_path() . '/register">立即注册</a></div>';
-    }
+    $content .= '<div class="auth-footer">没有账号？ <a class="link" href="' . base_path() . '/register">立即注册</a></div>';
     $content .= '</div>';
     render_page('登录', $content, null, '', ['layout' => 'auth']);
 }
@@ -9420,7 +9535,6 @@ if ($path === '/account') {
 
     $error = flash('error');
     $info = flash('info');
-    $apiKey = flash('api_key');
     $content = '<div class="card"><h2>账号设置</h2>';
     if ($error) {
         $content .= '<div class="flash">' . htmlspecialchars($error) . '</div>';
@@ -9441,19 +9555,21 @@ if ($path === '/account') {
     $content .= '<div style="margin-top:12px"><button class="button primary" type="submit">更新密码</button></div>';
     $content .= '</form></div>';
 
-    $content .= '<div class="card"><h2>API Key</h2>';
-    if ($apiKey) {
-        $content .= '<div class="notice">新的 API Key：<code>' . htmlspecialchars($apiKey) . '</code>（仅显示一次，请妥善保存）</div>';
-    }
-    if (!empty($user['api_key_last4'])) {
-        $content .= '<p class="muted">当前 Key 末尾：' . htmlspecialchars($user['api_key_last4'] ?? '') . '</p>';
-    } else {
-        $content .= '<p class="muted">尚未生成 API Key。</p>';
-    }
-    $buttonLabel = !empty($user['api_key_last4']) ? '重新生成' : '生成 API Key';
-    $content .= '<form method="post" action="' . base_path() . '/api-key/rotate">';
+    $currentEmail = trim((string)($user['email'] ?? ''));
+    $currentEmailLabel = $currentEmail !== '' ? htmlspecialchars($currentEmail) : '未绑定';
+    $pendingEmail = (string)($_SESSION['account_email_target'] ?? '');
+    $content .= '<div class="card"><h2>换绑邮箱</h2>';
+    $content .= '<p class="muted">当前邮箱：' . $currentEmailLabel . '</p>';
+    $content .= '<form method="post" action="' . base_path() . '/account/email-change" style="margin-top:12px">';
     $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
-    $content .= '<button class="button" type="submit">' . $buttonLabel . '</button>';
+    $content .= '<div class="grid">';
+    $content .= '<div><label>新邮箱</label><input class="input" type="email" name="new_email" value="' . htmlspecialchars($pendingEmail) . '" required></div>';
+    $content .= '<div><label>邮箱验证码</label><input class="input" name="email_code" placeholder="请输入验证码" required></div>';
+    $content .= '</div>';
+    $content .= '<div class="form-actions" style="margin-top:12px">';
+    $content .= '<button class="button ghost" type="submit" formaction="' . base_path() . '/account/email-code" formnovalidate>发送邮箱验证码</button>';
+    $content .= '<button class="button primary" type="submit">更换邮箱</button>';
+    $content .= '</div>';
     $content .= '</form></div>';
     $titleHtml = build_topbar_title('账号设置', $user);
     render_page('账号设置', $content, $user, '', ['title_html' => $titleHtml]);
@@ -9462,9 +9578,6 @@ if ($path === '/account') {
 if ($path === '/dashboard') {
     $user = require_login();
     $pdo = db();
-    if (($user['role'] ?? '') === 'admin') {
-        redirect('/admin-home');
-    }
     $usedBytes = recalculate_user_storage((int)$user['id']);
     $user['storage_used_bytes'] = $usedBytes;
     $limitBytes = get_user_limit_bytes($user);
@@ -9588,28 +9701,12 @@ if ($path === '/dashboard') {
     $sourceStmt->bindValue(':offset', $accessSourceOffset, PDO::PARAM_INT);
     $sourceStmt->execute();
     $accessSources = $sourceStmt->fetchAll(PDO::FETCH_ASSOC);
-    $regionCnStmt = $pdo->prepare('SELECT ip_region AS label, COUNT(*) AS total FROM share_access_logs WHERE ' . $accessWhereSql . ' AND ip_country_code = "CN" AND ip_region != "" AND ip_region NOT IN ("香港","香港特别行政区","中国香港","澳门","澳门特别行政区","中国澳门","台湾","台湾省","中国台湾") GROUP BY ip_region ORDER BY total DESC LIMIT 50');
+    $regionCnStmt = $pdo->prepare('SELECT ip_region AS label, COUNT(*) AS total FROM share_access_logs WHERE ' . $accessWhereSql . ' AND ip_country_code = "CN" AND ip_region != "" GROUP BY ip_region ORDER BY total DESC LIMIT 12');
     $regionCnStmt->execute($accessParams);
-    $accessRegionsCn = aggregate_domestic_region_rows($regionCnStmt->fetchAll(PDO::FETCH_ASSOC));
-    $regionIntlStmt = $pdo->prepare('SELECT CASE
-            WHEN ip_country_code = "CN" AND ip_region IN ("香港","香港特别行政区","中国香港") THEN "香港"
-            WHEN ip_country_code = "CN" AND ip_region IN ("澳门","澳门特别行政区","中国澳门") THEN "澳门"
-            WHEN ip_country_code = "CN" AND ip_region IN ("台湾","台湾省","中国台湾") THEN "台湾"
-            ELSE ip_country
-        END AS label, ip_country_code AS country_code, COUNT(*) AS total
-        FROM share_access_logs
-        WHERE ' . $accessWhereSql . '
-        AND (
-            ip_country_code IS NULL
-            OR ip_country_code != "CN"
-            OR ip_region IN ("香港","香港特别行政区","中国香港","澳门","澳门特别行政区","中国澳门","台湾","台湾省","中国台湾")
-        )
-        AND (ip_country != "" OR ip_region != "")
-        GROUP BY label, country_code
-        ORDER BY total DESC
-        LIMIT 50');
+    $accessRegionsCn = $regionCnStmt->fetchAll(PDO::FETCH_ASSOC);
+    $regionIntlStmt = $pdo->prepare('SELECT ip_country AS label, COUNT(*) AS total FROM share_access_logs WHERE ' . $accessWhereSql . ' AND (ip_country_code IS NULL OR ip_country_code != "CN") AND ip_country != "" GROUP BY ip_country ORDER BY total DESC LIMIT 12');
     $regionIntlStmt->execute($accessParams);
-    $accessRegionsIntl = aggregate_international_country_rows($regionIntlStmt->fetchAll(PDO::FETCH_ASSOC));
+    $accessRegionsIntl = $regionIntlStmt->fetchAll(PDO::FETCH_ASSOC);
     $accessCnMax = 0;
     foreach ($accessRegionsCn as $row) {
         $accessCnMax = max($accessCnMax, (int)($row['total'] ?? 0));
@@ -9662,6 +9759,25 @@ if ($path === '/dashboard') {
     $content .= '<div class="card"><h2>存储空间</h2>';
     $content .= '<p>已使用：' . format_bytes($usedBytes) . ' / ' . $limitLabel . '（' . $limitSource . '）</p>';
     $content .= '</div>';
+    $content .= '<div class="card"><h2>API Key</h2>';
+    if ($apiKey) {
+        $content .= '<div class="notice">新的 API Key：<code>' . htmlspecialchars($apiKey) . '</code>（仅显示一次，请妥善保存）</div>';
+    }
+    if (!empty($user['api_key_last4'])) {
+        $content .= '<p class="muted">当前 Key 末尾：' . htmlspecialchars($user['api_key_last4'] ?? '') . '</p>';
+    } else {
+        $content .= '<p class="muted">尚未生成 API Key。</p>';
+    }
+    $buttonLabel = !empty($user['api_key_last4']) ? '重新生成' : '生成 API Key';
+    $content .= '<form method="post" action="' . base_path() . '/api-key/rotate">';
+    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+    $content .= '<button class="button" type="submit">' . $buttonLabel . '</button>';
+    $content .= '</form></div>';
+
+    $content .= '<div class="card"><h2>账号设置</h2>';
+    $content .= '<p class="muted">修改登录密码、查看账号状态。</p>';
+    $content .= '<a class="button" href="' . base_path() . '/account">前往账号设置</a>';
+    $content .= '</div>';
 
     $content .= '<div class="card" id="shares"><h2>分享列表</h2>';
     $content .= '<form method="get" action="' . base_path() . '/dashboard#shares" class="filter-form">';
@@ -9679,12 +9795,11 @@ if ($path === '/dashboard') {
     if (empty($shares)) {
         $content .= '<p class="muted" style="margin-top:12px">暂无分享记录。</p>';
     } else {
-        $content .= '<table class="table" style="margin-top:12px"><thead><tr><th>标题</th><th>类型</th><th>链接</th><th>密码</th><th>到期</th><th>访客上限</th><th>状态</th><th>大小</th><th>更新时间</th></tr></thead><tbody>';
+        $content .= '<table class="table" style="margin-top:12px"><thead><tr><th>标题</th><th>类型</th><th>链接</th><th>密码</th><th>到期</th><th>访客上限</th><th>状态</th><th>评论邮件通知</th><th>大小</th><th>更新时间</th></tr></thead><tbody>';
         foreach ($shares as $share) {
             $title = htmlspecialchars($share['title']);
             $type = $share['type'] === 'notebook' ? '笔记本' : '文档';
             $url = share_url($share['slug']);
-            $urlLabel = htmlspecialchars(format_url_label($url, 48));
             $updated = htmlspecialchars($share['updated_at']);
             $size = format_bytes((int)($share['size_bytes'] ?? 0));
             $hasPassword = !empty($share['password_hash']) ? '已设置' : '无';
@@ -9697,9 +9812,32 @@ if ($path === '/dashboard') {
                 $visitorLabel = '不限';
             }
             $status = $share['deleted_at'] ? '已删除' : '正常';
-            $rowHtml = "<tr><td>{$title}</td><td>{$type}</td><td><a href=\"{$url}\" target=\"_blank\">{$urlLabel}</a></td><td>{$hasPassword}</td><td>{$expiresAt}</td><td>{$visitorLabel}</td><td>{$status}</td>";
-            $rowHtml .= "<td>{$size}</td><td>{$updated}</td></tr>";
-            $content .= $rowHtml;
+            $notifyEnabled = (int)($share['comment_notify'] ?? 0) === 1;
+            if (!empty($share['deleted_at'])) {
+                $notifyHtml = '<span class="muted">已删除</span>';
+            } else {
+                $notifyHtml = '<div class="comment-notify">';
+                $notifyHtml .= '<span class="comment-notify-status">' . ($notifyEnabled ? '已开启' : '已关闭') . '</span>';
+                if ($notifyEnabled || smtp_enabled()) {
+                    $notifyHtml .= '<form method="post" action="' . base_path() . '/dashboard/comment-notify" class="inline-form">';
+                    $notifyHtml .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+                    $notifyHtml .= '<input type="hidden" name="share_id" value="' . (int)$share['id'] . '">';
+                    $notifyHtml .= '<input type="hidden" name="action" value="' . ($notifyEnabled ? 'disable' : 'enable') . '" data-toggle-action>';
+                    $notifyHtml .= '<label class="switch">';
+                    $notifyHtml .= '<input type="checkbox" ' . ($notifyEnabled ? 'checked ' : '') . 'data-toggle-input>';
+                    $notifyHtml .= '<span class="switch-slider"></span>';
+                    $notifyHtml .= '</label>';
+                    $notifyHtml .= '</form>';
+                } else {
+                    $notifyHtml .= '<span class="muted">需开启SMTP</span>';
+                    $notifyHtml .= '<label class="switch is-disabled">';
+                    $notifyHtml .= '<input type="checkbox" disabled>';
+                    $notifyHtml .= '<span class="switch-slider"></span>';
+                    $notifyHtml .= '</label>';
+                }
+                $notifyHtml .= '</div>';
+            }
+            $content .= "<tr><td>{$title}</td><td>{$type}</td><td><a href=\"{$url}\" target=\"_blank\">{$url}</a></td><td>{$hasPassword}</td><td>{$expiresAt}</td><td>{$visitorLabel}</td><td>{$status}</td><td>{$notifyHtml}</td><td>{$size}</td><td>{$updated}</td></tr>";
         }
         $content .= '</tbody></table>';
     }
@@ -9724,6 +9862,213 @@ if ($path === '/dashboard') {
     $content .= '</div>';
     $content .= '</div>';
 
+    $content .= '<div class="card" id="access-stats"><h2>访问概况</h2>';
+    $content .= '<form method="post" action="' . base_path() . '/dashboard/access-stats/update" class="stats-settings">';
+    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+    $content .= '<div class="grid">';
+    $content .= '<div><label>访问统计</label><label class="checkbox stats-toggle"><input type="checkbox" name="access_enabled" value="1"' . ($accessEnabled ? ' checked' : '') . '> 开启</label></div>';
+    $content .= '<div><label>保留天数</label><input class="input" type="number" name="access_retention_days" min="1" max="365" value="' . (int)$accessRetention . '"></div>';
+    $content .= '</div>';
+    $content .= '<div class="muted stats-note">访客数(UV) 按浏览器 Cookie 去重（按天），访问记录计入账号存储空间，默认保留最近 7 天（当前 ' . (int)$accessRetention . ' 天），可在此调整；存储不足会自动关闭并清空统计。</div>';
+    if ($storageFull) {
+        $content .= '<div class="notice" style="margin-top:8px">存储空间已满，当前无法开启访问统计，请先清理空间。</div>';
+    }
+    if (!$accessEnabled) {
+        $content .= '<div class="notice" style="margin-top:8px">访问统计已关闭，当前不会记录新的访问。</div>';
+    }
+    $content .= '<div style="margin-top:12px"><button class="button" type="submit">保存设置</button></div>';
+    $content .= '</form>';
+
+    $content .= '<form method="get" action="' . base_path() . '/dashboard#access-stats" class="filter-form">';
+    $content .= render_hidden_inputs($accessFilterQuery);
+    $content .= '<div class="grid">';
+    $content .= '<div><label>笔记筛选</label><select class="input" name="access_share">';
+    $content .= '<option value="all"' . ($accessShareId <= 0 ? ' selected' : '') . '>全部</option>';
+    foreach ($accessShareOptions as $option) {
+        $optionId = (int)($option['id'] ?? 0);
+        $optionTitle = (string)($option['title'] ?? '');
+        $optionSlug = (string)($option['slug'] ?? '');
+        $label = $optionTitle !== '' ? $optionTitle : $optionSlug;
+        if ($optionSlug !== '') {
+            $label .= ' /s/' . $optionSlug;
+        }
+        $selected = $accessShareId === $optionId ? ' selected' : '';
+        $content .= '<option value="' . $optionId . '"' . $selected . '>' . htmlspecialchars($label) . '</option>';
+    }
+    $content .= '</select></div>';
+    $content .= '</div>';
+    $content .= '<div style="margin-top:12px"><button class="button" type="submit">筛选</button></div>';
+    $content .= '</form>';
+
+    $content .= '<div class="stats-block">';
+    $content .= '<div class="stats-title">访问概况</div>';
+    $content .= '<table class="table stats-table"><thead><tr><th></th><th>浏览量(PV)</th><th>访客数(UV)</th><th>IP 数量</th></tr></thead><tbody>';
+    $content .= '<tr><td>今日</td><td>' . $accessSummary['pv_today'] . '</td><td>' . $accessSummary['uv_today'] . '</td><td>' . $accessSummary['ip_today'] . '</td></tr>';
+    $content .= '<tr><td>昨日</td><td>' . $accessSummary['pv_yesterday'] . '</td><td>' . $accessSummary['uv_yesterday'] . '</td><td>' . $accessSummary['ip_yesterday'] . '</td></tr>';
+    $content .= '<tr><td>总计</td><td>' . $accessSummary['pv_total'] . '</td><td>' . $accessSummary['uv_total'] . '</td><td>' . $accessSummary['ip_total'] . '</td></tr>';
+    $content .= '</tbody></table>';
+    $content .= '</div>';
+
+    $content .= '<div class="stats-block">';
+    $content .= '<div class="stats-title">来源页</div>';
+    if (empty($accessSources)) {
+        $content .= '<p class="muted">暂无来源数据。</p>';
+    } else {
+        $content .= '<table class="table stats-table"><thead><tr><th>排名</th><th>次数</th><th>来源地址</th></tr></thead><tbody>';
+        $rank = 1;
+        foreach ($accessSources as $row) {
+            $referer = (string)($row['referer'] ?? '');
+            $total = (int)($row['total'] ?? 0);
+            $content .= '<tr><td>' . $rank . '</td><td>' . $total . '</td><td class="stats-source">' . htmlspecialchars($referer) . '</td></tr>';
+            $rank++;
+        }
+        $content .= '</tbody></table>';
+        $content .= '<div class="pagination">';
+        $content .= '<a class="button ghost" href="' . build_access_stats_query_url(['access_source_page' => max(1, $accessSourcePage - 1)]) . '">上一页</a>';
+        $content .= '<div class="pagination-info">第 ' . $accessSourcePage . ' / ' . $accessSourcePages . ' 页，共 ' . $accessSourceTotal . ' 条来源</div>';
+        $content .= '<a class="button ghost" href="' . build_access_stats_query_url(['access_source_page' => min($accessSourcePages, $accessSourcePage + 1)]) . '">下一页</a>';
+        $content .= '<form method="get" action="' . base_path() . '/dashboard#access-stats" class="pagination-form">';
+        $content .= render_hidden_inputs(array_merge($accessSourceQuery, [
+            'access_share' => $accessShareId > 0 ? $accessShareId : 'all',
+        ]));
+        $content .= '<label>每页</label><select class="input" name="access_source_size">';
+        foreach ([10, 50, 200, 1000] as $size) {
+            $selected = $accessSourceSize === $size ? ' selected' : '';
+            $content .= '<option value="' . $size . '"' . $selected . '>' . $size . '</option>';
+        }
+        $content .= '</select>';
+        $content .= '<label>页码</label><input class="input small" type="number" name="access_source_page" min="1" max="' . $accessSourcePages . '" value="' . $accessSourcePage . '">';
+        $content .= '<button class="button" type="submit">跳转</button>';
+        $content .= '</form>';
+        $content .= '</div>';
+    }
+    $content .= '</div>';
+
+    $content .= '<div class="stats-block">';
+    $content .= '<div class="stats-title">访客地域分析</div>';
+    $content .= '<div class="stats-charts">';
+    $content .= '<div class="stats-chart">';
+    $content .= '<div class="stats-subtitle">国内</div>';
+    if (empty($accessRegionsCn)) {
+        $content .= '<p class="muted">暂无数据。</p>';
+    } else {
+        $content .= '<div class="stats-chart-list">';
+        foreach ($accessRegionsCn as $row) {
+            $label = (string)($row['label'] ?? '');
+            $total = (int)($row['total'] ?? 0);
+            $percent = $accessCnMax > 0 ? round(($total / $accessCnMax) * 100, 1) : 0;
+            $content .= '<div class="stats-chart-row"><div class="stats-label">' . htmlspecialchars($label) . '</div><div class="stats-bar-track"><div class="stats-bar" style="width:' . $percent . '%"></div></div><div class="stats-value">' . $total . '</div></div>';
+        }
+        $content .= '</div>';
+    }
+    $content .= '</div>';
+    $content .= '<div class="stats-chart">';
+    $content .= '<div class="stats-subtitle">国际</div>';
+    if (empty($accessRegionsIntl)) {
+        $content .= '<p class="muted">暂无数据。</p>';
+    } else {
+        $content .= '<div class="stats-chart-list">';
+        foreach ($accessRegionsIntl as $row) {
+            $label = (string)($row['label'] ?? '');
+            $total = (int)($row['total'] ?? 0);
+            $percent = $accessIntlMax > 0 ? round(($total / $accessIntlMax) * 100, 1) : 0;
+            $content .= '<div class="stats-chart-row"><div class="stats-label">' . htmlspecialchars($label) . '</div><div class="stats-bar-track"><div class="stats-bar" style="width:' . $percent . '%"></div></div><div class="stats-value">' . $total . '</div></div>';
+        }
+        $content .= '</div>';
+    }
+    $content .= '</div>';
+    $content .= '</div>';
+    $content .= '</div>';
+
+    $content .= '<div class="stats-block">';
+    $content .= '<div class="stats-title">访问记录</div>';
+    $content .= '<div class="table-actions stats-actions">';
+    $content .= '<form id="access-batch-form" method="post" action="' . base_path() . '/dashboard/access-stats/delete" class="inline-form" data-batch-form="access">';
+    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+    $content .= '<label class="checkbox"><input type="checkbox" data-check-all="access"> 全选</label>';
+    $content .= '<button class="button danger" type="submit">批量删除</button>';
+    $content .= '</form>';
+    $content .= '<form method="post" action="' . base_path() . '/dashboard/access-stats/delete-all" class="inline-form" data-confirm-message="确定删除全部访问记录吗？该操作不可恢复。">';
+    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+    $content .= '<button class="button danger" type="submit">删除全部（占用 ' . $accessLogTotalLabel . '）</button>';
+    $content .= '</form>';
+    $content .= '</div>';
+    if (empty($accessLogs)) {
+        $content .= '<p class="muted">暂无访问记录。</p>';
+    } else {
+        $content .= '<table class="table stats-table"><thead><tr><th><input type="checkbox" data-check-all="access" form="access-batch-form"></th><th>标题</th><th>IP</th><th>IP归属地</th><th>访问日期</th></tr></thead><tbody>';
+        foreach ($accessLogs as $log) {
+            $logTitle = trim((string)($log['doc_title'] ?? ''));
+            if ($logTitle === '') {
+                $logTitle = (string)($log['share_title'] ?? '');
+            }
+            if ($logTitle === '') {
+                $logTitle = '未命名';
+            }
+            $slug = (string)($log['slug'] ?? '');
+            $docId = trim((string)($log['doc_id'] ?? ''));
+            if ($slug !== '') {
+                $shareLink = $docId !== '' ? base_url() . build_share_redirect_path($slug, $docId, '') : share_url($slug);
+                $suffix = $docId !== '' ? '/s/' . $slug . '/' . $docId : '/s/' . $slug;
+            } else {
+                $shareLink = '#';
+                $suffix = '';
+            }
+            $ip = trim((string)($log['ip'] ?? ''));
+            if ($ip === '') {
+                $ip = '-';
+            }
+            $location = format_ip_location([
+                'country' => $log['ip_country'] ?? '',
+                'country_code' => $log['ip_country_code'] ?? '',
+                'region' => $log['ip_region'] ?? '',
+                'city' => $log['ip_city'] ?? '',
+            ]);
+            if ($location === '') {
+                $location = '-';
+            }
+            $content .= '<tr>';
+            $content .= '<td><input type="checkbox" name="access_ids[]" value="' . (int)$log['id'] . '" data-check-item="access" form="access-batch-form"></td>';
+            $content .= '<td><a href="' . htmlspecialchars($shareLink) . '" target="_blank">' . htmlspecialchars($logTitle) . '</a>';
+            if ($suffix !== '') {
+                $content .= '<div class="muted">' . htmlspecialchars($suffix) . '</div>';
+            }
+            $content .= '</td>';
+            $content .= '<td>' . htmlspecialchars($ip) . '</td>';
+            $content .= '<td>' . htmlspecialchars($location) . '</td>';
+            $content .= '<td>' . htmlspecialchars((string)($log['created_at'] ?? '')) . '</td>';
+            $content .= '</tr>';
+        }
+        $content .= '</tbody></table>';
+    }
+    $content .= '<div class="pagination">';
+    $content .= '<a class="button ghost" href="' . build_access_stats_query_url(['access_page' => max(1, $accessPage - 1)]) . '">上一页</a>';
+    $content .= '<div class="pagination-info">第 ' . $accessPage . ' / ' . $accessPages . ' 页，共 ' . $accessTotal . ' 条访问</div>';
+    $content .= '<a class="button ghost" href="' . build_access_stats_query_url(['access_page' => min($accessPages, $accessPage + 1)]) . '">下一页</a>';
+    $content .= '<form method="get" action="' . base_path() . '/dashboard#access-stats" class="pagination-form">';
+    $content .= render_hidden_inputs(array_merge($accessQuery, [
+        'access_share' => $accessShareId > 0 ? $accessShareId : 'all',
+    ]));
+    $content .= '<label>每页</label><select class="input" name="access_size">';
+    foreach ([10, 50, 200, 1000] as $size) {
+        $selected = $accessSize === $size ? ' selected' : '';
+        $content .= '<option value="' . $size . '"' . $selected . '>' . $size . '</option>';
+    }
+    $content .= '</select>';
+    $content .= '<label>页码</label><input class="input small" type="number" name="access_page" min="1" max="' . $accessPages . '" value="' . $accessPage . '">';
+    $content .= '<button class="button" type="submit">跳转</button>';
+    $content .= '</form>';
+    $content .= '</div>';
+    $content .= '</div>';
+
+    $content .= '</div>';
+
+    if ($user['role'] === 'admin') {
+        $content .= '<div class="card"><h2>管理员入口</h2>';
+        $content .= '<a class="button" href="' . base_path() . '/admin-home">进入后台</a>';
+        $content .= '</div>';
+    }
+
     $titleHtml = build_topbar_title('控制台', $user);
     render_page('控制台', $content, $user, '', ['layout' => 'app', 'nav' => 'dashboard', 'title_html' => $titleHtml]);
 }
@@ -9746,131 +10091,6 @@ if ($path === '/admin-home') {
     $todayRow = $todayStmt->fetch(PDO::FETCH_ASSOC) ?: [];
     $todayPv = (int)($todayRow['pv'] ?? 0);
     $todayUv = (int)($todayRow['uv'] ?? 0);
-    $accessSummary = null;
-    $accessSources = [];
-    $accessRegionsCn = [];
-    $accessRegionsIntl = [];
-    $accessCnMax = 0;
-    $accessIntlMax = 0;
-    $accessLogs = [];
-    $accessTotal = 0;
-    $accessPage = 1;
-    $accessSize = 10;
-    $accessPages = 1;
-    $accessSourceTotal = 0;
-    $accessSourcePage = 1;
-    $accessSourceSize = 10;
-    $accessSourcePages = 1;
-    $accessLogTotalLabel = '0 B';
-    $accessEnabled = false;
-    $accessRetention = 7;
-    $accessShareOptions = [];
-    $accessShareId = 0;
-    $accessEnabled = access_stats_enabled((int)$admin['id']);
-        $accessRetention = access_stats_retention_days((int)$admin['id']);
-        $accessShare = trim((string)($_GET['access_share'] ?? 'all'));
-        if ($accessShare !== '' && $accessShare !== 'all') {
-            $accessShareId = (int)$accessShare;
-        }
-        $accessShareOptions = $pdo->query('SELECT id, title, slug FROM shares WHERE deleted_at IS NULL ORDER BY updated_at DESC')->fetchAll(PDO::FETCH_ASSOC);
-        $accessPage = max(1, (int)($_GET['access_page'] ?? 1));
-        $accessSize = normalize_page_size($_GET['access_size'] ?? 10);
-        $accessSourcePage = max(1, (int)($_GET['access_source_page'] ?? 1));
-        $accessSourceSize = normalize_page_size($_GET['access_source_size'] ?? 10);
-        $accessWhere = '1=1';
-        $accessParams = [];
-        if ($accessShareId > 0) {
-            $accessWhere = 'share_access_logs.share_id = :sid';
-            $accessParams[':sid'] = $accessShareId;
-        }
-    $yesterdayStart = date('Y-m-d 00:00:00', strtotime('-1 day'));
-        $summaryStmt = $pdo->prepare('SELECT
-            SUM(CASE WHEN created_at >= :today_start AND created_at < :tomorrow_start THEN 1 ELSE 0 END) AS pv_today,
-            SUM(CASE WHEN created_at >= :yesterday_start AND created_at < :today_start THEN 1 ELSE 0 END) AS pv_yesterday,
-            COUNT(*) AS pv_total,
-            COUNT(DISTINCT CASE WHEN created_at >= :today_start AND created_at < :tomorrow_start THEN visitor_id END) AS uv_today,
-            COUNT(DISTINCT CASE WHEN created_at >= :yesterday_start AND created_at < :today_start THEN visitor_id END) AS uv_yesterday,
-            COUNT(DISTINCT visitor_id || ":" || substr(created_at, 1, 10)) AS uv_total,
-            COUNT(DISTINCT CASE WHEN created_at >= :today_start AND created_at < :tomorrow_start THEN ip END) AS ip_today,
-            COUNT(DISTINCT CASE WHEN created_at >= :yesterday_start AND created_at < :today_start THEN ip END) AS ip_yesterday,
-            COUNT(DISTINCT ip) AS ip_total
-            FROM share_access_logs WHERE ' . $accessWhere);
-        $summaryStmt->execute(array_merge($accessParams, [
-            ':today_start' => $todayStart,
-            ':tomorrow_start' => $tomorrowStart,
-            ':yesterday_start' => $yesterdayStart,
-        ]));
-        $summaryRow = $summaryStmt->fetch(PDO::FETCH_ASSOC) ?: [];
-        $accessSummary = [
-            'pv_today' => (int)($summaryRow['pv_today'] ?? 0),
-            'pv_yesterday' => (int)($summaryRow['pv_yesterday'] ?? 0),
-            'pv_total' => (int)($summaryRow['pv_total'] ?? 0),
-            'uv_today' => (int)($summaryRow['uv_today'] ?? 0),
-            'uv_yesterday' => (int)($summaryRow['uv_yesterday'] ?? 0),
-            'uv_total' => (int)($summaryRow['uv_total'] ?? 0),
-            'ip_today' => (int)($summaryRow['ip_today'] ?? 0),
-            'ip_yesterday' => (int)($summaryRow['ip_yesterday'] ?? 0),
-            'ip_total' => (int)($summaryRow['ip_total'] ?? 0),
-        ];
-    $accessTotal = (int)($accessSummary['pv_total'] ?? 0);
-    if ($accessTotal > 0) {
-        $accessSourceCountStmt = $pdo->prepare('SELECT COUNT(*) FROM (SELECT referer FROM share_access_logs WHERE ' . $accessWhere . ' AND referer != "" GROUP BY referer) AS t');
-        $accessSourceCountStmt->execute($accessParams);
-        $accessSourceTotal = (int)$accessSourceCountStmt->fetchColumn();
-        [$accessSourcePage, $accessSourceSize, $accessSourcePages, $accessSourceOffset] = paginate($accessSourceTotal, $accessSourcePage, $accessSourceSize);
-        $sourceStmt = $pdo->prepare('SELECT referer, COUNT(*) AS total FROM share_access_logs WHERE ' . $accessWhere . ' AND referer != "" GROUP BY referer ORDER BY total DESC LIMIT :limit OFFSET :offset');
-        foreach ($accessParams as $key => $value) {
-            $sourceStmt->bindValue($key, $value);
-        }
-        $sourceStmt->bindValue(':limit', $accessSourceSize, PDO::PARAM_INT);
-        $sourceStmt->bindValue(':offset', $accessSourceOffset, PDO::PARAM_INT);
-        $sourceStmt->execute();
-        $accessSources = $sourceStmt->fetchAll(PDO::FETCH_ASSOC);
-        $regionCnStmt = $pdo->prepare('SELECT ip_region AS label, COUNT(*) AS total FROM share_access_logs WHERE ' . $accessWhere . ' AND ip_country_code = "CN" AND ip_region != "" AND ip_region NOT IN ("香港","香港特别行政区","中国香港","澳门","澳门特别行政区","中国澳门","台湾","台湾省","中国台湾") GROUP BY ip_region ORDER BY total DESC LIMIT 50');
-        $regionCnStmt->execute($accessParams);
-        $accessRegionsCn = aggregate_domestic_region_rows($regionCnStmt->fetchAll(PDO::FETCH_ASSOC));
-        $regionIntlStmt = $pdo->prepare('SELECT CASE
-                WHEN ip_country_code = "CN" AND ip_region IN ("香港","香港特别行政区","中国香港") THEN "香港"
-                WHEN ip_country_code = "CN" AND ip_region IN ("澳门","澳门特别行政区","中国澳门") THEN "澳门"
-                WHEN ip_country_code = "CN" AND ip_region IN ("台湾","台湾省","中国台湾") THEN "台湾"
-                ELSE ip_country
-            END AS label, ip_country_code AS country_code, COUNT(*) AS total
-            FROM share_access_logs
-            WHERE ' . $accessWhere . '
-            AND (
-                ip_country_code IS NULL
-                OR ip_country_code != "CN"
-                OR ip_region IN ("香港","香港特别行政区","中国香港","澳门","澳门特别行政区","中国澳门","台湾","台湾省","中国台湾")
-            )
-            AND (ip_country != "" OR ip_region != "")
-            GROUP BY label, country_code
-            ORDER BY total DESC
-            LIMIT 50');
-        $regionIntlStmt->execute($accessParams);
-        $accessRegionsIntl = aggregate_international_country_rows($regionIntlStmt->fetchAll(PDO::FETCH_ASSOC));
-        foreach ($accessRegionsCn as $row) {
-            $accessCnMax = max($accessCnMax, (int)($row['total'] ?? 0));
-        }
-        foreach ($accessRegionsIntl as $row) {
-            $accessIntlMax = max($accessIntlMax, (int)($row['total'] ?? 0));
-        }
-        [$accessPage, $accessSize, $accessPages, $accessOffset] = paginate($accessTotal, $accessPage, $accessSize);
-        $logsStmt = $pdo->prepare('SELECT share_access_logs.*, shares.slug, shares.title AS share_title
-            FROM share_access_logs
-            LEFT JOIN shares ON share_access_logs.share_id = shares.id
-            WHERE ' . $accessWhere . '
-            ORDER BY share_access_logs.created_at DESC
-            LIMIT :limit OFFSET :offset');
-        foreach ($accessParams as $key => $value) {
-            $logsStmt->bindValue($key, $value);
-        }
-        $logsStmt->bindValue(':limit', $accessSize, PDO::PARAM_INT);
-        $logsStmt->bindValue(':offset', $accessOffset, PDO::PARAM_INT);
-        $logsStmt->execute();
-        $accessLogs = $logsStmt->fetchAll(PDO::FETCH_ASSOC);
-    }
-    $accessLogTotalBytes = (int)$pdo->query('SELECT COALESCE(SUM(size_bytes), 0) FROM share_access_logs')->fetchColumn();
-    $accessLogTotalLabel = format_bytes($accessLogTotalBytes);
     $activeStart30 = date('Y-m-d H:i:s', strtotime('-30 days'));
     $activeStart7 = date('Y-m-d H:i:s', strtotime('-7 days'));
     $activeStmt = $pdo->prepare('SELECT COUNT(*) FROM users WHERE last_active_at >= :start');
@@ -10229,186 +10449,18 @@ if ($path === '/admin-home') {
     $content .= '</div>';
     $content .= '</div>';
 
-    if (is_array($accessSummary)) {
-        $content .= '<div class="card" id="access-stats"><h2>访问统计</h2>';
-        $content .= '<form method="post" action="' . base_path() . '/admin-home/access-update" class="stats-settings">';
-        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
-        $content .= '<div class="grid">';
-        $content .= '<div><label>访问统计</label><label class="checkbox stats-toggle"><input type="checkbox" name="access_enabled" value="1"' . ($accessEnabled ? ' checked' : '') . '> 开启</label></div>';
-        $content .= '<div><label>保留天数</label><input class="input" type="number" name="access_retention_days" min="1" max="365" value="' . (int)$accessRetention . '"></div>';
-        $content .= '</div>';
-        $content .= '<div class="muted stats-note">访客数(UV) 按浏览器 Cookie 去重（按天），访问记录计入账号存储空间，默认保留最近 7 天（当前 ' . (int)$accessRetention . ' 天），可在此调整；存储不足会自动关闭并清空统计。</div>';
-        $content .= '<div style="margin-top:12px"><button class="button" type="submit">保存设置</button></div>';
-        $content .= '</form>';
-        $accessFilterQuery = $_GET;
-        unset($accessFilterQuery['access_share'], $accessFilterQuery['access_page'], $accessFilterQuery['access_source_page']);
-        $content .= '<form method="get" action="' . base_path() . '/admin-home" class="filter-form">';
-        $content .= render_hidden_inputs($accessFilterQuery);
-        $content .= '<div class="grid">';
-        $content .= '<div><label>笔记筛选</label><select class="input" name="access_share">';
-        $content .= '<option value="all"' . ($accessShareId <= 0 ? ' selected' : '') . '>全部</option>';
-        foreach ($accessShareOptions as $option) {
-            $optionId = (int)($option['id'] ?? 0);
-            $optionTitle = (string)($option['title'] ?? '');
-            $optionSlug = (string)($option['slug'] ?? '');
-            $optLabel = $optionTitle !== '' ? $optionTitle : $optionSlug;
-            if ($optionSlug !== '') {
-                $optLabel .= ' /s/' . $optionSlug;
-            }
-            $selected = $accessShareId === $optionId ? ' selected' : '';
-            $content .= '<option value="' . $optionId . '"' . $selected . '>' . htmlspecialchars($optLabel) . '</option>';
-        }
-        $content .= '</select></div>';
-        $content .= '</div>';
-        $content .= '<div style="margin-top:12px"><button class="button" type="submit">筛选</button></div>';
-        $content .= '</form>';
-
-        $content .= '<div class="stats-block">';
-        $content .= '<div class="stats-title">访问概况</div>';
-        $content .= '<table class="table stats-table"><thead><tr><th></th><th>浏览量(PV)</th><th>访客数(UV)</th><th>IP 数量</th></tr></thead><tbody>';
-        $content .= '<tr><td>今日</td><td>' . $accessSummary['pv_today'] . '</td><td>' . $accessSummary['uv_today'] . '</td><td>' . $accessSummary['ip_today'] . '</td></tr>';
-        $content .= '<tr><td>昨日</td><td>' . $accessSummary['pv_yesterday'] . '</td><td>' . $accessSummary['uv_yesterday'] . '</td><td>' . $accessSummary['ip_yesterday'] . '</td></tr>';
-        $content .= '<tr><td>总计</td><td>' . $accessSummary['pv_total'] . '</td><td>' . $accessSummary['uv_total'] . '</td><td>' . $accessSummary['ip_total'] . '</td></tr>';
-        $content .= '</tbody></table>';
-        $content .= '</div>';
-
-        $content .= '<div class="stats-block">';
-        $content .= '<div class="stats-title">来源页</div>';
-        if (empty($accessSources)) {
-            $content .= '<p class="muted">暂无来源数据。</p>';
-        } else {
-            $content .= '<table class="table stats-table"><thead><tr><th>排名</th><th>次数</th><th>来源地址</th></tr></thead><tbody>';
-            $rank = ($accessSourcePage - 1) * $accessSourceSize + 1;
-            foreach ($accessSources as $row) {
-                $referer = (string)($row['referer'] ?? '');
-                $total = (int)($row['total'] ?? 0);
-                $content .= '<tr><td>' . $rank . '</td><td>' . $total . '</td><td class="stats-source">' . htmlspecialchars($referer) . '</td></tr>';
-                $rank++;
-            }
-            $content .= '</tbody></table>';
-            $content .= '<div class="pagination">';
-            $content .= '<a class="button ghost" href="' . build_admin_home_query_url(['access_source_page' => max(1, $accessSourcePage - 1)]) . '">上一页</a>';
-            $content .= '<div class="pagination-info">第 ' . $accessSourcePage . ' / ' . $accessSourcePages . ' 页，共 ' . $accessSourceTotal . ' 条来源</div>';
-            $content .= '<a class="button ghost" href="' . build_admin_home_query_url(['access_source_page' => min($accessSourcePages, $accessSourcePage + 1)]) . '">下一页</a>';
-            $content .= '<form method="get" action="' . base_path() . '/admin-home" class="pagination-form">';
-            $accessSourceQuery = $_GET;
-            unset($accessSourceQuery['access_source_page'], $accessSourceQuery['access_source_size']);
-            $content .= render_hidden_inputs($accessSourceQuery);
-            $content .= '<label>每页</label><select class="input" name="access_source_size">';
-            foreach ([10, 50, 200, 1000] as $size) {
-                $selected = $accessSourceSize === $size ? ' selected' : '';
-                $content .= '<option value="' . $size . '"' . $selected . '>' . $size . '</option>';
-            }
-            $content .= '</select>';
-            $content .= '<label>页码</label><input class="input small" type="number" name="access_source_page" min="1" max="' . $accessSourcePages . '" value="' . $accessSourcePage . '">';
-            $content .= '<button class="button" type="submit">跳转</button>';
-            $content .= '</form>';
-            $content .= '</div>';
-        }
-        $content .= '</div>';
-
-        $content .= '<div class="stats-block">';
-        $content .= '<div class="stats-title">访客地域分析</div>';
-        $content .= '<div class="stats-charts">';
-        $content .= '<div class="stats-chart">';
-        $content .= '<div class="stats-subtitle">国内</div>';
-        if (empty($accessRegionsCn)) {
-            $content .= '<p class="muted">暂无数据。</p>';
-        } else {
-            $content .= '<div class="stats-chart-list">';
-            foreach ($accessRegionsCn as $row) {
-                $label = (string)($row['label'] ?? '');
-                $total = (int)($row['total'] ?? 0);
-                $percent = $accessCnMax > 0 ? round(($total / $accessCnMax) * 100, 1) : 0;
-                $content .= '<div class="stats-chart-row"><div class="stats-label">' . htmlspecialchars($label) . '</div><div class="stats-bar-track"><div class="stats-bar" style="width:' . $percent . '%"></div></div><div class="stats-value">' . $total . '</div></div>';
-            }
-            $content .= '</div>';
-        }
-        $content .= '</div>';
-        $content .= '<div class="stats-chart">';
-        $content .= '<div class="stats-subtitle">国际</div>';
-        if (empty($accessRegionsIntl)) {
-            $content .= '<p class="muted">暂无数据。</p>';
-        } else {
-            $content .= '<div class="stats-chart-list">';
-            foreach ($accessRegionsIntl as $row) {
-                $label = normalize_region_stats_label((string)($row['label'] ?? ''));
-                $total = (int)($row['total'] ?? 0);
-                $percent = $accessIntlMax > 0 ? round(($total / $accessIntlMax) * 100, 1) : 0;
-                $content .= '<div class="stats-chart-row"><div class="stats-label">' . htmlspecialchars($label) . '</div><div class="stats-bar-track"><div class="stats-bar" style="width:' . $percent . '%"></div></div><div class="stats-value">' . $total . '</div></div>';
-            }
-            $content .= '</div>';
-        }
-        $content .= '</div>';
-        $content .= '</div>';
-        $content .= '</div>';
-
-        $content .= '<div class="stats-block">';
-        $content .= '<div class="stats-title">访问记录</div>';
-        $content .= '<div class="table-actions stats-actions">';
-        $content .= '<form id="access-batch-form" method="post" action="' . base_path() . '/admin-home/access-delete" class="inline-form" data-batch-form="access">';
-        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
-        $content .= '<label class="checkbox"><input type="checkbox" data-check-all="access"> 全选</label>';
-        $content .= '<button class="button danger" type="submit">批量删除</button>';
-        $content .= '</form>';
-        $content .= '<form method="post" action="' . base_path() . '/admin-home/access-delete-all" class="inline-form" data-confirm-message="确定删除全部访问记录吗？该操作不可恢复。">';
-        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
-        $content .= '<button class="button danger" type="submit">删除全部（占用 ' . $accessLogTotalLabel . '）</button>';
-        $content .= '</form>';
-        $content .= '</div>';
-        if (empty($accessLogs)) {
-            $content .= '<p class="muted">暂无访问记录。</p>';
-        } else {
-            $content .= '<table class="table stats-table"><thead><tr><th><input type="checkbox" data-check-all="access" form="access-batch-form"></th><th>标题</th><th>IP</th><th>IP归属地</th><th>访问日期</th></tr></thead><tbody>';
-            foreach ($accessLogs as $log) {
-                $logTitle = trim((string)($log['doc_title'] ?? ''));
-                if ($logTitle === '') {
-                    $logTitle = (string)($log['share_title'] ?? '');
-                }
-                if ($logTitle === '') {
-                    $logTitle = '未命名';
-                }
-                $ip = trim((string)($log['ip'] ?? ''));
-                if ($ip === '') {
-                    $ip = '-';
-                }
-                $location = format_ip_location([
-                    'country' => $log['ip_country'] ?? '',
-                    'country_code' => $log['ip_country_code'] ?? '',
-                    'region' => $log['ip_region'] ?? '',
-                    'city' => $log['ip_city'] ?? '',
-                ]);
-                if ($location === '') {
-                    $location = '-';
-                }
-                $content .= '<tr>';
-                $content .= '<td><input type="checkbox" name="access_ids[]" value="' . (int)$log['id'] . '" data-check-item="access" form="access-batch-form"></td>';
-                $content .= '<td>' . htmlspecialchars($logTitle) . '</td><td>' . htmlspecialchars($ip) . '</td><td>' . htmlspecialchars($location) . '</td><td>' . htmlspecialchars((string)($log['created_at'] ?? '-')) . '</td></tr>';
-            }
-            $content .= '</tbody></table>';
-        }
-        $content .= '<div class="pagination">';
-        $content .= '<a class="button ghost" href="' . build_admin_home_query_url(['access_page' => max(1, $accessPage - 1)]) . '">上一页</a>';
-        $content .= '<div class="pagination-info">第 ' . $accessPage . ' / ' . $accessPages . ' 页，共 ' . $accessTotal . ' 条访问</div>';
-        $content .= '<a class="button ghost" href="' . build_admin_home_query_url(['access_page' => min($accessPages, $accessPage + 1)]) . '">下一页</a>';
-        $content .= '<form method="get" action="' . base_path() . '/admin-home" class="pagination-form">';
-        $accessQuery = $_GET;
-        unset($accessQuery['access_page'], $accessQuery['access_size']);
-        $content .= render_hidden_inputs($accessQuery);
-        $content .= '<label>每页</label><select class="input" name="access_size">';
-        foreach ([10, 50, 200, 1000] as $size) {
-            $selected = $accessSize === $size ? ' selected' : '';
-            $content .= '<option value="' . $size . '"' . $selected . '>' . $size . '</option>';
-        }
-        $content .= '</select>';
-        $content .= '<label>页码</label><input class="input small" type="number" name="access_page" min="1" max="' . $accessPages . '" value="' . $accessPage . '">';
-        $content .= '<button class="button" type="submit">跳转</button>';
-        $content .= '</form>';
-        $content .= '</div>';
-        $content .= '</div>';
-
-        $content .= '</div>';
-    }
+    $content .= '<div class="admin-governance-grid">';
+    $content .= '<div class="admin-governance card">';
+    $content .= '<div class="admin-governance__label">评论总量</div>';
+    $content .= '<div class="admin-governance__value">' . number_format($commentTotal) . '</div>';
+    $content .= '<div class="admin-governance__meta">近7天新增 ' . number_format($commentNew7) . '</div>';
+    $content .= '</div>';
+    $content .= '<div class="admin-governance card">';
+    $content .= '<div class="admin-governance__label">举报总量</div>';
+    $content .= '<div class="admin-governance__value">' . number_format($reportTotal) . '</div>';
+    $content .= '<div class="admin-governance__meta">待处理 ' . number_format($reportPending) . '</div>';
+    $content .= '</div>';
+    $content .= '</div>';
     $content .= '</section>';
 
     $titleHtml = build_topbar_title('数据统计', $admin);
@@ -10429,9 +10481,39 @@ if ($path === '/api-key/rotate' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         ':id' => $user['id'],
     ]);
     flash('api_key', $rawKey);
-    redirect('/account');
+    redirect('/dashboard');
 }
 
+if ($path === '/dashboard/comment-notify' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $user = require_login();
+    check_csrf();
+    $shareId = (int)($_POST['share_id'] ?? 0);
+    $action = (string)($_POST['action'] ?? '');
+    if ($shareId <= 0 || !in_array($action, ['enable', 'disable'], true)) {
+        flash('error', '请求参数错误');
+        redirect('/dashboard#shares');
+    }
+    $pdo = db();
+    $stmt = $pdo->prepare('SELECT id FROM shares WHERE id = :id AND user_id = :uid AND deleted_at IS NULL');
+    $stmt->execute([':id' => $shareId, ':uid' => $user['id']]);
+    if (!$stmt->fetchColumn()) {
+        flash('error', '分享不存在');
+        redirect('/dashboard#shares');
+    }
+    $enable = $action === 'enable';
+    if ($enable && !smtp_enabled()) {
+        flash('error', '请先在后台开启 SMTP，再启用评论邮件通知');
+        redirect('/dashboard#shares');
+    }
+    $update = $pdo->prepare('UPDATE shares SET comment_notify = :notify WHERE id = :id AND user_id = :uid');
+    $update->execute([
+        ':notify' => $enable ? 1 : 0,
+        ':id' => $shareId,
+        ':uid' => $user['id'],
+    ]);
+    flash('info', $enable ? '已开启评论邮件通知' : '已关闭评论邮件通知');
+    redirect('/dashboard#shares');
+}
 
 if ($path === '/dashboard/access-stats/update' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $user = require_login();
@@ -10487,67 +10569,119 @@ if ($path === '/dashboard/access-stats/delete-all' && $_SERVER['REQUEST_METHOD']
     redirect('/dashboard#access-stats');
 }
 
-if ($path === '/admin-home/access-update' && $_SERVER['REQUEST_METHOD'] === 'POST') {
-    $admin = require_admin();
-    check_csrf();
-    $userId = (int)$admin['id'];
-    $enabled = !empty($_POST['access_enabled']);
-    $daysRaw = (int)($_POST['access_retention_days'] ?? access_stats_retention_days($userId));
-    $days = max(1, min(365, $daysRaw));
-    set_user_setting($userId, 'access_stats_retention_days', (string)$days);
-    if ($enabled) {
-        set_user_setting($userId, 'access_stats_enabled', '1');
-    } else {
-        set_user_setting($userId, 'access_stats_enabled', '0');
-    }
-    flash('info', '访问统计设置已更新');
-    redirect('/admin-home');
-}
-
-if ($path === '/admin-home/access-delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
-    require_admin();
-    check_csrf();
-    $ids = $_POST['access_ids'] ?? [];
-    $ids = is_array($ids) ? array_values(array_filter($ids)) : [];
-    if (empty($ids)) {
-        redirect('/admin-home');
-    }
-    $pdo = db();
-    $placeholders = implode(',', array_fill(0, count($ids), '?'));
-    $userSizes = $pdo->prepare('SELECT user_id, COALESCE(SUM(size_bytes), 0) AS total FROM share_access_logs WHERE id IN (' . $placeholders . ') GROUP BY user_id');
-    $userSizes->execute($ids);
-    $rows = $userSizes->fetchAll(PDO::FETCH_ASSOC);
-    $delStmt = $pdo->prepare('DELETE FROM share_access_logs WHERE id IN (' . $placeholders . ')');
-    $delStmt->execute($ids);
-    foreach ($rows as $row) {
-        adjust_user_storage((int)$row['user_id'], -(int)$row['total']);
-    }
-    flash('info', '已删除选中的访问记录');
-    redirect('/admin-home');
-}
-
-if ($path === '/admin-home/access-delete-all' && $_SERVER['REQUEST_METHOD'] === 'POST') {
-    require_admin();
-    check_csrf();
-    $pdo = db();
-    $userSizes = $pdo->query('SELECT user_id, COALESCE(SUM(size_bytes), 0) AS total FROM share_access_logs GROUP BY user_id');
-    $rows = $userSizes->fetchAll(PDO::FETCH_ASSOC);
-    $pdo->exec('DELETE FROM share_access_logs');
-    foreach ($rows as $row) {
-        adjust_user_storage((int)$row['user_id'], -(int)$row['total']);
-    }
-    flash('info', '已清空全部访问记录');
-    redirect('/admin-home');
-}
-
 if ($path === '/admin') {
     $admin = require_admin();
     $pdo = db();
     $info = flash('info');
     $error = flash('error');
+    $createForm = $_SESSION['user_create_form'] ?? [];
+    if (!is_array($createForm)) {
+        $createForm = [];
+    }
+    $createOpen = !empty($createForm['open']);
+    $createUsername = (string)($createForm['username'] ?? '');
+    $createEmail = (string)($createForm['email'] ?? '');
+    $createRole = (string)($createForm['role'] ?? 'user');
+    if (!in_array($createRole, ['admin', 'user'], true)) {
+        $createRole = 'user';
+    }
+    $createDisabled = (string)($createForm['disabled'] ?? '0');
+    $createLimitMb = (string)($createForm['limit_mb'] ?? '0');
+    $createPassword = (string)($createForm['password'] ?? '');
+    unset($_SESSION['user_create_form']);
+    $allowRegistration = allow_registration();
+    $captchaEnabled = captcha_enabled();
+    $emailVerifyEnabled = email_verification_enabled();
     $defaultLimitBytes = default_storage_limit_bytes();
     $defaultLimitMb = mb_from_bytes($defaultLimitBytes);
+    $emailFrom = get_setting('email_from', 'no-reply@example.com');
+    $emailFromName = get_setting('email_from_name', '思源笔记分享');
+    $emailSubject = get_setting('email_subject', '邮箱验证码');
+    $emailResetSubject = get_setting('email_reset_subject', '重置密码验证码');
+    $smtpEnabled = smtp_enabled();
+    $smtpHost = get_setting('smtp_host', '');
+    $smtpPort = get_setting('smtp_port', '587');
+    $smtpSecure = get_setting('smtp_secure', 'tls');
+    $smtpUser = get_setting('smtp_user', '');
+    $smtpPass = get_setting('smtp_pass', '');
+    $siteIcp = get_setting('site_icp', '');
+    $siteContactEmail = get_setting('site_contact_email', '');
+    $siteBaseUrl = get_setting('site_base_url', '');
     $siteHeadHtml = get_setting('site_head_html', '');
+    $bannedWordsRaw = get_banned_words_raw();
+    $scanKeep = ((string)($_GET['scan_keep'] ?? '')) === '1';
+    if (!$scanKeep) {
+        unset($_SESSION['scan_results'], $_SESSION['scan_logs'], $_SESSION['scan_done'], $_SESSION['scan_at'], $_SESSION['scan_total']);
+    }
+    $scanResults = $_SESSION['scan_results'] ?? [];
+    $scanAt = (int)($_SESSION['scan_at'] ?? 0);
+    $scanResults = is_array($scanResults) ? $scanResults : [];
+    $scanLogs = $_SESSION['scan_logs'] ?? [];
+    $scanLogs = is_array($scanLogs) ? $scanLogs : [];
+    $scanDone = (int)($_SESSION['scan_done'] ?? 0) === 1;
+    $scanPage = max(1, (int)($_GET['scan_page'] ?? 1));
+    $scanSize = normalize_page_size($_GET['scan_size'] ?? 10);
+    $scanTotal = count($scanResults);
+    $scanKeepParam = (!empty($scanLogs) || $scanTotal > 0) ? '1' : null;
+    $scanLogHtml = '';
+    foreach ($scanLogs as $log) {
+        $scanLogHtml .= '<div>' . $log . '</div>';
+    }
+    $scanProgressHidden = $scanLogHtml === '' ? ' hidden' : '';
+    $scanReady = $scanDone || $scanLogHtml !== '';
+    $scanStatusLabel = $scanReady ? ('扫描完成，共命中 ' . number_format($scanTotal) . ' 条记录') : '等待扫描...';
+    $scanBarStyle = $scanReady ? ' style="width:100%"' : '';
+    [$scanPage, $scanSize, $scanPages, $scanOffset] = paginate($scanTotal, $scanPage, $scanSize);
+    $scanPageResults = array_slice($scanResults, $scanOffset, $scanSize);
+    [$chunkTtlSeconds] = chunk_cleanup_settings();
+    $staleChunks = list_stale_chunks($chunkTtlSeconds);
+    $allUsers = $pdo->query('SELECT id, username FROM users ORDER BY username ASC')->fetchAll(PDO::FETCH_ASSOC);
+    $userSearch = trim((string)($_GET['user_search'] ?? ''));
+    $userStatus = (string)($_GET['user_status'] ?? 'all');
+    $userRole = (string)($_GET['user_role'] ?? 'all');
+    $userPage = max(1, (int)($_GET['user_page'] ?? 1));
+    $userSize = normalize_page_size($_GET['user_size'] ?? 10);
+    $userWhere = [];
+    $userParams = [];
+    if ($userSearch !== '') {
+        $userWhere[] = '(username LIKE :user_search OR email LIKE :user_search)';
+        $userParams[':user_search'] = '%' . $userSearch . '%';
+    }
+    if ($userStatus === 'active') {
+        $userWhere[] = 'disabled = 0';
+    } elseif ($userStatus === 'disabled') {
+        $userWhere[] = 'disabled = 1';
+    }
+    if ($userRole === 'admin') {
+        $userWhere[] = 'role = "admin"';
+    } elseif ($userRole === 'user') {
+        $userWhere[] = 'role = "user"';
+    }
+    $userSql = 'SELECT * FROM users';
+    $userCountSql = 'SELECT COUNT(*) FROM users';
+    if (!empty($userWhere)) {
+        $userSql .= ' WHERE ' . implode(' AND ', $userWhere);
+        $userCountSql .= ' WHERE ' . implode(' AND ', $userWhere);
+    }
+    $userCountStmt = $pdo->prepare($userCountSql);
+    $userCountStmt->execute($userParams);
+    $totalUsers = (int)$userCountStmt->fetchColumn();
+    [$userPage, $userSize, $userPages, $userOffset] = paginate($totalUsers, $userPage, $userSize);
+    $userSql .= ' ORDER BY created_at DESC LIMIT :limit OFFSET :offset';
+    $userStmt = $pdo->prepare($userSql);
+    foreach ($userParams as $key => $value) {
+        $userStmt->bindValue($key, $value);
+    }
+    $userStmt->bindValue(':limit', $userSize, PDO::PARAM_INT);
+    $userStmt->bindValue(':offset', $userOffset, PDO::PARAM_INT);
+    $userStmt->execute();
+    $users = $userStmt->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($users as &$u) {
+        $u['storage_used_bytes'] = recalculate_user_storage((int)$u['id']);
+    }
+    unset($u);
+
+    $filterUser = (int)($_GET['user'] ?? 0);
     $filterStatus = (string)($_GET['status'] ?? 'active');
     $shareSearch = trim((string)($_GET['share_search'] ?? ''));
     $sharePage = max(1, (int)($_GET['share_page'] ?? 1));
@@ -10557,6 +10691,10 @@ if ($path === '/admin') {
     }
     $where = [];
     $params = [];
+    if ($filterUser > 0) {
+        $where[] = 'shares.user_id = :uid';
+        $params[':uid'] = $filterUser;
+    }
     if ($shareSearch !== '') {
         $where[] = '(shares.title LIKE :share_search OR shares.slug LIKE :share_search)';
         $params[':share_search'] = '%' . $shareSearch . '%';
@@ -10620,19 +10758,14 @@ if ($path === '/admin') {
 
     $announcements = $pdo->query('SELECT a.*, u.username AS author FROM announcements a LEFT JOIN users u ON a.created_by = u.id ORDER BY a.created_at DESC')
         ->fetchAll(PDO::FETCH_ASSOC);
+    $userQuery = $_GET;
+    unset($userQuery['user_page'], $userQuery['user_size'], $userQuery['user_search'], $userQuery['user_status'], $userQuery['user_role']);
     $shareQuery = $_GET;
     unset($shareQuery['share_page'], $shareQuery['share_size'], $shareQuery['share_search'], $shareQuery['user'], $shareQuery['status']);
     $reportQuery = $_GET;
     unset($reportQuery['report_page'], $reportQuery['report_size'], $reportQuery['report_status']);
     $scanQuery = $_GET;
     unset($scanQuery['scan_page'], $scanQuery['scan_size']);
-    $scanKeepParam = null;
-    if (array_key_exists('scan_keep', $_GET)) {
-        $scanKeepParam = trim((string)$_GET['scan_keep']);
-        if ($scanKeepParam === '') {
-            $scanKeepParam = null;
-        }
-    }
     if ($scanKeepParam !== null) {
         $scanQuery['scan_keep'] = $scanKeepParam;
     } else {
@@ -10652,6 +10785,18 @@ if ($path === '/admin') {
     $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
     $content .= '<div class="grid">';
     $content .= '<div><label>默认存储上限 (MB)</label><input class="input" name="default_storage_limit_mb" type="number" min="0" value="' . (int)$defaultLimitMb . '"></div>';
+    $content .= '<div><label>邮箱发件人</label><input class="input" name="email_from" value="' . htmlspecialchars((string)$emailFrom) . '"></div>';
+    $content .= '<div><label>发件人名称</label><input class="input" name="email_from_name" value="' . htmlspecialchars((string)$emailFromName) . '"></div>';
+    $content .= '<div><label>验证码主题</label><input class="input" name="email_subject" value="' . htmlspecialchars((string)$emailSubject) . '"></div>';
+    $content .= '<div><label>重置密码主题</label><input class="input" name="email_reset_subject" value="' . htmlspecialchars((string)$emailResetSubject) . '"></div>';
+    $content .= '<div><label>ICP备案号</label><input class="input" name="site_icp" value="' . htmlspecialchars((string)$siteIcp) . '"></div>';
+    $content .= '<div><label>联系邮箱</label><input class="input" name="site_contact_email" value="' . htmlspecialchars((string)$siteContactEmail) . '"></div>';
+    $content .= '<div><label>网站地址（分享链接前缀）<button class="link-button" type="button" data-report-open data-report-target="site-base-url-help">说明</button></label><input class="input" name="site_base_url" placeholder="https://share.example.com" value="' . htmlspecialchars((string)$siteBaseUrl) . '"></div>';
+    $content .= '</div>';
+    $content .= '<div style="margin-top:12px">';
+    $content .= '<label>违禁词（用 | 分隔）</label>';
+    $content .= '<textarea class="input" name="banned_words" rows="2" placeholder="示例：词1|词2|词3">' . htmlspecialchars($bannedWordsRaw) . '</textarea>';
+    $content .= '<div class="muted">用户分享和分享页评论命中任意违禁词将拒绝分享和评论，并在扫描结果中标记。</div>';
     $content .= '</div>';
     $content .= '<div style="margin-top:12px">';
     $content .= '<label>HTML Head 插入内容</label>';
@@ -10659,8 +10804,45 @@ if ($path === '/admin') {
     $content .= '<div class="muted">会插入到页面 &lt;head&gt; 中，可用于统计脚本。</div>';
     $content .= '</div>';
     $content .= '<div class="grid" style="margin-top:12px">';
+    $content .= '<label><input type="checkbox" name="allow_registration" value="1"' . ($allowRegistration ? ' checked' : '') . '> 允许注册</label>';
+    $content .= '<label><input type="checkbox" name="captcha_enabled" value="1"' . ($captchaEnabled ? ' checked' : '') . '> 启用验证码</label>';
+    $content .= '<label><input type="checkbox" name="email_verification_enabled" value="1"' . ($emailVerifyEnabled ? ' checked' : '') . '> 启用邮箱验证码</label>';
+    $content .= '<label><input type="checkbox" name="smtp_enabled" value="1"' . ($smtpEnabled ? ' checked' : '') . '> 启用 SMTP</label>';
+    $content .= '</div>';
+    $content .= '<div class="grid" style="margin-top:12px">';
+    $content .= '<div><label>SMTP 主机</label><input class="input" name="smtp_host" value="' . htmlspecialchars((string)$smtpHost) . '"></div>';
+    $content .= '<div><label>SMTP 端口</label><input class="input" name="smtp_port" type="number" min="0" value="' . htmlspecialchars((string)$smtpPort) . '"></div>';
+    $content .= '<div><label>加密方式</label><select class="input" name="smtp_secure">';
+    $content .= '<option value="none"' . ($smtpSecure === 'none' ? ' selected' : '') . '>无</option>';
+    $content .= '<option value="tls"' . ($smtpSecure === 'tls' ? ' selected' : '') . '>TLS</option>';
+    $content .= '<option value="ssl"' . ($smtpSecure === 'ssl' ? ' selected' : '') . '>SSL</option>';
+    $content .= '</select></div>';
+    $content .= '<div><label>SMTP 用户名</label><input class="input" name="smtp_user" value="' . htmlspecialchars((string)$smtpUser) . '"></div>';
+    $content .= '<div><label>SMTP 密码</label><input class="input" type="password" name="smtp_pass" value="' . htmlspecialchars((string)$smtpPass) . '"></div>';
     $content .= '</div>';
     $content .= '<div style="margin-top:12px"><button class="button primary" type="submit">保存设置</button></div>';
+    $content .= '</form></div>';
+    $content .= '<div class="modal" id="site-base-url-help" data-report-modal hidden>';
+    $content .= '<div class="modal-backdrop" data-modal-close></div>';
+    $content .= '<div class="modal-card">';
+    $content .= '<div class="modal-header">网站地址说明</div>';
+    $content .= '<div class="modal-body">';
+    $content .= '<p><strong>留空：</strong>自动识别当前访问地址（协议/域名/端口）。</p>';
+    $content .= '<p><strong>填写：</strong>分享链接统一使用该前缀，适合反代/HTTPS 终止/端口丢失等场景。</p>';
+    $content .= '<p><strong>示例：</strong><code>https://share.example.com</code> 或 <code>https://IP:端口</code></p>';
+    $content .= '<p><strong>说明：</strong>仅影响分享链接前缀，不会限制其他访问方式。</p>';
+    $content .= '</div>';
+    $content .= '<div class="modal-actions"><button class="button" type="button" data-modal-close>关闭</button></div>';
+    $content .= '</div>';
+    $content .= '</div>';
+
+    $content .= '<div class="card"><h2>SMTP 测试</h2>';
+    $content .= '<form method="post" action="' . base_path() . '/admin/smtp-test">';
+    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+    $content .= '<div class="grid">';
+    $content .= '<div><label>测试邮箱</label><input class="input" name="test_email" placeholder="例如 test@example.com" required></div>';
+    $content .= '</div>';
+    $content .= '<div style="margin-top:12px"><button class="button" type="submit">发送测试邮件</button></div>';
     $content .= '</form></div>';
 
     $content .= '<div class="card" id="announcements"><h2>发布公告</h2>';
@@ -10722,13 +10904,244 @@ if ($path === '/admin') {
     }
     $content .= '</div>';
 
+    $content .= '<div class="card" id="reports"><h2>举报管理</h2>';
+    $content .= '<form method="get" action="' . base_path() . '/admin#reports" class="filter-form">';
+    $content .= render_hidden_inputs($reportQuery);
+    $content .= '<div class="grid">';
+    $content .= '<div><label>状态筛选</label><select class="input" name="report_status">';
+    $content .= '<option value="pending"' . ($reportStatus === 'pending' ? ' selected' : '') . '>未处理</option>';
+    $content .= '<option value="handled"' . ($reportStatus === 'handled' ? ' selected' : '') . '>已处理</option>';
+    $content .= '<option value="all"' . ($reportStatus === 'all' ? ' selected' : '') . '>全部</option>';
+    $content .= '</select></div>';
+    $content .= '</div>';
+    $content .= '<div style="margin-top:12px"><button class="button" type="submit">筛选</button></div>';
+    $content .= '</form>';
+    $content .= '<form id="report-batch-form" method="post" action="' . base_path() . '/admin/report-batch" data-confirm-message="确定删除选中的举报记录吗？">';
+    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+    $content .= '<div class="table-actions">';
+    $content .= '<label class="checkbox"><input type="checkbox" data-check-all="reports" form="report-batch-form"> 全选</label>';
+    $content .= '<select class="input" name="action">';
+    $content .= '<option value="delete">批量删除</option>';
+    $content .= '</select>';
+    $content .= '<button class="button" type="submit">执行</button>';
+    $content .= '</div>';
+    $content .= '</form>';
+    if (empty($reports)) {
+        $content .= '<p class="muted" style="margin-top:12px">暂无举报记录。</p>';
+    } else {
+        $content .= '<table class="table" style="margin-top:12px"><thead><tr><th><input type="checkbox" data-check-all="reports" form="report-batch-form"></th><th>时间</th><th>分享</th><th>用户</th><th>状态</th><th>操作</th></tr></thead><tbody>';
+        foreach ($reports as $report) {
+            $reportId = (int)($report['id'] ?? 0);
+            $shareTitle = htmlspecialchars((string)($report['share_title'] ?? ''));
+            $shareSlug = (string)($report['share_slug'] ?? '');
+            $shareUrl = $shareSlug !== '' ? share_url($shareSlug) : '';
+            $shareUserId = (int)($report['share_user_id'] ?? 0);
+            $shareUser = htmlspecialchars((string)($report['share_username'] ?? ''));
+            $reporter = (string)($report['reporter_username'] ?? '');
+            $reporterLabel = $reporter !== '' ? htmlspecialchars($reporter) : '游客';
+            $reportEmailRaw = (string)($report['report_email'] ?? '');
+            $reportEmailLabel = $reportEmailRaw !== '' ? $reportEmailRaw : '-';
+            $reason = report_reason_label((string)($report['reason_type'] ?? ''));
+            $detailRaw = (string)($report['reason_detail'] ?? '');
+            $created = htmlspecialchars((string)($report['created_at'] ?? ''));
+            $handledAt = (string)($report['handled_at'] ?? '');
+            $statusLabel = $handledAt !== '' ? '已处理' : '未处理';
+            $modalId = 'report-view-' . $reportId;
+            $content .= '<tr>';
+            $content .= '<td><input type="checkbox" name="report_ids[]" value="' . $reportId . '" data-check-item="reports" form="report-batch-form"></td>';
+            $content .= '<td>' . $created . '</td>';
+            $content .= '<td>';
+            if ($shareUrl !== '') {
+                $content .= '<a href="' . htmlspecialchars($shareUrl) . '" target="_blank">' . $shareTitle . '</a>';
+                $content .= '<div class="muted">/s/' . htmlspecialchars($shareSlug) . '</div>';
+            } else {
+                $content .= $shareTitle !== '' ? $shareTitle : '已删除';
+            }
+            $content .= '</td>';
+            $content .= '<td>';
+            if ($shareUserId > 0) {
+                $content .= '<a href="' . base_path() . '/admin?user=' . $shareUserId . '&status=all#shares">' . ($shareUser !== '' ? $shareUser : ('ID:' . $shareUserId)) . '</a>';
+            } else {
+                $content .= $shareUser !== '' ? $shareUser : '-';
+            }
+            $content .= '</td>';
+            $content .= '<td>' . htmlspecialchars($statusLabel) . '</td>';
+            $content .= '<td class="actions">';
+            $content .= '<button class="button ghost" type="button" data-report-open data-report-target="' . htmlspecialchars($modalId) . '">查看举报内容</button>';
+            if ($handledAt === '') {
+                $content .= '<form method="post" action="' . base_path() . '/admin/report-handle" class="inline-form">';
+                $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+                $content .= '<input type="hidden" name="report_id" value="' . $reportId . '">';
+                $content .= '<button class="button" type="submit">标记已处理</button>';
+                $content .= '</form>';
+            }
+            if ($handledAt !== '') {
+                $content .= '<form method="post" action="' . base_path() . '/admin/report-delete" class="inline-form" data-confirm-message="确定删除该举报记录吗？">';
+                $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+                $content .= '<input type="hidden" name="report_id" value="' . $reportId . '">';
+                $content .= '<button class="button ghost" type="submit">删除记录</button>';
+                $content .= '</form>';
+            }
+            if ($shareSlug !== '') {
+                $content .= '<form method="post" action="' . base_path() . '/admin/report-share-delete" class="inline-form" data-confirm-message="确定彻底删除该分享吗？该操作不可恢复。">';
+                $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+                $content .= '<input type="hidden" name="report_id" value="' . $reportId . '">';
+                $content .= '<button class="button danger" type="submit">彻底删除分享</button>';
+                $content .= '</form>';
+            }
+            if ($shareUserId > 0) {
+                $content .= '<form method="post" action="' . base_path() . '/admin/report-user-disable" class="inline-form" data-confirm-message="确定禁用该账号吗？">';
+                $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+                $content .= '<input type="hidden" name="report_id" value="' . $reportId . '">';
+                $content .= '<button class="button" type="submit">禁用账号</button>';
+                $content .= '</form>';
+            }
+            $content .= '<div class="modal report-modal" id="' . htmlspecialchars($modalId) . '" data-report-modal hidden>';
+            $content .= '<div class="modal-backdrop" data-modal-close></div>';
+            $content .= '<div class="modal-card">';
+            $content .= '<div class="modal-header"><h3>举报内容</h3></div>';
+            $content .= '<div class="modal-body">';
+            $content .= '<div class="report-grid">';
+            $content .= '<div><label>举报类型</label><input class="input" value="' . htmlspecialchars($reason) . '" readonly></div>';
+            $content .= '<div><label>举报邮箱</label><input class="input" value="' . htmlspecialchars($reportEmailLabel) . '" readonly></div>';
+            $content .= '<div><label>举报者</label><input class="input" value="' . htmlspecialchars($reporterLabel) . '" readonly></div>';
+            $content .= '<div class="report-wide"><label>补充说明</label><textarea class="input" rows="4" readonly>' . htmlspecialchars($detailRaw) . '</textarea></div>';
+            $content .= '</div>';
+            $content .= '<div class="modal-actions"><button class="button" type="button" data-modal-close>关闭</button></div>';
+            $content .= '</div>';
+            $content .= '</div>';
+            $content .= '</div>';
+            $content .= '</td>';
+            $content .= '</tr>';
+        }
+        $content .= '</tbody></table>';
+    }
+    $content .= '<div class="pagination">';
+    $content .= '<a class="button ghost" href="' . build_admin_query_url('reports', ['report_page' => max(1, $reportPage - 1)]) . '">上一页</a>';
+    $content .= '<div class="pagination-info">第' . $reportPage . ' / ' . $reportPages . ' 页，共 ' . $reportTotal . ' 条举报</div>';
+    $content .= '<a class="button ghost" href="' . build_admin_query_url('reports', ['report_page' => min($reportPages, $reportPage + 1)]) . '">下一页</a>';
+    $content .= '<form method="get" action="' . base_path() . '/admin#reports" class="pagination-form">';
+    $content .= render_hidden_inputs(array_merge($reportQuery, [
+        'report_status' => $reportStatus,
+    ]));
+    $content .= '<label>每页</label><select class="input" name="report_size">';
+    foreach ([10, 50, 200, 1000] as $size) {
+        $selected = $reportSize === $size ? ' selected' : '';
+        $content .= '<option value="' . $size . '"' . $selected . '>' . $size . '</option>';
+    }
+    $content .= '</select>';
+    $content .= '<label>页码</label><input class="input small" type="number" name="report_page" min="1" max="' . $reportPages . '" value="' . $reportPage . '">';
+    $content .= '<button class="button" type="submit">跳转</button>';
+    $content .= '</form>';
+    $content .= '</div>';
+    $content .= '</div>';
 
+    $content .= '<div class="card" id="users"><h2>用户管理</h2>';
+    $content .= '<form method="get" action="' . base_path() . '/admin#users" class="filter-form">';
+    $content .= render_hidden_inputs($userQuery);
+    $content .= '<div class="grid">';
+    $content .= '<div><label>关键词</label><input class="input" name="user_search" placeholder="用户名 / 邮箱" value="' . htmlspecialchars($userSearch) . '"></div>';
+    $content .= '<div><label>状态筛选</label><select class="input" name="user_status">';
+    $content .= '<option value="all"' . ($userStatus === 'all' ? ' selected' : '') . '>全部</option>';
+    $content .= '<option value="active"' . ($userStatus === 'active' ? ' selected' : '') . '>正常</option>';
+    $content .= '<option value="disabled"' . ($userStatus === 'disabled' ? ' selected' : '') . '>已禁用</option>';
+    $content .= '</select></div>';
+    $content .= '<div><label>角色筛选</label><select class="input" name="user_role">';
+    $content .= '<option value="all"' . ($userRole === 'all' ? ' selected' : '') . '>全部</option>';
+    $content .= '<option value="admin"' . ($userRole === 'admin' ? ' selected' : '') . '>管理员</option>';
+    $content .= '<option value="user"' . ($userRole === 'user' ? ' selected' : '') . '>普通用户</option>';
+    $content .= '</select></div>';
+    $content .= '</div>';
+    $content .= '<div class="table-actions">';
+    $content .= '<button class="button" type="submit">筛选</button>';
+    $content .= '<button class="button" type="button" data-user-create-open>添加账号</button>';
+    $content .= '</div>';
+    $content .= '</form>';
+
+    $content .= '<form id="user-batch-form" method="post" action="' . base_path() . '/admin/user-batch" data-batch-form="user">';
+    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+    $content .= '<div class="table-actions">';
+    $content .= '<label class="checkbox"><input type="checkbox" data-check-all="users" form="user-batch-form"> 全选</label>';
+    $content .= '<select class="input" name="action">';
+    $content .= '<option value="disable">批量禁用</option>';
+    $content .= '<option value="enable">批量启用</option>';
+    $content .= '<option value="delete">批量删除</option>';
+    $content .= '</select>';
+    $content .= '<button class="button" type="submit">执行</button>';
+    $content .= '</div>';
+    $content .= '</form>';
+    if (empty($users)) {
+        $content .= '<p class="muted" style="margin-top:12px">暂无用户记录。</p>';
+    } else {
+        $content .= '<table class="table"><thead><tr><th><input type="checkbox" data-check-all="users" form="user-batch-form"></th><th>用户名</th><th>角色</th><th>状态</th><th>邮箱</th><th>存储</th><th>操作</th></tr></thead><tbody>';
+        foreach ($users as $u) {
+            $status = (int)$u['disabled'] === 1 ? '禁用' : '正常';
+            $roleLabel = $u['role'] === 'admin' ? '管理员' : '用户';
+            $limitMb = mb_from_bytes((int)$u['storage_limit_bytes']);
+            $limitLabel = (int)$u['storage_limit_bytes'] > 0
+                ? format_bytes((int)$u['storage_limit_bytes'])
+                : ($defaultLimitBytes > 0 ? '默认(' . format_bytes($defaultLimitBytes) . ')' : '不限');
+            $usedLabel = format_bytes((int)$u['storage_used_bytes']);
+            $disabledAttr = $u['role'] === 'admin' ? ' disabled' : '';
+            $content .= '<tr>';
+            $content .= '<td><input type="checkbox" name="user_ids[]" value="' . (int)$u['id'] . '" data-check-item="users" form="user-batch-form"' . $disabledAttr . '></td>';
+            $content .= '<td>' . htmlspecialchars($u['username']) . '</td>';
+            $content .= '<td>' . htmlspecialchars($roleLabel) . '</td>';
+            $content .= '<td>' . htmlspecialchars($status) . '</td>';
+            $content .= '<td>' . htmlspecialchars((string)$u['email']) . '</td>';
+            $content .= '<td>' . htmlspecialchars($usedLabel) . ' / ' . htmlspecialchars($limitLabel) . '</td>';
+            $content .= '<td class="actions">';
+            $content .= '<button class="button" type="button" data-user-edit data-user-id="' . (int)$u['id'] . '" data-user-name="' . htmlspecialchars($u['username']) . '" data-user-email="' . htmlspecialchars((string)$u['email']) . '" data-user-role="' . htmlspecialchars((string)$u['role']) . '" data-user-disabled="' . (int)$u['disabled'] . '" data-user-limit="' . (int)$limitMb . '">编辑</button>';
+            $shareUrl = build_admin_query_url('shares', ['user' => (int)$u['id'], 'status' => 'all']);
+            $content .= '<a class="button" href="' . htmlspecialchars($shareUrl) . '">查看分享</a>';
+            if ($u['role'] !== 'admin' && (int)$u['id'] !== (int)$admin['id']) {
+                $content .= '<form method="post" action="' . base_path() . '/admin/user-delete" class="inline-form" data-confirm-message="确定删除该用户及其所有分享吗？该操作不可恢复。">';
+                $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+                $content .= '<input type="hidden" name="user_id" value="' . (int)$u['id'] . '">';
+                $content .= '<button class="button danger" type="submit">删除</button>';
+                $content .= '</form>';
+            }
+            $content .= '</td>';
+            $content .= '</tr>';
+        }
+        $content .= '</tbody></table>';
+    }
+    $content .= '';
+
+    $content .= '<div class="pagination">';
+    $content .= '<a class="button ghost" href="' . build_admin_query_url('users', ['user_page' => max(1, $userPage - 1)]) . '">上一页</a>';
+    $content .= '<div class="pagination-info">第 ' . $userPage . ' / ' . $userPages . ' 页，共 ' . $totalUsers . ' 个用户</div>';
+    $content .= '<a class="button ghost" href="' . build_admin_query_url('users', ['user_page' => min($userPages, $userPage + 1)]) . '">下一页</a>';
+    $content .= '<form method="get" action="' . base_path() . '/admin#users" class="pagination-form">';
+    $content .= render_hidden_inputs(array_merge($userQuery, [
+        'user_search' => $userSearch,
+        'user_status' => $userStatus,
+        'user_role' => $userRole,
+    ]));
+    $content .= '<label>每页</label><select class="input" name="user_size">';
+    foreach ([10, 50, 200, 1000] as $size) {
+        $selected = $userSize === $size ? ' selected' : '';
+        $content .= '<option value="' . $size . '"' . $selected . '>' . $size . '</option>';
+    }
+    $content .= '</select>';
+    $content .= '<label>页码</label><input class="input small" type="number" name="user_page" min="1" max="' . $userPages . '" value="' . $userPage . '">';
+    $content .= '<button class="button" type="submit">跳转</button>';
+    $content .= '</form>';
+    $content .= '</div>';
+    $content .= '</div>';
 
     $content .= '<div class="card" id="shares"><h2>分享管理</h2>';
     $content .= '<form method="get" action="' . base_path() . '/admin#shares" class="filter-form">';
     $content .= render_hidden_inputs($shareQuery);
     $content .= '<div class="grid">';
     $content .= '<div><label>关键词</label><input class="input" name="share_search" placeholder="标题 / Slug" value="' . htmlspecialchars($shareSearch) . '"></div>';
+    $content .= '<div><label>用户筛选</label><select class="input" name="user">';
+    $content .= '<option value="0">全部用户</option>';
+    foreach ($allUsers as $u) {
+        $selected = ($filterUser === (int)$u['id']) ? ' selected' : '';
+        $content .= '<option value="' . (int)$u['id'] . '"' . $selected . '>' . htmlspecialchars($u['username']) . '</option>';
+    }
+    $content .= '</select></div>';
     $content .= '<div><label>状态筛选</label><select class="input" name="status">';
     $content .= '<option value="all"' . ($filterStatus === 'all' ? ' selected' : '') . '>全部</option>';
     $content .= '<option value="active"' . ($filterStatus === 'active' ? ' selected' : '') . '>正常</option>';
@@ -10753,14 +11166,12 @@ if ($path === '/admin') {
     if (empty($shares)) {
         $content .= '<p class="muted" style="margin-top:12px">暂无分享记录。</p>';
     } else {
-        $content .= '<table class="table" style="margin-top:12px"><thead><tr><th><input type="checkbox" data-check-all="shares" form="share-batch-form"></th><th>标题</th><th>链接</th><th>类型</th><th>用户</th><th>密码</th><th>到期</th><th>访客上限</th><th>状态</th>';
-        $content .= '<th>大小</th><th>更新时间</th><th>操作</th></tr></thead><tbody>';
+        $content .= '<table class="table" style="margin-top:12px"><thead><tr><th><input type="checkbox" data-check-all="shares" form="share-batch-form"></th><th>标题</th><th>链接</th><th>类型</th><th>用户</th><th>密码</th><th>到期</th><th>访客上限</th><th>状态</th><th>评论邮件通知</th><th>大小</th><th>更新时间</th><th>操作</th></tr></thead><tbody>';
         foreach ($shares as $share) {
             $type = $share['type'] === 'notebook' ? '笔记本' : '文档';
             $status = $share['deleted_at'] ? '已删除' : '正常';
             $size = format_bytes((int)($share['size_bytes'] ?? 0));
             $url = share_url((string)$share['slug']);
-            $urlLabel = htmlspecialchars(format_url_label($url, 48));
             $hasPassword = !empty($share['password_hash']) ? '有密码' : '无密码';
             $expiresAt = !empty($share['expires_at']) ? date('Y-m-d H:i', (int)$share['expires_at']) : '永久';
             $visitorLimit = (int)($share['visitor_limit'] ?? 0);
@@ -10773,13 +11184,14 @@ if ($path === '/admin') {
             $content .= '<tr>';
             $content .= '<td><input type="checkbox" name="share_ids[]" value="' . (int)$share['id'] . '" data-check-item="shares" form="share-batch-form"></td>';
             $content .= '<td>' . htmlspecialchars($share['title']) . '</td>';
-            $content .= '<td><a href="' . htmlspecialchars($url) . '" target="_blank">' . $urlLabel . '</a></td>';
+            $content .= '<td><a href="' . htmlspecialchars($url) . '" target="_blank">' . htmlspecialchars($url) . '</a></td>';
             $content .= '<td>' . htmlspecialchars($type) . '</td>';
             $content .= '<td>' . htmlspecialchars($share['username'] ?? '') . '</td>';
             $content .= '<td>' . htmlspecialchars($hasPassword) . '</td>';
             $content .= '<td>' . htmlspecialchars($expiresAt) . '</td>';
             $content .= '<td>' . htmlspecialchars($visitorLabel) . '</td>';
             $content .= '<td>' . htmlspecialchars($status) . '</td>';
+            $content .= '<td>' . (((int)($share['comment_notify'] ?? 0) === 1) ? '开启' : '关闭') . '</td>';
             $content .= '<td>' . htmlspecialchars($size) . '</td>';
             $content .= '<td>' . htmlspecialchars($share['updated_at']) . '</td>';
             $content .= '<td class="actions">';
@@ -10815,6 +11227,7 @@ if ($path === '/admin') {
     $content .= '<form method="get" action="' . base_path() . '/admin#shares" class="pagination-form">';
     $content .= render_hidden_inputs(array_merge($shareQuery, [
         'share_search' => $shareSearch,
+        'user' => $filterUser,
         'status' => $filterStatus,
     ]));
     $content .= '<label>每页</label><select class="input" name="share_size">';
@@ -10829,8 +11242,196 @@ if ($path === '/admin') {
     $content .= '</div>';
     $content .= '</div>';
 
+    $chunkTtlHours = $chunkTtlSeconds > 0 ? ($chunkTtlSeconds / 3600) : 2;
+    $content .= '<div class="card" id="chunks"><h2>分片清理</h2>';
+    $content .= '<div class="muted">仅显示超过 ' . htmlspecialchars(number_format($chunkTtlHours, 1)) . ' 小时未更新的分片目录。</div>';
+    if (empty($staleChunks)) {
+        $content .= '<p class="muted" style="margin-top:12px">暂无过期分片。</p>';
+    } else {
+        $content .= '<form method="post" action="' . base_path() . '/admin/chunk-clean" class="inline-form" style="margin-top:12px">';
+        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+        $content .= '<button class="button danger" type="submit">清理全部过期分片</button>';
+        $content .= '</form>';
+        $content .= '<table class="table" style="margin-top:12px"><thead><tr><th>目录</th><th>最后更新</th><th>已过期</th><th>操作</th></tr></thead><tbody>';
+        foreach ($staleChunks as $chunk) {
+            $chunkId = (string)$chunk['id'];
+            $mtime = (int)$chunk['mtime'];
+            $ageHours = max(0, $chunk['age'] / 3600);
+            $content .= '<tr>';
+            $content .= '<td><span class="muted">' . htmlspecialchars($chunkId) . '</span></td>';
+            $content .= '<td>' . htmlspecialchars(date('Y-m-d H:i', $mtime)) . '</td>';
+            $content .= '<td>' . htmlspecialchars(number_format($ageHours, 1)) . ' 小时</td>';
+            $content .= '<td class="actions">';
+            $content .= '<form method="post" action="' . base_path() . '/admin/chunk-delete" class="inline-form">';
+            $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+            $content .= '<input type="hidden" name="chunk_id" value="' . htmlspecialchars($chunkId) . '">';
+            $content .= '<button class="button danger" type="submit">删除</button>';
+            $content .= '</form>';
+            $content .= '</td>';
+            $content .= '</tr>';
+        }
+        $content .= '</tbody></table>';
+    }
+    $content .= '</div>';
 
+    $content .= '<div class="card" id="scan"><h2>违禁词扫描</h2>';
+    if ($bannedWordsRaw === '') {
+        $content .= '<div class="notice">请先在“站点设置”里配置违禁词。</div>';
+    }
+    $content .= '<form method="post" action="' . base_path() . '/admin/scan" data-scan-form="1">';
+    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+    $content .= '<button class="button" type="submit">开始扫描</button>';
+    $content .= '</form>';
+    $content .= '<div class="scan-progress" data-scan-progress' . $scanProgressHidden . '>';
+    $content .= '<div class="scan-progress__bar"><span data-scan-bar' . $scanBarStyle . '></span></div>';
+    $content .= '<div class="scan-progress__status" data-scan-status>' . htmlspecialchars($scanStatusLabel) . '</div>';
+    $content .= '<div class="scan-log" data-scan-log>' . $scanLogHtml . '</div>';
+    $content .= '</div>';
+    if (!empty($scanResults)) {
+        $shareIds = [];
+        $userIds = [];
+        foreach ($scanResults as $hit) {
+            if (!isset($hit['share_id'], $hit['user_id'])) {
+                continue;
+            }
+            $shareIds[(int)$hit['share_id']] = true;
+            $userIds[(int)$hit['user_id']] = true;
+        }
+        $scanTimeLabel = $scanAt ? date('Y-m-d H:i', $scanAt) : '未知';
+        $content .= '<div class="muted" style="margin-top:10px">最近扫描：' . htmlspecialchars($scanTimeLabel) . '，命中 ' . count($scanResults) . ' 条记录，涉及 ' . count($shareIds) . ' 个分享 / ' . count($userIds) . ' 个账号。</div>';
+        $content .= '<div class="scan-actions" style="margin-top:10px">';
+        $content .= '<form method="post" action="' . base_path() . '/admin/scan/delete" class="inline-form">';
+        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+        $content .= '<button class="button danger" type="submit">一键删除违规分享</button>';
+        $content .= '</form>';
+        $content .= '<form method="post" action="' . base_path() . '/admin/scan/disable" class="inline-form">';
+        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+        $content .= '<button class="button" type="submit">一键停用违规账号</button>';
+        $content .= '</form>';
+        $content .= '</div>';
 
+        $content .= '<form id="scan-batch-form" method="post" action="' . base_path() . '/admin/scan/batch">';
+        $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+        $content .= '<div class="table-actions">';
+        $content .= '<label class="checkbox"><input type="checkbox" data-check-all="scan" form="scan-batch-form"> 全选</label>';
+        $content .= '<select class="input" name="action">';
+        $content .= '<option value="delete">批量删除分享</option>';
+        $content .= '<option value="disable">批量停用账号</option>';
+        $content .= '</select>';
+        $content .= '<button class="button" type="submit">执行</button>';
+        $content .= '</div>';
+        $content .= '</form>';
+        $content .= '<table class="table scan-table" style="margin-top:12px"><thead><tr><th><input type="checkbox" data-check-all="scan" form="scan-batch-form"></th><th>分享</th><th>文档/评论</th><th>用户</th><th>违禁词</th><th>预览</th><th>链接</th></tr></thead><tbody>';
+        foreach ($scanPageResults as $hit) {
+            $itemType = (string)($hit['item_type'] ?? 'doc');
+            $shareTitleRaw = (string)($hit['share_title'] ?? '');
+            $shareTitle = htmlspecialchars($shareTitleRaw);
+            $docTitleRaw = (string)($hit['doc_title'] ?? $hit['doc_id'] ?? '');
+            $docTitle = htmlspecialchars($docTitleRaw);
+            $hPath = trim((string)($hit['hpath'] ?? ''), '/');
+            $userName = htmlspecialchars((string)($hit['username'] ?? ''));
+            $word = htmlspecialchars((string)($hit['word'] ?? ''));
+            $snippet = htmlspecialchars((string)($hit['snippet'] ?? ''));
+            $shareUrl = $hit['slug'] ? share_url((string)$hit['slug']) : '';
+            $commentId = (int)($hit['comment_id'] ?? 0);
+            $commentEmail = trim((string)($hit['comment_email'] ?? ''));
+            $commentCreatedAt = (string)($hit['comment_created_at'] ?? '');
+            $commentContent = (string)($hit['comment_content'] ?? '');
+            $value = (int)($hit['share_id'] ?? 0) . '|' . (int)($hit['user_id'] ?? 0);
+            $slug = (string)($hit['slug'] ?? '');
+            $detailTitleHtml = htmlspecialchars($docTitleRaw);
+            $detailMeta = $hPath;
+            $docId = (string)($hit['doc_id'] ?? '');
+            if ($itemType === 'doc') {
+                $docLabel = trim($docTitleRaw) !== '' ? $docTitleRaw : $docId;
+                $docLabel = $docLabel !== '' ? '文档：' . $docLabel : '文档';
+                $detailTitleHtml = htmlspecialchars($docLabel);
+                $detailMeta = $hPath !== '' ? '路径：' . $hPath : '';
+                $docUrl = $shareUrl;
+                if ($slug !== '' && $docId !== '') {
+                    $docUrl = base_url() . build_share_redirect_path($slug, $docId, '');
+                }
+                if ($docUrl !== '') {
+                    $detailTitleHtml = '<a class="scan-comment-link" href="' . htmlspecialchars($docUrl) . '" target="_blank">' . htmlspecialchars($docLabel) . '</a>';
+                    $shareUrl = $docUrl;
+                }
+            }
+            if ($itemType === 'comment') {
+                $metaParts = [];
+                if ($commentEmail !== '') {
+                    $metaParts[] = '邮箱：' . $commentEmail;
+                }
+                if ($commentCreatedAt !== '') {
+                    $metaParts[] = '时间：' . format_share_datetime($commentCreatedAt);
+                }
+                $detailMeta = implode(' / ', $metaParts);
+                if ($shareUrl !== '' && $commentId > 0) {
+                    $shareUrl .= '#comment-' . $commentId;
+                }
+                if ($commentId > 0) {
+                    $detailTitleHtml = '<button type="button" class="scan-comment-link" data-admin-comment-edit="1"'
+                        . ' data-admin-comment-id="' . $commentId . '"'
+                        . ' data-admin-comment-email="' . htmlspecialchars($commentEmail, ENT_QUOTES) . '"'
+                        . ' data-admin-comment-created="' . htmlspecialchars(format_share_datetime($commentCreatedAt), ENT_QUOTES) . '"'
+                        . ' data-admin-comment-share="' . htmlspecialchars($shareTitleRaw, ENT_QUOTES) . '"'
+                        . ' data-admin-comment-content="' . htmlspecialchars($commentContent, ENT_QUOTES) . '"'
+                        . '>评论#' . $commentId . '</button>';
+                } else {
+                    $detailTitleHtml = '评论';
+                }
+            }
+            $content .= '<tr>';
+            $content .= '<td><input type="checkbox" name="scan_ids[]" value="' . htmlspecialchars($value) . '" data-check-item="scan" form="scan-batch-form"></td>';
+            $content .= '<td>' . $shareTitle . '</td>';
+            $content .= '<td>' . $detailTitleHtml;
+            if ($detailMeta !== '') {
+                $content .= '<div class="muted">' . htmlspecialchars($detailMeta) . '</div>';
+            }
+            $content .= '</td>';
+            $content .= '<td>' . $userName . '</td>';
+            $content .= '<td>' . $word . '</td>';
+            $content .= '<td><div class="scan-snippet">' . $snippet . '</div></td>';
+            $content .= '<td>';
+            if ($shareUrl !== '') {
+                $content .= '<a href="' . htmlspecialchars($shareUrl) . '" target="_blank">打开</a>';
+            } else {
+                $content .= '-';
+            }
+            $content .= '</td>';
+            $content .= '</tr>';
+        }
+        $content .= '</tbody></table>';
+
+        $content .= '<div class="pagination">';
+        $content .= '<a class="button ghost" href="' . build_admin_query_url('scan', ['scan_page' => max(1, $scanPage - 1), 'scan_keep' => $scanKeepParam]) . '">上一页</a>';
+        $content .= '<div class="pagination-info">第 ' . $scanPage . ' / ' . $scanPages . ' 页，共 ' . $scanTotal . ' 条记录</div>';
+        $content .= '<a class="button ghost" href="' . build_admin_query_url('scan', ['scan_page' => min($scanPages, $scanPage + 1), 'scan_keep' => $scanKeepParam]) . '">下一页</a>';
+        $content .= '<form method="get" action="' . base_path() . '/admin#scan" class="pagination-form">';
+        $content .= render_hidden_inputs($scanQuery);
+        $content .= '<label>每页</label><select class="input" name="scan_size">';
+        foreach ([10, 50, 200, 1000] as $size) {
+            $selected = $scanSize === $size ? ' selected' : '';
+            $content .= '<option value="' . $size . '"' . $selected . '>' . $size . '</option>';
+        }
+        $content .= '</select>';
+        $content .= '<label>页码</label><input class="input small" type="number" name="scan_page" min="1" max="' . $scanPages . '" value="' . $scanPage . '">';
+        $content .= '<button class="button" type="submit">跳转</button>';
+        $content .= '</form>';
+        $content .= '</div>';
+    } else {
+        $content .= '<p class="muted" style="margin-top:12px">暂无扫描结果。</p>';
+    }
+    $content .= '</div>';
+
+    $content .= '<div class="card danger-zone"><h2>危险操作</h2>';
+    $content .= '<p class="muted">删除所有数据将清空用户、分享与公告，仅保留初始管理员。</p>';
+    $content .= '<form method="post" action="' . base_path() . '/admin/reset-data">';
+    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+    $content .= '<div class="grid">';
+    $content .= '<div><label>输入“确认删除”继续</label><input class="input" name="confirm_phrase" placeholder="确认删除" required></div>';
+    $content .= '</div>';
+    $content .= '<div style="margin-top:12px"><button class="button danger" type="submit">删除所有数据</button></div>';
+    $content .= '</form></div>';
 $content .= '<div class="modal admin-comment-modal" data-admin-comment-modal hidden>';
     $content .= '<div class="modal-backdrop" data-modal-close></div>';
     $content .= '<div class="modal-card">';
@@ -10850,6 +11451,54 @@ $content .= '<div class="modal admin-comment-modal" data-admin-comment-modal hid
     $content .= '</div>';
     $content .= '</div>';
 
+    $content .= '<div class="modal" data-user-modal hidden>';
+    $content .= '<div class="modal-backdrop" data-modal-close></div>';
+    $content .= '<div class="modal-card">';
+    $content .= '<div class="modal-header">编辑用户</div>';
+    $content .= '<form method="post" action="' . base_path() . '/admin/user-update" class="modal-form">';
+    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+    $content .= '<input type="hidden" name="user_id" value="" data-user-field="id">';
+    $content .= '<div class="grid">';
+    $content .= '<div><label>用户名</label><input class="input" name="username" data-user-field="username" required></div>';
+    $content .= '<div><label>邮箱</label><input class="input" name="email" data-user-field="email"></div>';
+    $content .= '<div><label>角色</label><select class="input" name="role" data-user-field="role"><option value="user">普通用户</option><option value="admin">管理员</option></select></div>';
+    $content .= '<div><label>状态</label><select class="input" name="disabled" data-user-field="disabled"><option value="0">正常</option><option value="1">禁用</option></select></div>';
+    $content .= '<div><label>存储上限 (MB)</label><input class="input" name="limit_mb" type="number" min="0" data-user-field="limit"></div>';
+    $content .= '<div><label>新密码（留空不修改）</label><input class="input" name="password" type="password" placeholder="********"></div>';
+    $content .= '</div>';
+    $content .= '<div class="modal-actions">';
+    $content .= '<button class="button ghost" type="button" data-modal-close>取消</button>';
+    $content .= '<button class="button primary" type="submit">保存</button>';
+    $content .= '</div>';
+    $content .= '</form>';
+    $content .= '</div>';
+    $content .= '</div>';
+    $createModalHidden = $createOpen ? '' : ' hidden';
+    $roleAdminSelected = $createRole === 'admin' ? ' selected' : '';
+    $roleUserSelected = $createRole !== 'admin' ? ' selected' : '';
+    $disabledSelected = $createDisabled === '1' ? ' selected' : '';
+    $activeSelected = $createDisabled === '1' ? '' : ' selected';
+    $content .= '<div class="modal" data-user-create-modal' . $createModalHidden . '>';
+    $content .= '<div class="modal-backdrop" data-modal-close></div>';
+    $content .= '<div class="modal-card">';
+    $content .= '<div class="modal-header">添加账号</div>';
+    $content .= '<form method="post" action="' . base_path() . '/admin/user-create" class="modal-form">';
+    $content .= '<input type="hidden" name="csrf" value="' . csrf_token() . '">';
+    $content .= '<div class="grid">';
+    $content .= '<div><label>用户名</label><input class="input" name="username" value="' . htmlspecialchars($createUsername) . '" required></div>';
+    $content .= '<div><label>邮箱</label><input class="input" name="email" value="' . htmlspecialchars($createEmail) . '"></div>';
+    $content .= '<div><label>角色</label><select class="input" name="role"><option value="user"' . $roleUserSelected . '>普通用户</option><option value="admin"' . $roleAdminSelected . '>管理员</option></select></div>';
+    $content .= '<div><label>状态</label><select class="input" name="disabled"><option value="0"' . $activeSelected . '>正常</option><option value="1"' . $disabledSelected . '>禁用</option></select></div>';
+    $content .= '<div><label>存储上限 (MB)</label><input class="input" name="limit_mb" type="number" min="0" value="' . htmlspecialchars($createLimitMb) . '"></div>';
+    $content .= '<div><label>密码</label><input class="input" name="password" type="password" value="' . htmlspecialchars($createPassword) . '" required></div>';
+    $content .= '</div>';
+    $content .= '<div class="modal-actions">';
+    $content .= '<button class="button ghost" type="button" data-modal-close>取消</button>';
+    $content .= '<button class="button primary" type="submit">添加</button>';
+    $content .= '</div>';
+    $content .= '</form>';
+    $content .= '</div>';
+    $content .= '</div>';
     $titleHtml = build_topbar_title('后台', $admin);
     render_page('后台', $content, $admin, '', ['layout' => 'app', 'nav' => 'admin-settings', 'title_html' => $titleHtml]);
 }
@@ -10857,16 +11506,17 @@ $content .= '<div class="modal admin-comment-modal" data-admin-comment-modal hid
 if ($path === '/admin/settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     require_admin();
     check_csrf();
-    $allowRegistration = '0';
-    $captchaEnabled = '0';
-    $emailVerifyEnabled = '0';
-    $smtpEnabled = '0';
+    $allowRegistration = isset($_POST['allow_registration']) ? '1' : '0';
+    $captchaEnabled = isset($_POST['captcha_enabled']) ? '1' : '0';
+    $emailVerifyEnabled = isset($_POST['email_verification_enabled']) ? '1' : '0';
+    $smtpEnabled = isset($_POST['smtp_enabled']) ? '1' : '0';
     $defaultLimitMb = max(0, (int)($_POST['default_storage_limit_mb'] ?? 0));
     $emailFrom = trim((string)($_POST['email_from'] ?? ''));
     $emailFromName = trim((string)($_POST['email_from_name'] ?? ''));
     $emailSubject = trim((string)($_POST['email_subject'] ?? ''));
     $emailResetSubject = trim((string)($_POST['email_reset_subject'] ?? ''));
     $siteIcp = trim((string)($_POST['site_icp'] ?? ''));
+    $siteContactEmail = trim((string)($_POST['site_contact_email'] ?? ''));
     $siteBaseUrl = trim((string)($_POST['site_base_url'] ?? ''));
     $siteHeadHtml = trim((string)($_POST['site_head_html'] ?? ''));
     $smtpHost = trim((string)($_POST['smtp_host'] ?? ''));
@@ -10878,14 +11528,6 @@ if ($path === '/admin/settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($bannedWords !== '') {
         $bannedWords = str_replace(["\r\n", "\n", "\r"], '|', $bannedWords);
     }
-    $siteIcp = '';
-    $siteBaseUrl = '';
-    $bannedWords = '';
-    $smtpHost = '';
-    $smtpPort = '587';
-    $smtpSecure = 'tls';
-    $smtpUser = '';
-    $smtpPass = '';
     set_setting('allow_registration', $allowRegistration);
     set_setting('captcha_enabled', $captchaEnabled);
     set_setting('email_verification_enabled', $emailVerifyEnabled);
@@ -10896,6 +11538,7 @@ if ($path === '/admin/settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     set_setting('email_subject', $emailSubject);
     set_setting('email_reset_subject', $emailResetSubject);
     set_setting('site_icp', $siteIcp);
+    set_setting('site_contact_email', $siteContactEmail);
     set_setting('site_base_url', $siteBaseUrl);
     set_setting('site_head_html', $siteHeadHtml);
     set_setting('smtp_host', $smtpHost);
@@ -10977,10 +11620,230 @@ if ($path === '/admin/announcement/delete' && $_SERVER['REQUEST_METHOD'] === 'PO
     redirect('/admin#announcements');
 }
 
+if ($path === '/admin/smtp-test' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_admin();
+    check_csrf();
+    $email = trim((string)($_POST['test_email'] ?? ''));
+    if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        flash('error', '请输入有效的测试邮箱');
+        redirect('/admin#settings');
+    }
+    if (!smtp_enabled()) {
+        flash('error', '请先启用 SMTP');
+        redirect('/admin#settings');
+    }
+    $sent = send_mail($email, 'SMTP 测试邮件', '这是一封 SMTP 配置测试邮件。');
+    if ($sent) {
+        flash('info', '测试邮件发送成功');
+    } else {
+        $detail = trim((string)($GLOBALS['smtp_last_error'] ?? ''));
+        $message = $detail !== '' ? '测试邮件发送失败：' . $detail : '测试邮件发送失败';
+        flash('error', $message);
+    }
+    redirect('/admin#settings');
+}
 
+if ($path === '/admin/user-batch' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $admin = require_admin();
+    check_csrf();
+    $ids = $_POST['user_ids'] ?? [];
+    $action = (string)($_POST['action'] ?? '');
+    $ids = array_unique(array_filter(array_map('intval', is_array($ids) ? $ids : [$ids])));
+    if (empty($ids)) {
+        flash('error', '请先选择用户');
+        redirect('/admin#users');
+    }
+    $pdo = db();
+    $stmt = $pdo->prepare('UPDATE users SET disabled = :disabled WHERE id = :id AND role != "admin"');
+    $updated = 0;
+    $deleted = 0;
+    foreach ($ids as $userId) {
+        if ($userId === (int)$admin['id']) {
+            continue;
+        }
+        if ($action === 'delete') {
+            if (delete_user_account($userId)) {
+                $deleted++;
+            }
+            continue;
+        }
+        if ($action === 'disable') {
+            $stmt->execute([':disabled' => 1, ':id' => $userId]);
+            $updated++;
+        } elseif ($action === 'enable') {
+            $stmt->execute([':disabled' => 0, ':id' => $userId]);
+            $updated++;
+        }
+    }
+    if ($action === 'delete') {
+        flash('info', '已删除 ' . $deleted . ' 个用户');
+    } else {
+        flash('info', '已处理 ' . $updated . ' 个用户');
+    }
+    redirect('/admin#users');
+}
 
+if ($path === '/admin/user-delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $admin = require_admin();
+    check_csrf();
+    $userId = (int)($_POST['user_id'] ?? 0);
+    if ($userId <= 0 || $userId === (int)$admin['id']) {
+        flash('error', '无法删除该用户');
+        redirect('/admin#users');
+    }
+    if (!delete_user_account($userId)) {
+        flash('error', '删除用户失败');
+        redirect('/admin#users');
+    }
+    flash('info', '用户已删除');
+    redirect('/admin#users');
+}
 
+if ($path === '/admin/user-create' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_admin();
+    check_csrf();
+    $username = trim((string)($_POST['username'] ?? ''));
+    $email = trim((string)($_POST['email'] ?? ''));
+    $role = (string)($_POST['role'] ?? 'user');
+    $disabled = (int)($_POST['disabled'] ?? 0);
+    $limitMb = max(0, (int)($_POST['limit_mb'] ?? 0));
+    $password = (string)($_POST['password'] ?? '');
+    if (!in_array($role, ['admin', 'user'], true)) {
+        $role = 'user';
+    }
+    $createForm = [
+        'open' => 1,
+        'username' => $username,
+        'email' => $email,
+        'role' => $role,
+        'disabled' => (string)($disabled ? 1 : 0),
+        'limit_mb' => (string)$limitMb,
+        'password' => $password,
+    ];
+    if ($username === '' || $password === '') {
+        $_SESSION['user_create_form'] = $createForm;
+        flash('error', '请输入用户名和密码');
+        redirect('/admin#users');
+    }
+    if (strlen($password) < 6) {
+        $_SESSION['user_create_form'] = $createForm;
+        flash('error', '密码至少 6 位');
+        redirect('/admin#users');
+    }
+    if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $_SESSION['user_create_form'] = $createForm;
+        flash('error', '邮箱格式不正确');
+        redirect('/admin#users');
+    }
+    $pdo = db();
+    if ($email !== '') {
+        $checkEmail = $pdo->prepare('SELECT id FROM users WHERE email = :email LIMIT 1');
+        $checkEmail->execute([':email' => $email]);
+        if ($checkEmail->fetch()) {
+            $_SESSION['user_create_form'] = $createForm;
+            flash('error', '邮箱已被其他账号使用');
+            redirect('/admin#users');
+        }
+    }
+    $check = $pdo->prepare('SELECT id FROM users WHERE username = :username LIMIT 1');
+    $check->execute([':username' => $username]);
+    if ($check->fetch()) {
+        $_SESSION['user_create_form'] = $createForm;
+        flash('error', '用户名已存在');
+        redirect('/admin#users');
+    }
+    $passwordHash = password_hash($password, PASSWORD_DEFAULT);
+    $emailVerified = $email !== '' ? 1 : 0;
+    $stmt = $pdo->prepare('INSERT INTO users (username, email, password_hash, role, api_key_hash, api_key_prefix, api_key_last4, disabled, storage_limit_bytes, storage_used_bytes, must_change_password, email_verified, created_at, updated_at)
+        VALUES (:username, :email, :password_hash, :role, :api_key_hash, :api_key_prefix, :api_key_last4, :disabled, :storage_limit_bytes, :storage_used_bytes, :must_change_password, :email_verified, :created_at, :updated_at)');
+    try {
+        $stmt->execute([
+            ':username' => $username,
+            ':email' => $email,
+            ':password_hash' => $passwordHash,
+            ':role' => $role,
+            ':api_key_hash' => null,
+            ':api_key_prefix' => null,
+            ':api_key_last4' => null,
+            ':disabled' => $disabled ? 1 : 0,
+            ':storage_limit_bytes' => bytes_from_mb($limitMb),
+            ':storage_used_bytes' => 0,
+            ':must_change_password' => 0,
+            ':email_verified' => $emailVerified,
+            ':created_at' => now(),
+            ':updated_at' => now(),
+        ]);
+    } catch (PDOException $e) {
+        $_SESSION['user_create_form'] = $createForm;
+        flash('error', '账号创建失败');
+        redirect('/admin#users');
+    }
+    unset($_SESSION['user_create_form']);
+    flash('info', '账号已添加');
+    redirect('/admin#users');
+}
 
+if ($path === '/admin/user-update' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $admin = require_admin();
+    check_csrf();
+    $userId = (int)($_POST['user_id'] ?? 0);
+    $username = trim((string)($_POST['username'] ?? ''));
+    $email = trim((string)($_POST['email'] ?? ''));
+    $role = (string)($_POST['role'] ?? 'user');
+    $disabled = (int)($_POST['disabled'] ?? 0);
+    $limitMb = max(0, (int)($_POST['limit_mb'] ?? 0));
+    $password = (string)($_POST['password'] ?? '');
+    if ($userId <= 0 || $username === '') {
+        flash('error', '请输入有效的用户名');
+        redirect('/admin#users');
+    }
+    if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        flash('error', '邮箱格式不正确');
+        redirect('/admin#users');
+    }
+    if (!in_array($role, ['admin', 'user'], true)) {
+        $role = 'user';
+    }
+    if ($userId === (int)$admin['id']) {
+        $role = 'admin';
+        $disabled = 0;
+    }
+    $pdo = db();
+    if ($email !== '') {
+        $checkEmail = $pdo->prepare('SELECT id FROM users WHERE email = :email AND id != :id');
+        $checkEmail->execute([':email' => $email, ':id' => $userId]);
+        if ($checkEmail->fetch()) {
+            flash('error', '邮箱已被其他账号使用');
+            redirect('/admin#users');
+        }
+    }
+    $check = $pdo->prepare('SELECT id FROM users WHERE username = :username AND id != :id');
+    $check->execute([':username' => $username, ':id' => $userId]);
+    if ($check->fetch()) {
+        flash('error', '用户名已存在');
+        redirect('/admin#users');
+    }
+    $stmt = $pdo->prepare('UPDATE users SET username = :username, email = :email, role = :role, disabled = :disabled, storage_limit_bytes = :limit, updated_at = :updated_at WHERE id = :id');
+    $stmt->execute([
+        ':username' => $username,
+        ':email' => $email,
+        ':role' => $role,
+        ':disabled' => $disabled ? 1 : 0,
+        ':limit' => bytes_from_mb($limitMb),
+        ':updated_at' => now(),
+        ':id' => $userId,
+    ]);
+    if ($password !== '') {
+        $pwd = $pdo->prepare('UPDATE users SET password_hash = :hash, updated_at = :updated_at WHERE id = :id');
+        $pwd->execute([
+            ':hash' => password_hash($password, PASSWORD_DEFAULT),
+            ':updated_at' => now(),
+            ':id' => $userId,
+        ]);
+    }
+    flash('info', '用户信息已更新');
+    redirect('/admin#users');
+}
 
 if ($path === '/admin/share-batch' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     require_admin();
@@ -11019,9 +11882,95 @@ if ($path === '/admin/share-batch' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     redirect('/admin#shares');
 }
 
+if ($path === '/admin/scan/batch' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_admin();
+    check_csrf();
+    $action = (string)($_POST['action'] ?? '');
+    $pairs = $_POST['scan_ids'] ?? [];
+    $pairs = is_array($pairs) ? $pairs : [$pairs];
+    if (empty($pairs)) {
+        flash('error', '请先选择记录');
+        redirect('/admin#scan');
+    }
+    $shareIds = [];
+    $userIds = [];
+    foreach ($pairs as $value) {
+        $parts = explode('|', (string)$value, 2);
+        $shareId = (int)($parts[0] ?? 0);
+        $userId = (int)($parts[1] ?? 0);
+        if ($shareId) {
+            $shareIds[$shareId] = true;
+        }
+        if ($userId) {
+            $userIds[$userId] = true;
+        }
+    }
+    $pdo = db();
+    if ($action === 'delete' && !empty($shareIds)) {
+        $stmt = $pdo->prepare('UPDATE shares SET deleted_at = :deleted_at WHERE id = :id AND deleted_at IS NULL');
+        foreach (array_keys($shareIds) as $shareId) {
+            $stmt->execute([':deleted_at' => now(), ':id' => $shareId]);
+            purge_share_access_logs($shareId);
+        }
+        flash('info', '已删除 ' . count($shareIds) . ' 个违规分享');
+        redirect('/admin#scan');
+    }
+    if ($action === 'disable' && !empty($userIds)) {
+        $stmt = $pdo->prepare('UPDATE users SET disabled = 1 WHERE id = :id AND role != "admin"');
+        foreach (array_keys($userIds) as $userId) {
+            $stmt->execute([':id' => $userId]);
+        }
+        flash('info', '已停用 ' . count($userIds) . ' 个违规账号');
+        redirect('/admin#scan');
+    }
+    flash('error', '未找到可处理的记录');
+    redirect('/admin#scan');
+}
 
+if ($path === '/admin/user-toggle' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $admin = require_admin();
+    check_csrf();
+    $userId = (int)($_POST['user_id'] ?? 0);
+    if ($userId === (int)$admin['id']) {
+        flash('error', '不能禁用自己');
+        redirect('/admin#users');
+    }
+    $pdo = db();
+    $stmt = $pdo->prepare('UPDATE users SET disabled = CASE WHEN disabled = 1 THEN 0 ELSE 1 END WHERE id = :id');
+    $stmt->execute([':id' => $userId]);
+    flash('info', '用户状态已更新');
+    redirect('/admin#users');
+}
 
+if ($path === '/admin/user-role' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $admin = require_admin();
+    check_csrf();
+    $userId = (int)($_POST['user_id'] ?? 0);
+    if ($userId === (int)$admin['id']) {
+        flash('error', '不能修改自己的角色');
+        redirect('/admin#users');
+    }
+    $pdo = db();
+    $stmt = $pdo->prepare('UPDATE users SET role = CASE WHEN role = "admin" THEN "user" ELSE "admin" END WHERE id = :id');
+    $stmt->execute([':id' => $userId]);
+    flash('info', '用户角色已更新');
+    redirect('/admin#users');
+}
 
+if ($path === '/admin/user-limit' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_admin();
+    check_csrf();
+    $userId = (int)($_POST['user_id'] ?? 0);
+    $limitMb = max(0, (int)($_POST['limit_mb'] ?? 0));
+    $pdo = db();
+    $stmt = $pdo->prepare('UPDATE users SET storage_limit_bytes = :limit WHERE id = :id');
+    $stmt->execute([
+        ':limit' => bytes_from_mb($limitMb),
+        ':id' => $userId,
+    ]);
+    flash('info', '用户存储上限已更新');
+    redirect('/admin#users');
+}
 
 if ($path === '/admin/share-delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     require_admin();
@@ -11074,10 +12023,124 @@ if ($path === '/admin/share-hard-delete' && $_SERVER['REQUEST_METHOD'] === 'POST
     redirect('/admin#shares');
 }
 
+if ($path === '/admin/report-handle' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $admin = require_admin();
+    check_csrf();
+    $reportId = (int)($_POST['report_id'] ?? 0);
+    if ($reportId <= 0) {
+        flash('error', '举报不存在');
+        redirect('/admin#reports');
+    }
+    $pdo = db();
+    $stmt = $pdo->prepare('UPDATE share_reports SET handled_at = :handled_at, handled_by = :handled_by WHERE id = :id');
+    $stmt->execute([
+        ':handled_at' => now(),
+        ':handled_by' => (int)$admin['id'],
+        ':id' => $reportId,
+    ]);
+    flash('info', '举报已处理');
+    redirect('/admin#reports');
+}
 
+if ($path === '/admin/report-share-delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $admin = require_admin();
+    check_csrf();
+    $reportId = (int)($_POST['report_id'] ?? 0);
+    if ($reportId <= 0) {
+        flash('error', '举报不存在');
+        redirect('/admin#reports');
+    }
+    $pdo = db();
+    $stmt = $pdo->prepare('SELECT share_id FROM share_reports WHERE id = :id');
+    $stmt->execute([':id' => $reportId]);
+    $shareId = (int)($stmt->fetchColumn() ?: 0);
+    if ($shareId <= 0) {
+        flash('error', '分享不存在');
+        redirect('/admin#reports');
+    }
+    $deleted = hard_delete_share($shareId);
+    if ($deleted === null) {
+        flash('error', '分享不存在');
+        redirect('/admin#reports');
+    }
+    flash('info', '分享已彻底删除');
+    redirect('/admin#reports');
+}
 
+if ($path === '/admin/report-user-disable' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $admin = require_admin();
+    check_csrf();
+    $reportId = (int)($_POST['report_id'] ?? 0);
+    $pdo = db();
+    if ($reportId <= 0) {
+        flash('error', '举报不存在');
+        redirect('/admin#reports');
+    }
+    $stmt = $pdo->prepare('SELECT share_user_id FROM share_reports WHERE id = :id');
+    $stmt->execute([':id' => $reportId]);
+    $userId = (int)($stmt->fetchColumn() ?: 0);
+    if ($userId <= 0) {
+        flash('error', '用户不存在');
+        redirect('/admin#reports');
+    }
+    $roleStmt = $pdo->prepare('SELECT role FROM users WHERE id = :id');
+    $roleStmt->execute([':id' => $userId]);
+    $role = (string)($roleStmt->fetchColumn() ?? '');
+    if ($role === 'admin') {
+        flash('error', '无法禁用管理员账号');
+        redirect('/admin#reports');
+    }
+    $stmt = $pdo->prepare('UPDATE users SET disabled = 1 WHERE id = :id');
+    $stmt->execute([':id' => $userId]);
+    $pdo->prepare('UPDATE share_reports SET handled_at = :handled_at, handled_by = :handled_by WHERE id = :id')
+        ->execute([
+            ':handled_at' => now(),
+            ':handled_by' => (int)$admin['id'],
+            ':id' => $reportId,
+        ]);
+    flash('info', '账号已禁用');
+    redirect('/admin#reports');
+}
 
+if ($path === '/admin/report-delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_admin();
+    check_csrf();
+    $reportId = (int)($_POST['report_id'] ?? 0);
+    if ($reportId <= 0) {
+        flash('error', '举报不存在');
+        redirect('/admin#reports');
+    }
+    $pdo = db();
+    $stmt = $pdo->prepare('SELECT handled_at FROM share_reports WHERE id = :id');
+    $stmt->execute([':id' => $reportId]);
+    $handledAt = (string)($stmt->fetchColumn() ?? '');
+    if ($handledAt === '') {
+        flash('error', '请先处理举报再删除');
+        redirect('/admin#reports');
+    }
+    $pdo->prepare('DELETE FROM share_reports WHERE id = :id')->execute([':id' => $reportId]);
+    flash('info', '举报记录已删除');
+    redirect('/admin#reports');
+}
 
+if ($path === '/admin/report-batch' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_admin();
+    check_csrf();
+    $ids = $_POST['report_ids'] ?? [];
+    $action = (string)($_POST['action'] ?? '');
+    $ids = array_unique(array_filter(array_map('intval', is_array($ids) ? $ids : [$ids])));
+    if (empty($ids) || $action !== 'delete') {
+        flash('error', '请先选择要删除的举报');
+        redirect('/admin#reports');
+    }
+    $pdo = db();
+    $placeholders = implode(',', array_fill(0, count($ids), '?'));
+    $del = $pdo->prepare('DELETE FROM share_reports WHERE id IN (' . $placeholders . ')');
+    $del->execute($ids);
+    $deleted = $del->rowCount();
+    flash('info', '已删除 ' . $deleted . ' 条举报');
+    redirect('/admin#reports');
+}
 
 if ($path === '/admin/chunk-delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     require_admin();
@@ -11113,11 +12176,211 @@ if ($path === '/admin/chunk-clean' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     redirect('/admin#chunks');
 }
 
+if ($path === '/admin/scan/start' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_admin();
+    check_csrf();
+    $words = get_banned_words();
+    if (empty($words)) {
+        api_response(400, null, '请先设置违禁词');
+    }
+    $total = count_scannable_docs();
+    $_SESSION['scan_results'] = [];
+    $_SESSION['scan_logs'] = [];
+    $_SESSION['scan_done'] = 0;
+    $_SESSION['scan_at'] = time();
+    $_SESSION['scan_total'] = $total;
+    api_response(200, ['total' => $total]);
+}
 
+if ($path === '/admin/scan/step' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_admin();
+    check_csrf();
+    $words = get_banned_words();
+    if (empty($words)) {
+        api_response(400, null, '请先设置违禁词');
+    }
+    $offset = max(0, (int)($_POST['offset'] ?? 0));
+    $limit = max(1, min(200, (int)($_POST['limit'] ?? 50)));
+    $total = (int)($_SESSION['scan_total'] ?? count_scannable_docs());
+    $batch = scan_banned_shares_batch($words, $offset, $limit);
+    $existing = $_SESSION['scan_results'] ?? [];
+    if (!is_array($existing)) {
+        $existing = [];
+    }
+    $existing = array_merge($existing, $batch['hits']);
+    $_SESSION['scan_results'] = $existing;
+    $existingLogs = $_SESSION['scan_logs'] ?? [];
+    if (!is_array($existingLogs)) {
+        $existingLogs = [];
+    }
+    $existingLogs = array_merge($existingLogs, $batch['logs']);
+    $_SESSION['scan_logs'] = $existingLogs;
+    $_SESSION['scan_at'] = time();
+    $nextOffset = $offset + (int)$batch['count'];
+    $done = $nextOffset >= $total || $batch['count'] === 0;
+    $_SESSION['scan_done'] = $done ? 1 : 0;
+    api_response(200, [
+        'nextOffset' => $nextOffset,
+        'done' => $done,
+        'hitCount' => count($existing),
+        'logs' => $batch['logs'],
+        'total' => $total,
+    ]);
+}
 
+if ($path === '/admin/scan' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_admin();
+    check_csrf();
+    $words = get_banned_words();
+    if (empty($words)) {
+        flash('error', '请先设置违禁词');
+        redirect('/admin#scan');
+    }
+    $results = scan_banned_shares($words);
+    $_SESSION['scan_results'] = $results;
+    $_SESSION['scan_logs'] = [];
+    $_SESSION['scan_done'] = 1;
+    $_SESSION['scan_at'] = time();
+    flash('info', '扫描完成，共命中 ' . count($results) . ' 条记录');
+    redirect('/admin#scan');
+}
 
+if ($path === '/admin/scan/delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_admin();
+    check_csrf();
+    $results = $_SESSION['scan_results'] ?? [];
+    if (empty($results) || !is_array($results)) {
+        flash('error', '暂无扫描结果');
+        redirect('/admin#scan');
+    }
+    $shareIds = [];
+    foreach ($results as $hit) {
+        if (isset($hit['share_id'])) {
+            $shareIds[(int)$hit['share_id']] = true;
+        }
+    }
+    if (empty($shareIds)) {
+        flash('error', '暂无可删除分享');
+        redirect('/admin#scan');
+    }
+    $pdo = db();
+    $stmt = $pdo->prepare('UPDATE shares SET deleted_at = :deleted_at WHERE id = :id AND deleted_at IS NULL');
+    foreach (array_keys($shareIds) as $shareId) {
+        $stmt->execute([':deleted_at' => now(), ':id' => $shareId]);
+    }
+    flash('info', '已删除 ' . count($shareIds) . ' 个违规分享');
+    redirect('/admin#scan');
+}
 
+if ($path === '/admin/scan/disable' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_admin();
+    check_csrf();
+    $results = $_SESSION['scan_results'] ?? [];
+    if (empty($results) || !is_array($results)) {
+        flash('error', '暂无扫描结果');
+        redirect('/admin#scan');
+    }
+    $userIds = [];
+    foreach ($results as $hit) {
+        if (isset($hit['user_id'])) {
+            $userIds[(int)$hit['user_id']] = true;
+        }
+    }
+    if (empty($userIds)) {
+        flash('error', '暂无可停用账号');
+        redirect('/admin#scan');
+    }
+    $pdo = db();
+    $stmt = $pdo->prepare('UPDATE users SET disabled = 1 WHERE id = :id AND role != "admin"');
+    foreach (array_keys($userIds) as $userId) {
+        $stmt->execute([':id' => $userId]);
+    }
+    flash('info', '已停用 ' . count($userIds) . ' 个违规账号');
+    redirect('/admin#scan');
+}
 
+if ($path === '/admin/comment/edit' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_admin();
+    check_csrf();
+    $commentId = max(0, (int)($_POST['comment_id'] ?? 0));
+    $content = trim((string)($_POST['content'] ?? ''));
+    if ($commentId <= 0) {
+        flash('error', '缺少评论ID');
+        redirect('/admin#scan');
+    }
+    if ($content === '') {
+        flash('error', '评论内容不能为空');
+        redirect('/admin#scan');
+    }
+    $contentLength = function_exists('mb_strlen') ? mb_strlen($content, 'UTF-8') : strlen($content);
+    if ($contentLength > 2000) {
+        flash('error', '评论内容过长');
+        redirect('/admin#scan');
+    }
+    $bannedWords = get_banned_words();
+    if (!empty($bannedWords)) {
+        $hit = find_banned_word($content, $bannedWords);
+        if ($hit) {
+            flash('error', '触发违禁词：' . $hit['word']);
+            redirect('/admin#scan');
+        }
+    }
+    $pdo = db();
+    $stmt = $pdo->prepare('SELECT share_comments.*, shares.user_id AS share_user_id FROM share_comments
+        JOIN shares ON share_comments.share_id = shares.id
+        WHERE share_comments.id = :id');
+    $stmt->execute([':id' => $commentId]);
+    $comment = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$comment) {
+        flash('error', '评论不存在');
+        redirect('/admin#scan');
+    }
+    $shareId = (int)($comment['share_id'] ?? 0);
+    $shareUserId = (int)($comment['share_user_id'] ?? 0);
+    if ($shareId <= 0 || $shareUserId <= 0) {
+        flash('error', '评论关联的分享不存在');
+        redirect('/admin#scan');
+    }
+    $commentEmail = (string)($comment['email'] ?? '');
+    $newSize = calculate_comment_size($commentEmail, $content);
+    $oldSize = (int)($comment['size_bytes'] ?? 0);
+    $oldAssets = extract_comment_asset_paths((string)($comment['content'] ?? ''), $shareId);
+    $newAssets = extract_comment_asset_paths($content, $shareId);
+    $removeAssets = array_values(array_diff($oldAssets, $newAssets));
+    if (!empty($removeAssets)) {
+        $removeAssets = filter_unused_comment_assets($shareId, $removeAssets, [$commentId]);
+    }
+    $removeAssetSize = sum_share_asset_sizes($shareId, $removeAssets);
+    $delta = $newSize - $oldSize;
+    $netDelta = $delta - $removeAssetSize;
+    if ($netDelta > 0) {
+        $owner = get_user_by_id($shareUserId);
+        if (!$owner) {
+            flash('error', '分享所属用户不存在');
+            redirect('/admin#scan');
+        }
+        $used = recalculate_user_storage((int)$owner['id']);
+        $limit = get_user_limit_bytes($owner);
+        if ($limit > 0 && ($used + $netDelta) > $limit) {
+            flash('error', '存储空间不足，无法保存修改');
+            redirect('/admin#scan');
+        }
+    }
+    $update = $pdo->prepare('UPDATE share_comments SET content = :content, size_bytes = :size_bytes WHERE id = :id');
+    $update->execute([
+        ':content' => $content,
+        ':size_bytes' => $newSize,
+        ':id' => $commentId,
+    ]);
+    $deletedAssetSize = delete_comment_assets($shareId, $removeAssets);
+    $totalDelta = $delta - $deletedAssetSize;
+    if ($totalDelta !== 0) {
+        adjust_share_size($shareId, $totalDelta);
+        adjust_user_storage($shareUserId, $totalDelta);
+    }
+    flash('info', '评论已更新');
+    redirect('/admin#scan');
+}
 
 if ($path === '/admin/reset-data' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     require_admin();
@@ -11139,10 +12402,11 @@ if ($path === '/admin/reset-data' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 if ($path === '/') {
     $user = current_user();
     if ($user) {
-        redirect('/account');
+        redirect('/dashboard');
     }
     $allowRegistration = allow_registration();
-    $siteIcp = '';
+    $siteIcp = get_setting('site_icp', '');
+    $siteContactEmail = get_setting('site_contact_email', '');
     $appName = htmlspecialchars($config['app_name']);
     $versionText = site_version();
     $versionHtml = '';
@@ -11220,6 +12484,9 @@ if ($path === '/') {
     if (trim((string)$siteIcp) !== '') {
         $footerItems[] = 'ICP备案：' . htmlspecialchars((string)$siteIcp);
     }
+    if (trim((string)$siteContactEmail) !== '') {
+        $footerItems[] = '联系邮箱：' . htmlspecialchars((string)$siteContactEmail);
+    }
     if (!empty($footerItems)) {
         $content .= '<footer class="home-footer">' . implode(' · ', $footerItems) . '</footer>';
     }
@@ -11227,4 +12494,3 @@ if ($path === '/') {
 }
 
 render_404_page();
-
