@@ -81,7 +81,7 @@
 
 .sps-share-doc-options {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   align-items: start;
 }
@@ -103,7 +103,13 @@
   margin-top: 0;
   justify-content: flex-start;
   align-items: flex-start;
+  justify-self: end;
+  text-align: left;
   padding-top: 2px;
+}
+
+.sps-share-doc-options .sps-share-exclude .sps-share-exclude__actions {
+  justify-content: flex-start;
 }
 
 .sps-share-exclude--doc {
@@ -183,6 +189,16 @@
 @media (max-width: 720px) {
   .sps-share-doc-options {
     grid-template-columns: 1fr;
+  }
+
+  .sps-share-doc-options .sps-share-exclude {
+    justify-self: stretch;
+    align-items: flex-start;
+    text-align: left;
+  }
+
+  .sps-share-doc-options .sps-share-exclude .sps-share-exclude__actions {
+    justify-content: flex-start;
   }
 }
 
@@ -439,4 +455,99 @@
   100% {
     transform: translateX(200%);
   }
+}
+
+/* QR Code */
+.sps-qr-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  flex-shrink: 0;
+  cursor: pointer;
+  color: var(--b3-theme-on-surface-light);
+  opacity: 0.72;
+  transition: opacity 0.15s;
+  vertical-align: middle;
+}
+
+.sps-qr-btn:hover {
+  opacity: 1;
+  color: var(--b3-theme-primary);
+}
+
+.sps-qr-btn svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+.sps-qr-dialog {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 8px 0;
+}
+
+.sps-qr-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.sps-qr-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+}
+
+.sps-qr-preview canvas {
+  display: block;
+  width: 280px;
+  height: 280px;
+}
+
+.sps-qr-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  flex-shrink: 0;
+  cursor: pointer;
+  color: var(--b3-theme-on-surface-light);
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+
+.sps-qr-nav-btn:hover {
+  opacity: 1;
+  color: var(--b3-theme-primary);
+}
+
+.sps-qr-nav-btn svg {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
+
+.sps-qr-nav-index {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--b3-theme-on-surface-light);
+  min-width: 40px;
+  text-align: center;
+}
+
+.sps-qr-dialog + .b3-dialog__action {
+  justify-content: center;
+  padding: 12px 16px 16px;
 }

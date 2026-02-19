@@ -888,20 +888,48 @@ function extract_comment_asset_paths(string $content, int $shareId): array {
         return [];
     }
     $prefix = comment_asset_prefix() . $shareId . '/';
-    $pattern = "#uploads/" . preg_quote($prefix, '#') . "([^\\s\\)\"'<>]+)#i";
-    if (!preg_match_all($pattern, $content, $matches)) {
-        return [];
-    }
     $paths = [];
-    foreach ($matches[1] as $suffix) {
-        $suffix = preg_replace('/[?#].*$/', '', $suffix);
-        $path = sanitize_asset_path($prefix . $suffix);
-        if ($path === '') {
+    $patterns = [
+        '#(?:https?://[^\s\)\"\'<>]+)?[^\s\)\"\'<>]*?(?:/uploads/|uploads/)' . preg_quote($prefix, '#') . '([^\s\)\"\'<>]+)#i',
+        '#(?:https?://[^\s\)\"\'<>]+)?[^\s\)\"\'<>]*?(?:/res/|res/)' . preg_quote($prefix, '#') . '([^\s\)\"\'<>]+)#i',
+    ];
+    foreach ($patterns as $pattern) {
+        if (!preg_match_all($pattern, $content, $matches)) {
             continue;
         }
-        $paths[$path] = true;
+        foreach ($matches[1] as $suffix) {
+            $suffix = preg_replace('/[?#].*$/', '', (string)$suffix);
+            $decoded = rawurldecode((string)$suffix);
+            $path = sanitize_asset_path($prefix . $decoded);
+            if ($path === '') {
+                continue;
+            }
+            $paths[$path] = true;
+        }
     }
     return array_keys($paths);
+}
+
+function comment_asset_reference_needles(string $path): array {
+    $normalized = ltrim(sanitize_asset_path($path), '/');
+    if ($normalized === '') {
+        return [];
+    }
+    $encoded = encode_path_segments($normalized);
+    $needles = [
+        'uploads/' . $normalized,
+        'uploads/' . $encoded,
+        '/res/' . $normalized,
+        '/res/' . $encoded,
+    ];
+    $out = [];
+    foreach ($needles as $needle) {
+        if ($needle === '' || isset($out[$needle])) {
+            continue;
+        }
+        $out[$needle] = true;
+    }
+    return array_keys($out);
 }
 
 function filter_unused_comment_assets(int $shareId, array $paths, array $excludeIds): array {
@@ -911,9 +939,17 @@ function filter_unused_comment_assets(int $shareId, array $paths, array $exclude
     $pdo = db();
     $unused = [];
     foreach ($paths as $path) {
-        $needle = 'uploads/' . ltrim($path, '/');
-        $sql = 'SELECT COUNT(*) FROM share_comments WHERE share_id = ? AND content LIKE ?';
-        $params = [$shareId, '%' . $needle . '%'];
+        $needles = comment_asset_reference_needles((string)$path);
+        if (empty($needles)) {
+            continue;
+        }
+        $likeSql = [];
+        $params = [$shareId];
+        foreach ($needles as $needle) {
+            $likeSql[] = 'content LIKE ?';
+            $params[] = '%' . $needle . '%';
+        }
+        $sql = 'SELECT COUNT(*) FROM share_comments WHERE share_id = ? AND (' . implode(' OR ', $likeSql) . ')';
         if (!empty($excludeIds)) {
             $sql .= ' AND id NOT IN (' . implode(',', array_fill(0, count($excludeIds), '?')) . ')';
             $params = array_merge($params, $excludeIds);
@@ -1307,6 +1343,41 @@ function render_page(string $title, string $content, ?array $user = null, string
     exit;
 }
 
+function render_404_page(): void {
+    $base = base_path();
+    $content = '<div class="error-page">';
+    $content .= '<div class="error-page__scene">';
+    $content .= '<div class="error-page__stars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>';
+    $content .= '<div class="error-page__planet"><div class="error-page__planet-body"></div><div class="error-page__planet-ring"></div></div>';
+    $content .= '<div class="error-page__satellite"></div>';
+    $content .= '<div class="error-page__comet"></div>';
+    $content .= '</div>';
+    $content .= '<h1 class="error-page__code">404</h1>';
+    $content .= '<h2 class="error-page__title">页面飞走了</h2>';
+    $content .= '<p class="error-page__desc">你访问的页面不存在，可能已被移除或者地址有误。</p>';
+    $content .= '<a class="error-page__back" href="' . $base . '/">';
+    $content .= '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>';
+    $content .= '返回首页</a>';
+    $content .= '</div>';
+    render_page('页面未找到', $content, null);
+}
+
+function render_share_not_found_page(): void {
+    $base = base_path();
+    $content = '<div class="error-page">';
+    $content .= '<div class="error-page__scene">';
+    $content .= '<div class="error-page__stars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>';
+    $content .= '<div class="error-page__signal"><i></i><i></i><i></i><i></i><div class="error-page__signal-core"></div></div>';
+    $content .= '</div>';
+    $content .= '<h2 class="error-page__title">找不到这个分享</h2>';
+    $content .= '<p class="error-page__desc">该分享链接不存在或已被创建者删除。</p>';
+    $content .= '<a class="error-page__back" href="' . $base . '/">';
+    $content .= '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>';
+    $content .= '返回首页</a>';
+    $content .= '</div>';
+    render_page('分享不存在', $content, null);
+}
+
 function generate_captcha_code(int $length = 5): string {
     $alphabet = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
     $max = strlen($alphabet) - 1;
@@ -1389,12 +1460,76 @@ function render_captcha_image(): void {
     exit;
 }
 
+const SHARE_SLUG_MIN_LENGTH = 6;
+const SHARE_SLUG_MAX_LENGTH = 32;
+
 function sanitize_slug(string $slug): string {
-    $slug = strtolower(trim($slug));
-    $slug = preg_replace('/[^a-z0-9_-]+/', '-', $slug);
-    $slug = preg_replace('/-+/', '-', $slug);
-    $slug = trim($slug, '-.');
-    return substr($slug, 0, 64);
+    return strtolower(trim($slug));
+}
+
+function parse_requested_share_slug_or_fail($raw): string {
+    $slug = sanitize_slug((string)$raw);
+    if ($slug === '') {
+        return '';
+    }
+    if (!preg_match('/^[a-z0-9]+$/', $slug)) {
+        api_response(400, [
+            'errorKey' => 'share.slug.invalid_chars',
+            'min' => SHARE_SLUG_MIN_LENGTH,
+            'max' => SHARE_SLUG_MAX_LENGTH,
+        ], 'Invalid share link suffix');
+    }
+    $len = strlen($slug);
+    if ($len < SHARE_SLUG_MIN_LENGTH || $len > SHARE_SLUG_MAX_LENGTH) {
+        api_response(400, [
+            'errorKey' => 'share.slug.invalid_length',
+            'min' => SHARE_SLUG_MIN_LENGTH,
+            'max' => SHARE_SLUG_MAX_LENGTH,
+        ], 'Invalid share link suffix length');
+    }
+    return $slug;
+}
+
+function share_slug_exists(PDO $pdo, string $slug, int $excludeShareId = 0): bool {
+    if ($slug === '') {
+        return false;
+    }
+    if ($excludeShareId > 0) {
+        $stmt = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL AND id != :id LIMIT 1');
+        $stmt->execute([
+            ':slug' => $slug,
+            ':id' => $excludeShareId,
+        ]);
+        return !!$stmt->fetchColumn();
+    }
+    $stmt = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL LIMIT 1');
+    $stmt->execute([':slug' => $slug]);
+    return !!$stmt->fetchColumn();
+}
+
+function ensure_share_slug_available_or_fail(PDO $pdo, string $slug, int $excludeShareId = 0): void {
+    if (!share_slug_exists($pdo, $slug, $excludeShareId)) {
+        return;
+    }
+    api_response(409, [
+        'errorKey' => 'share.slug.conflict',
+        'min' => SHARE_SLUG_MIN_LENGTH,
+        'max' => SHARE_SLUG_MAX_LENGTH,
+    ], 'Share link already exists');
+}
+
+function allocate_random_share_slug_or_fail(PDO $pdo): string {
+    for ($i = 0; $i < 20; $i++) {
+        $slug = sanitize_slug(bin2hex(random_bytes(4)));
+        if (!share_slug_exists($pdo, $slug)) {
+            return $slug;
+        }
+    }
+    api_response(500, [
+        'errorKey' => 'share.slug.generate_failed',
+        'min' => SHARE_SLUG_MIN_LENGTH,
+        'max' => SHARE_SLUG_MAX_LENGTH,
+    ], 'Unable to allocate unique share link');
 }
 
 function generate_api_key(): array {
@@ -2970,6 +3105,81 @@ function handle_share_comment_upload(string $slug): void {
     api_response(200, ['url' => $url, 'size' => $actualSize]);
 }
 
+function handle_share_search(string $slug): void {
+    $share = find_share_by_slug($slug);
+    if (!$share) {
+        api_response(404, null, '分享不存在');
+    }
+    if (share_is_expired($share) || share_visitor_limit_reached($share)) {
+        api_response(403, null, '分享已关闭');
+    }
+    if (share_requires_password($share) && !share_access_granted((int)$share['id'])) {
+        api_response(403, null, '请先输入访问密码');
+    }
+    $q = trim((string)($_GET['q'] ?? ''));
+    if (mb_strlen($q) < 1) {
+        api_response(200, ['results' => []]);
+    }
+    $pdo = db();
+    $shareId = (int)$share['id'];
+    $words = preg_split('/\s+/u', $q, -1, PREG_SPLIT_NO_EMPTY);
+    if (empty($words)) {
+        api_response(200, ['results' => []]);
+    }
+    $wordConditions = [];
+    $params = [':sid' => $shareId];
+    foreach ($words as $i => $word) {
+        $pk = ':qw' . $i;
+        $likeVal = '%' . str_replace(['%', '_'], ['\\%', '\\_'], $word) . '%';
+        $wordConditions[] = "(title LIKE {$pk} ESCAPE \"\\\" OR markdown LIKE {$pk} ESCAPE \"\\\")";
+        $params[$pk] = $likeVal;
+    }
+    $firstWord = $words[0];
+    $params[':q_raw'] = $firstWord;
+    $params[':q_raw2'] = $firstWord;
+    $whereWords = implode(' AND ', $wordConditions);
+    $stmt = $pdo->prepare("
+        SELECT doc_id, title, hpath,
+            CASE
+                WHEN INSTR(markdown, :q_raw) > 50 THEN
+                    SUBSTR(markdown, INSTR(markdown, :q_raw) - 40, 200)
+                WHEN INSTR(markdown, :q_raw) > 0 THEN
+                    SUBSTR(markdown, 1, 200)
+                ELSE
+                    SUBSTR(markdown, 1, 200)
+            END AS snippet_raw,
+            INSTR(markdown, :q_raw2) AS match_pos
+        FROM share_docs
+        WHERE share_id = :sid
+          AND {$whereWords}
+        ORDER BY sort_order ASC, id ASC
+        LIMIT 30
+    ");
+    $stmt->execute($params);
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $results = [];
+    foreach ($rows as $row) {
+        $raw = $row['snippet_raw'] ?? '';
+        $raw = preg_replace('/^---\s*\n.*?\n---\s*\n/s', '', $raw);
+        $snippet = preg_replace('/[#*`~>\[\]!]+/', '', $raw);
+        $snippet = trim(preg_replace('/\s+/', ' ', $snippet));
+        $matchPos = (int)($row['match_pos'] ?? 0);
+        if ($matchPos > 50) {
+            $snippet = '...' . $snippet;
+        }
+        if (mb_strlen($snippet) > 120) {
+            $snippet = mb_substr($snippet, 0, 120) . '...';
+        }
+        $results[] = [
+            'docId'   => $row['doc_id'],
+            'title'   => $row['title'],
+            'hpath'   => $row['hpath'] ?? '',
+            'snippet' => $snippet,
+        ];
+    }
+    api_response(200, ['results' => $results]);
+}
+
 function handle_share_comment_submit(string $slug): void {
     check_csrf();
     $share = find_share_by_slug($slug);
@@ -3698,6 +3908,31 @@ function find_share_by_slug(string $slug): ?array {
     $pdo = db();
     $stmt = $pdo->prepare('SELECT * FROM shares WHERE slug = :slug AND deleted_at IS NULL LIMIT 1');
     $stmt->execute([':slug' => $slug]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $row ?: null;
+}
+
+function find_share_by_id(int $shareId): ?array {
+    if ($shareId <= 0) {
+        return null;
+    }
+    $pdo = db();
+    $stmt = $pdo->prepare('SELECT * FROM shares WHERE id = :id AND deleted_at IS NULL LIMIT 1');
+    $stmt->execute([':id' => $shareId]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $row ?: null;
+}
+
+function find_share_asset_row(int $shareId, string $assetPath): ?array {
+    if ($shareId <= 0 || $assetPath === '') {
+        return null;
+    }
+    $pdo = db();
+    $stmt = $pdo->prepare('SELECT asset_path, file_path, size_bytes FROM share_assets WHERE share_id = :sid AND asset_path = :asset_path LIMIT 1');
+    $stmt->execute([
+        ':sid' => $shareId,
+        ':asset_path' => $assetPath,
+    ]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     return $row ?: null;
 }
@@ -4910,6 +5145,7 @@ function handle_api(string $path): void {
         $clearExpires = !empty($payload['clearExpires']);
         $visitorLimit = parse_visitor_limit($payload['visitorLimit'] ?? null);
         $clearVisitorLimit = !empty($payload['clearVisitorLimit']);
+        $slug = parse_requested_share_slug_or_fail($payload['slug'] ?? '');
 
         $passwordHash = $share['password_hash'] ?? null;
         $expiresValue = isset($share['expires_at']) ? (int)$share['expires_at'] : null;
@@ -4929,9 +5165,15 @@ function handle_api(string $path): void {
         } elseif ($visitorLimit !== null) {
             $visitorValue = $visitorLimit;
         }
+        $newSlug = (string)($share['slug'] ?? '');
+        if ($slug !== '' && $slug !== $newSlug) {
+            ensure_share_slug_available_or_fail($pdo, $slug, (int)$share['id']);
+            $newSlug = $slug;
+        }
 
-        $stmt = $pdo->prepare('UPDATE shares SET password_hash = :password_hash, expires_at = :expires_at, visitor_limit = :visitor_limit, updated_at = :updated_at WHERE id = :id AND user_id = :uid');
+        $stmt = $pdo->prepare('UPDATE shares SET slug = :slug, password_hash = :password_hash, expires_at = :expires_at, visitor_limit = :visitor_limit, updated_at = :updated_at WHERE id = :id AND user_id = :uid');
         $stmt->execute([
+            ':slug' => $newSlug,
             ':password_hash' => $passwordHash,
             ':expires_at' => $expiresValue,
             ':visitor_limit' => $visitorValue,
@@ -4944,8 +5186,8 @@ function handle_api(string $path): void {
         }
         api_response(200, ['share' => [
             'id' => (int)$share['id'],
-            'slug' => $share['slug'],
-            'url' => share_url($share['slug']),
+            'slug' => $newSlug,
+            'url' => share_url($newSlug),
             'hasPassword' => !empty($passwordHash),
             'expiresAt' => $expiresValue ? ($expiresValue * 1000) : null,
             'visitorLimit' => $visitorValue,
@@ -5006,7 +5248,7 @@ function handle_api(string $path): void {
                 }
             }
         }
-        $slug = sanitize_slug((string)($meta['slug'] ?? ''));
+        $slug = parse_requested_share_slug_or_fail($meta['slug'] ?? '');
         $assets = normalize_asset_manifest($payload['assets'] ?? []);
         $assetSize = 0;
         foreach ($assets as $asset) {
@@ -5171,31 +5413,16 @@ function handle_api(string $path): void {
         $finalSlug = $slug;
         if ($existing) {
             if ($finalSlug && $finalSlug !== $existing['slug']) {
-                $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL AND id != :id');
-                $check->execute([':slug' => $finalSlug, ':id' => $existing['id']]);
-                if ($check->fetch()) {
-                    api_response(409, null, 'Share link already exists');
-                }
+                ensure_share_slug_available_or_fail($pdo, $finalSlug, (int)$existing['id']);
             }
             if (!$finalSlug) {
                 $finalSlug = (string)$existing['slug'];
             }
         } else {
             if (!$finalSlug) {
-                for ($i = 0; $i < 10; $i++) {
-                    $finalSlug = sanitize_slug(bin2hex(random_bytes(4)));
-                    $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL');
-                    $check->execute([':slug' => $finalSlug]);
-                    if (!$check->fetch()) {
-                        break;
-                    }
-                }
+                $finalSlug = allocate_random_share_slug_or_fail($pdo);
             } else {
-                $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL');
-                $check->execute([':slug' => $finalSlug]);
-                if ($check->fetch()) {
-                    api_response(409, null, 'Share link already exists');
-                }
+                ensure_share_slug_available_or_fail($pdo, $finalSlug);
             }
         }
 
@@ -5292,7 +5519,7 @@ function handle_api(string $path): void {
                 }
             }
         }
-        $slug = sanitize_slug((string)($meta['slug'] ?? ''));
+        $slug = parse_requested_share_slug_or_fail($meta['slug'] ?? '');
         $assets = normalize_asset_manifest($payload['assets'] ?? []);
         $assetSize = 0;
         foreach ($assets as $asset) {
@@ -5389,31 +5616,16 @@ function handle_api(string $path): void {
         $finalSlug = $slug;
         if ($existing) {
             if ($finalSlug && $finalSlug !== $existing['slug']) {
-                $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL AND id != :id');
-                $check->execute([':slug' => $finalSlug, ':id' => $existing['id']]);
-                if ($check->fetch()) {
-                    api_response(409, null, 'Share link already exists');
-                }
+                ensure_share_slug_available_or_fail($pdo, $finalSlug, (int)$existing['id']);
             }
             if (!$finalSlug) {
                 $finalSlug = (string)$existing['slug'];
             }
         } else {
             if (!$finalSlug) {
-                for ($i = 0; $i < 10; $i++) {
-                    $finalSlug = sanitize_slug(bin2hex(random_bytes(4)));
-                    $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL');
-                    $check->execute([':slug' => $finalSlug]);
-                    if (!$check->fetch()) {
-                        break;
-                    }
-                }
+                $finalSlug = allocate_random_share_slug_or_fail($pdo);
             } else {
-                $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL');
-                $check->execute([':slug' => $finalSlug]);
-                if ($check->fetch()) {
-                    api_response(409, null, 'Share link already exists');
-                }
+                ensure_share_slug_available_or_fail($pdo, $finalSlug);
             }
         }
 
@@ -5866,21 +6078,9 @@ function handle_api(string $path): void {
 
         $slug = sanitize_slug((string)($upload['slug'] ?? ''));
         if ($slug === '') {
-            for ($i = 0; $i < 10; $i++) {
-                $slug = sanitize_slug(bin2hex(random_bytes(4)));
-                $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL');
-                $check->execute([':slug' => $slug]);
-                if (!$check->fetch()) {
-                    break;
-                }
-            }
+            $slug = allocate_random_share_slug_or_fail($pdo);
         } else {
-            $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL');
-            $check->execute([':slug' => $slug]);
-            $rowId = (int)($check->fetchColumn() ?: 0);
-            if ($rowId && (!$share || $rowId !== (int)$share['id'])) {
-                api_response(409, null, 'Share link already exists');
-            }
+            ensure_share_slug_available_or_fail($pdo, $slug, $share ? (int)$share['id'] : 0);
         }
 
         $title = trim((string)($upload['title'] ?? ''));
@@ -6179,7 +6379,7 @@ function handle_api(string $path): void {
                 }
             }
         }
-        $slug = sanitize_slug((string)($meta['slug'] ?? ''));
+        $slug = parse_requested_share_slug_or_fail($meta['slug'] ?? '');
         $paths = $_POST['assetPaths'] ?? [];
         $docIds = $_POST['assetDocIds'] ?? [];
         $paths = is_array($paths) ? $paths : [$paths];
@@ -6297,11 +6497,7 @@ function handle_api(string $path): void {
 
         if ($existing) {
             if ($slug && $slug !== $existing['slug']) {
-                $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL AND id != :id');
-                $check->execute([':slug' => $slug, ':id' => $existing['id']]);
-                if ($check->fetch()) {
-                    api_response(409, null, '分享链接已被占用');
-                }
+                ensure_share_slug_available_or_fail($pdo, $slug, (int)$existing['id']);
             }
             $newSlug = $slug ?: $existing['slug'];
             $stmt = $pdo->prepare('UPDATE shares SET title = :title, slug = :slug, password_hash = :password_hash, expires_at = :expires_at, visitor_limit = :visitor_limit, updated_at = :updated_at, deleted_at = NULL WHERE id = :id');
@@ -6318,20 +6514,9 @@ function handle_api(string $path): void {
             $slug = $newSlug;
         } else {
             if (!$slug) {
-                for ($i = 0; $i < 10; $i++) {
-                    $slug = sanitize_slug(bin2hex(random_bytes(4)));
-                    $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL');
-                    $check->execute([':slug' => $slug]);
-                    if (!$check->fetch()) {
-                        break;
-                    }
-                }
+                $slug = allocate_random_share_slug_or_fail($pdo);
             } else {
-                $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL');
-                $check->execute([':slug' => $slug]);
-                if ($check->fetch()) {
-                    api_response(409, null, '分享链接已被占用');
-                }
+                ensure_share_slug_available_or_fail($pdo, $slug);
             }
             $shareId = allocate_share_id($pdo);
             if ($shareId > 0) {
@@ -6447,7 +6632,7 @@ function handle_api(string $path): void {
                 }
             }
         }
-        $slug = sanitize_slug((string)($meta['slug'] ?? ''));
+        $slug = parse_requested_share_slug_or_fail($meta['slug'] ?? '');
         $paths = $_POST['assetPaths'] ?? [];
         $docIds = $_POST['assetDocIds'] ?? [];
         $paths = is_array($paths) ? $paths : [$paths];
@@ -6538,11 +6723,7 @@ function handle_api(string $path): void {
 
         if ($existing) {
             if ($slug && $slug !== $existing['slug']) {
-                $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL AND id != :id');
-                $check->execute([':slug' => $slug, ':id' => $existing['id']]);
-                if ($check->fetch()) {
-                    api_response(409, null, '分享链接已被占用');
-                }
+                ensure_share_slug_available_or_fail($pdo, $slug, (int)$existing['id']);
             }
             $newSlug = $slug ?: $existing['slug'];
             $stmt = $pdo->prepare('UPDATE shares SET title = :title, slug = :slug, password_hash = :password_hash, expires_at = :expires_at, visitor_limit = :visitor_limit, updated_at = :updated_at, deleted_at = NULL WHERE id = :id');
@@ -6559,20 +6740,9 @@ function handle_api(string $path): void {
             $slug = $newSlug;
         } else {
             if (!$slug) {
-                for ($i = 0; $i < 10; $i++) {
-                    $slug = sanitize_slug(bin2hex(random_bytes(4)));
-                    $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL');
-                    $check->execute([':slug' => $slug]);
-                    if (!$check->fetch()) {
-                        break;
-                    }
-                }
+                $slug = allocate_random_share_slug_or_fail($pdo);
             } else {
-                $check = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL');
-                $check->execute([':slug' => $slug]);
-                if ($check->fetch()) {
-                    api_response(409, null, '分享链接已被占用');
-                }
+                ensure_share_slug_available_or_fail($pdo, $slug);
             }
             $shareId = allocate_share_id($pdo);
             if ($shareId > 0) {
@@ -7062,6 +7232,187 @@ function strip_duplicate_title_heading(string $markdown, string $title): string 
     return implode("\n", $lines);
 }
 
+function share_style_is_dangerous(string $style): bool {
+    $value = strtolower((string)$style);
+    $compact = preg_replace('/[\x00-\x1f\x7f]+/u', '', $value);
+    if (!is_string($compact)) {
+        $compact = $value;
+    }
+    return (bool)preg_match('/expression\s*\(|javascript\s*:|vbscript\s*:|url\s*\(\s*[\'"]?\s*data\s*:\s*text\/html/i', $compact);
+}
+
+function is_safe_share_url(string $value, string $tag = '', string $attr = ''): bool {
+    $raw = trim((string)$value);
+    if ($raw === '') {
+        return true;
+    }
+    $compact = preg_replace('/[\x00-\x20\x7f\s]+/u', '', $raw);
+    if (!is_string($compact) || $compact === '') {
+        $compact = $raw;
+    }
+    $tag = strtolower($tag);
+    $attr = strtolower($attr);
+
+    if (preg_match('/^(?:javascript|vbscript)\s*:/i', $compact)) {
+        return false;
+    }
+    if (preg_match('/^data\s*:/i', $compact)) {
+        if ($tag === 'img' && $attr === 'src') {
+            return (bool)preg_match('/^data:image\/(?:png|gif|jpe?g|webp|bmp|avif);base64,[a-z0-9+\/=\r\n]+$/i', $compact);
+        }
+        return false;
+    }
+    if ($tag === 'iframe' && $attr === 'src') {
+        if ($compact === '') {
+            return true;
+        }
+        if (preg_match('/^(?:https?:)?\/\//i', $compact)) {
+            return true;
+        }
+        if (str_starts_with($compact, '/') || str_starts_with($compact, './') || str_starts_with($compact, '../')) {
+            return true;
+        }
+        if (preg_match('/^about:blank(?:[?#].*)?$/i', $compact)) {
+            return true;
+        }
+        return false;
+    }
+    if ($compact[0] === '#') {
+        return true;
+    }
+    if (str_starts_with($compact, '/') && !str_starts_with($compact, '//')) {
+        return true;
+    }
+    if (str_starts_with($compact, './') || str_starts_with($compact, '../')) {
+        return true;
+    }
+    if (str_starts_with($compact, '//')) {
+        return true;
+    }
+    if (preg_match('/^[a-zA-Z][a-zA-Z0-9+.\-]*:/', $compact)) {
+        return (bool)preg_match('/^(?:https?|mailto|tel):/i', $compact);
+    }
+    return true;
+}
+
+function sanitize_share_html(string $html): string {
+    $source = (string)$html;
+    if ($source === '') {
+        return '';
+    }
+    if (!class_exists('DOMDocument')) {
+        return htmlspecialchars($source, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    }
+
+    $libxmlBackup = libxml_use_internal_errors(true);
+    $dom = new DOMDocument('1.0', 'UTF-8');
+    $wrapperId = '__sps_share_html_root__';
+    $loaded = $dom->loadHTML(
+        '<?xml encoding="UTF-8"><!doctype html><html><body><div id="' . $wrapperId . '">' . $source . '</div></body></html>',
+        LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD | LIBXML_NOERROR | LIBXML_NOWARNING,
+    );
+    libxml_clear_errors();
+    libxml_use_internal_errors($libxmlBackup);
+    if (!$loaded) {
+        return htmlspecialchars($source, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    }
+
+    $root = null;
+    $xpath = new DOMXPath($dom);
+    $rootNodes = $xpath->query('//*[@id="' . $wrapperId . '"]');
+    if ($rootNodes && $rootNodes->length > 0 && $rootNodes->item(0) instanceof DOMElement) {
+        $root = $rootNodes->item(0);
+    }
+    if (!$root) {
+        return htmlspecialchars($source, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    }
+
+    $blockedTags = ['script', 'object', 'embed', 'svg', 'math', 'base', 'meta', 'link'];
+    $urlAttrs = ['href', 'src', 'xlink:href', 'formaction', 'action', 'poster'];
+    $iframeAllowedAttrs = [
+        'src',
+        'width',
+        'height',
+        'title',
+        'allow',
+        'allowfullscreen',
+        'loading',
+        'referrerpolicy',
+        'sandbox',
+        'frameborder',
+    ];
+
+    $elements = [];
+    foreach ($root->getElementsByTagName('*') as $node) {
+        $elements[] = $node;
+    }
+
+    foreach ($elements as $element) {
+        if (!($element instanceof DOMElement)) {
+            continue;
+        }
+
+        $tag = strtolower($element->tagName);
+        if (in_array($tag, $blockedTags, true)) {
+            if ($element->parentNode) {
+                $element->parentNode->removeChild($element);
+            }
+            continue;
+        }
+
+        $attrNames = [];
+        if ($element->hasAttributes()) {
+            foreach ($element->attributes as $attribute) {
+                $attrNames[] = $attribute->name;
+            }
+        }
+
+        foreach ($attrNames as $attrNameRaw) {
+            $attrName = strtolower($attrNameRaw);
+            $attrValue = (string)$element->getAttribute($attrNameRaw);
+
+            if (str_starts_with($attrName, 'on')) {
+                $element->removeAttribute($attrNameRaw);
+                continue;
+            }
+            if ($attrName === 'srcdoc') {
+                $element->removeAttribute($attrNameRaw);
+                continue;
+            }
+            if ($attrName === 'style' && share_style_is_dangerous($attrValue)) {
+                $element->removeAttribute($attrNameRaw);
+                continue;
+            }
+            if ($tag === 'iframe' && !in_array($attrName, $iframeAllowedAttrs, true)) {
+                $element->removeAttribute($attrNameRaw);
+                continue;
+            }
+            if (in_array($attrName, $urlAttrs, true) && !is_safe_share_url($attrValue, $tag, $attrName)) {
+                $element->removeAttribute($attrNameRaw);
+            }
+        }
+
+        if ($tag === 'iframe') {
+            $iframeSrc = trim((string)$element->getAttribute('src'));
+            if ($iframeSrc !== '' && !is_safe_share_url($iframeSrc, 'iframe', 'src')) {
+                if ($element->parentNode) {
+                    $element->parentNode->removeChild($element);
+                }
+            }
+        }
+    }
+
+    $output = '';
+    foreach ($root->childNodes as $child) {
+        $rendered = $dom->saveHTML($child);
+        if (is_string($rendered)) {
+            $output .= $rendered;
+        }
+    }
+
+    return $output;
+}
+
 function render_markdown(string $markdown): string {
     static $parser = null;
     if (!$parser) {
@@ -7070,7 +7421,7 @@ function render_markdown(string $markdown): string {
             $parser->setSafeMode(false);
         }
     }
-    return $parser->text($markdown);
+    return sanitize_share_html($parser->text($markdown));
 }
 
 function share_requires_password(array $share): bool {
@@ -7084,15 +7435,77 @@ function share_is_expired(array $share): bool {
     return time() > (int)$share['expires_at'];
 }
 
+function share_password_hash_by_id(int $shareId): string {
+    static $cache = [];
+    if ($shareId <= 0) {
+        return '';
+    }
+    if (array_key_exists($shareId, $cache)) {
+        return (string)$cache[$shareId];
+    }
+    $pdo = db();
+    $stmt = $pdo->prepare('SELECT password_hash FROM shares WHERE id = :id AND deleted_at IS NULL LIMIT 1');
+    $stmt->execute([':id' => $shareId]);
+    $value = $stmt->fetchColumn();
+    $hash = is_string($value) ? trim($value) : '';
+    $cache[$shareId] = $hash;
+    return $hash;
+}
+
+function share_access_signature(string $passwordHash): string {
+    $raw = trim($passwordHash);
+    if ($raw === '') {
+        return '';
+    }
+    return hash('sha256', $raw);
+}
+
 function share_access_granted(int $shareId): bool {
-    return !empty($_SESSION['share_access'][$shareId]);
+    if ($shareId <= 0) {
+        return false;
+    }
+    $entry = $_SESSION['share_access'][$shareId] ?? null;
+    if (empty($entry)) {
+        return false;
+    }
+    $passwordHash = share_password_hash_by_id($shareId);
+    if ($passwordHash === '') {
+        // No password now: old session entries are irrelevant.
+        return true;
+    }
+    $expected = share_access_signature($passwordHash);
+    if ($expected === '') {
+        return false;
+    }
+    if ($entry === true) {
+        // Legacy boolean session format; force one re-verification for protected shares.
+        return false;
+    }
+    if (is_string($entry) && $entry !== '') {
+        return hash_equals($expected, $entry);
+    }
+    if (is_array($entry)) {
+        $token = trim((string)($entry['token'] ?? ''));
+        if ($token !== '') {
+            return hash_equals($expected, $token);
+        }
+    }
+    return false;
 }
 
 function grant_share_access(int $shareId): void {
-    if (!isset($_SESSION['share_access'])) {
+    if ($shareId <= 0) {
+        return;
+    }
+    if (!isset($_SESSION['share_access']) || !is_array($_SESSION['share_access'])) {
         $_SESSION['share_access'] = [];
     }
-    $_SESSION['share_access'][$shareId] = true;
+    $passwordHash = share_password_hash_by_id($shareId);
+    if ($passwordHash === '') {
+        $_SESSION['share_access'][$shareId] = true;
+        return;
+    }
+    $_SESSION['share_access'][$shareId] = share_access_signature($passwordHash);
 }
 
 function share_visitor_limit(array $share): int {
@@ -7164,6 +7577,347 @@ function register_share_visitor(int $shareId, string $visitorId): void {
         ':vid' => $visitorId,
         ':created_at' => now(),
     ]);
+}
+
+function share_inline_asset_extensions(): array {
+    return [
+        // Images
+        'apng',
+        'avif',
+        'bmp',
+        'gif',
+        'ico',
+        'jpg',
+        'jpeg',
+        'jxl',
+        'png',
+        'svg',
+        'tif',
+        'tiff',
+        'webp',
+        // Audio
+        'aac',
+        'flac',
+        'm4a',
+        'mp3',
+        'oga',
+        'wav',
+        'ogg',
+        'opus',
+        'weba',
+        // Video
+        'avi',
+        'm4v',
+        'mkv',
+        'mov',
+        'mp4',
+        'ogv',
+        'webm',
+        // Text / documents
+        'csv',
+        'json',
+        'log',
+        'srt',
+        'txt',
+        'md',
+        'pdf',
+        'vtt',
+        'xml',
+        'yaml',
+        'yml',
+    ];
+}
+
+function share_executable_asset_extensions(): array {
+    return [
+        'bat',
+        'cgi',
+        'cmd',
+        'com',
+        'cpl',
+        'dll',
+        'exe',
+        'hta',
+        'htm',
+        'html',
+        'jar',
+        'js',
+        'jse',
+        'mjs',
+        'msi',
+        'php',
+        'php3',
+        'php4',
+        'php5',
+        'php7',
+        'php8',
+        'phar',
+        'phtml',
+        'pl',
+        'ps1',
+        'psd1',
+        'psm1',
+        'py',
+        'rb',
+        'scr',
+        'sh',
+        'ts',
+        'tsx',
+        'vb',
+        'vbe',
+        'vbs',
+        'wsf',
+        'wsh',
+        'xhtml',
+    ];
+}
+
+function share_asset_is_executable(string $assetPath): bool {
+    $ext = share_asset_extension($assetPath);
+    if ($ext === '') {
+        return false;
+    }
+    return in_array($ext, share_executable_asset_extensions(), true);
+}
+
+function share_asset_extension(string $assetPath): string {
+    $ext = strtolower((string)pathinfo($assetPath, PATHINFO_EXTENSION));
+    return $ext !== '' ? $ext : '';
+}
+
+function share_asset_allow_inline(string $assetPath): bool {
+    if (share_asset_is_executable($assetPath)) {
+        return false;
+    }
+    $ext = share_asset_extension($assetPath);
+    if ($ext === '') {
+        return false;
+    }
+    return in_array($ext, share_inline_asset_extensions(), true);
+}
+
+function detect_share_asset_mime(string $fullPath, string $assetPath): string {
+    $ext = share_asset_extension($assetPath);
+    $map = [
+        'csv' => 'text/csv; charset=UTF-8',
+        'json' => 'application/json; charset=UTF-8',
+        'log' => 'text/plain; charset=UTF-8',
+        'srt' => 'text/plain; charset=UTF-8',
+        'txt' => 'text/plain; charset=UTF-8',
+        'md' => 'text/markdown; charset=UTF-8',
+        'vtt' => 'text/vtt; charset=UTF-8',
+        'xml' => 'application/xml; charset=UTF-8',
+        'yaml' => 'text/yaml; charset=UTF-8',
+        'yml' => 'text/yaml; charset=UTF-8',
+        'pdf' => 'application/pdf',
+        'apng' => 'image/apng',
+        'jpg' => 'image/jpeg',
+        'jpeg' => 'image/jpeg',
+        'png' => 'image/png',
+        'gif' => 'image/gif',
+        'ico' => 'image/x-icon',
+        'jxl' => 'image/jxl',
+        'svg' => 'image/svg+xml',
+        'tif' => 'image/tiff',
+        'tiff' => 'image/tiff',
+        'webp' => 'image/webp',
+        'bmp' => 'image/bmp',
+        'avif' => 'image/avif',
+        'aac' => 'audio/aac',
+        'flac' => 'audio/flac',
+        'm4a' => 'audio/mp4',
+        'mp3' => 'audio/mpeg',
+        'wav' => 'audio/wav',
+        'oga' => 'audio/ogg',
+        'ogg' => 'audio/ogg',
+        'opus' => 'audio/ogg',
+        'weba' => 'audio/webm',
+        'avi' => 'video/x-msvideo',
+        'm4v' => 'video/mp4',
+        'mkv' => 'video/x-matroska',
+        'mov' => 'video/quicktime',
+        'mp4' => 'video/mp4',
+        'ogv' => 'video/ogg',
+        'webm' => 'video/webm',
+    ];
+    $fallback = $map[$ext] ?? 'application/octet-stream';
+    if (function_exists('finfo_open')) {
+        $finfo = @finfo_open(FILEINFO_MIME_TYPE);
+        if ($finfo) {
+            $detected = (string)@finfo_file($finfo, $fullPath);
+            @finfo_close($finfo);
+            if ($detected !== '' && strtolower($detected) !== 'application/octet-stream') {
+                return $detected;
+            }
+        }
+    }
+    return $fallback;
+}
+
+function render_share_asset_not_found(): void {
+    http_response_code(404);
+    header('Content-Type: text/plain; charset=UTF-8');
+    echo 'Resource not found';
+    exit;
+}
+
+function build_share_asset_public_path(array $share, string $assetPath): string {
+    $shareId = (int)($share['id'] ?? 0);
+    $assetPath = sanitize_asset_path($assetPath);
+    if ($shareId <= 0 || $assetPath === '') {
+        return '';
+    }
+    if (str_starts_with($assetPath, comment_asset_prefix())) {
+        return '/uploads/' . $assetPath;
+    }
+    return '/uploads/shares/' . $shareId . '/' . $assetPath;
+}
+
+function resolve_asset_resume_redirect_path(array $share): string {
+    $raw = trim((string)($_GET['asset'] ?? ''));
+    if ($raw === '') {
+        return '';
+    }
+    $shareId = (int)($share['id'] ?? 0);
+    if ($shareId <= 0) {
+        return '';
+    }
+    $assetPath = sanitize_asset_path(rawurldecode($raw));
+    if ($assetPath === '') {
+        return '';
+    }
+    $asset = find_share_asset_row($shareId, $assetPath);
+    if (!$asset) {
+        return '';
+    }
+    return build_share_asset_public_path($share, $assetPath);
+}
+
+function redirect_to_share_page(array $share, string $assetPath = ''): void {
+    $slug = trim((string)($share['slug'] ?? ''));
+    if ($slug === '') {
+        render_share_asset_not_found();
+    }
+    $path = '/s/' . rawurlencode($slug);
+    $cleanAsset = sanitize_asset_path($assetPath);
+    if ($cleanAsset !== '') {
+        $path .= '?asset=' . rawurlencode($cleanAsset);
+    }
+    redirect($path);
+}
+
+function serve_share_asset(array $share, string $assetPath): void {
+    global $config;
+    $shareId = (int)($share['id'] ?? 0);
+    if ($shareId <= 0) {
+        render_share_asset_not_found();
+    }
+    $assetPath = sanitize_asset_path(rawurldecode($assetPath));
+    if ($assetPath === '') {
+        render_share_asset_not_found();
+    }
+    if (share_is_expired($share) || share_visitor_limit_reached($share)) {
+        redirect_to_share_page($share, $assetPath);
+    }
+    if (share_requires_password($share) && !share_access_granted($shareId)) {
+        redirect_to_share_page($share, $assetPath);
+    }
+    if (share_visitor_limit($share) > 0) {
+        register_share_visitor($shareId, get_visitor_id());
+    }
+    $asset = find_share_asset_row($shareId, $assetPath);
+    if (!$asset) {
+        render_share_asset_not_found();
+    }
+    $filePath = sanitize_asset_path((string)($asset['file_path'] ?? ''));
+    if ($filePath === '') {
+        render_share_asset_not_found();
+    }
+    $uploadsDir = rtrim((string)($config['uploads_dir'] ?? (__DIR__ . '/uploads')), '/\\');
+    $fullPath = $uploadsDir . '/' . ltrim($filePath, '/');
+    if (!is_file($fullPath) || !is_readable($fullPath)) {
+        render_share_asset_not_found();
+    }
+    $inline = share_asset_allow_inline($assetPath);
+    $mime = $inline ? detect_share_asset_mime($fullPath, $assetPath) : 'application/octet-stream';
+    $disposition = $inline ? 'inline' : 'attachment';
+    $filename = basename($assetPath);
+    if ($filename === '' || $filename === '.' || $filename === '..') {
+        $filename = 'download.bin';
+    }
+    $escapedFilename = str_replace(
+        ['\\', '"', "\r", "\n"],
+        ['\\\\', '\\"', '', ''],
+        $filename
+    );
+    $size = @filesize($fullPath);
+    header('Content-Type: ' . $mime);
+    header('X-Content-Type-Options: nosniff');
+    header('Content-Disposition: ' . $disposition . '; filename="' . $escapedFilename . '"; filename*=UTF-8\'\'' . rawurlencode($filename));
+    header('Cache-Control: private, max-age=3600');
+    header('Accept-Ranges: bytes');
+    if (is_int($size) && $size >= 0) {
+        header('Content-Length: ' . (string)$size);
+    }
+    @readfile($fullPath);
+    exit;
+}
+
+function parse_legacy_upload_asset_request(string $path): ?array {
+    $normalized = ltrim(str_replace('\\', '/', $path), '/');
+    if ($normalized === '' || !str_starts_with($normalized, 'uploads/')) {
+        return null;
+    }
+    $relative = substr($normalized, strlen('uploads/'));
+    if (!is_string($relative) || $relative === '') {
+        return null;
+    }
+    if (preg_match('#^shares/(\d+)/(.*)$#', $relative, $matches)) {
+        $shareId = (int)($matches[1] ?? 0);
+        $assetSuffix = rawurldecode((string)($matches[2] ?? ''));
+        $assetPath = sanitize_asset_path($assetSuffix);
+        if ($shareId > 0 && $assetPath !== '') {
+            return [
+                'shareId' => $shareId,
+                'assetPath' => $assetPath,
+            ];
+        }
+    }
+    $commentPrefix = trim(comment_asset_prefix(), '/');
+    if ($commentPrefix !== '' && preg_match('#^' . preg_quote($commentPrefix, '#') . '/(\d+)/(.*)$#', $relative, $matches)) {
+        $shareId = (int)($matches[1] ?? 0);
+        $assetSuffix = rawurldecode((string)($matches[2] ?? ''));
+        $assetPath = sanitize_asset_path($commentPrefix . '/' . $shareId . '/' . $assetSuffix);
+        if ($shareId > 0 && $assetPath !== '') {
+            return [
+                'shareId' => $shareId,
+                'assetPath' => $assetPath,
+            ];
+        }
+    }
+    return null;
+}
+
+function handle_share_asset_request(string $slug, string $assetPath): void {
+    $share = find_share_by_slug($slug);
+    if (!$share) {
+        render_share_asset_not_found();
+    }
+    serve_share_asset($share, $assetPath);
+}
+
+function handle_legacy_upload_asset_request(string $path): void {
+    $parsed = parse_legacy_upload_asset_request($path);
+    if (!$parsed) {
+        render_share_asset_not_found();
+    }
+    $shareId = (int)($parsed['shareId'] ?? 0);
+    $assetPath = (string)($parsed['assetPath'] ?? '');
+    $share = find_share_by_id($shareId);
+    if (!$share) {
+        render_share_asset_not_found();
+    }
+    serve_share_asset($share, $assetPath);
 }
 
 function build_doc_tree(array $docs, ?string $activeId = null): array {
@@ -7389,7 +8143,7 @@ function build_doc_icon_src(string $icon, string $assetBasePath): string {
     if ($prefix !== '' && substr($prefix, -1) !== '/') {
         $prefix .= '/';
     }
-    return $prefix . $path;
+    return $prefix . encode_path_segments($path);
 }
 
 function render_doc_tree_icon(?array $doc, string $assetBasePath): string {
@@ -7404,6 +8158,18 @@ function render_doc_tree_icon(?array $doc, string $assetBasePath): string {
         return '<span class="kb-tree-icon kb-tree-icon--emoji">' . htmlspecialchars($icon) . '</span>';
     }
     return '';
+}
+
+function render_share_search_box(string $slug): string {
+    $html  = '<div class="kb-search" data-share-search>';
+    $html .= '<div class="kb-search-input-wrap">';
+    $html .= '<svg class="kb-search-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.35-4.35"/></svg>';
+    $html .= '<input class="kb-search-input" type="search" placeholder="搜索..." data-share-search-input autocomplete="off" spellcheck="false">';
+    $html .= '<button class="kb-search-clear" type="button" data-share-search-clear hidden aria-label="清除搜索">&times;</button>';
+    $html .= '</div>';
+    $html .= '<div class="kb-search-results" data-share-search-results hidden></div>';
+    $html .= '</div>';
+    return $html;
 }
 
 function render_doc_tree(array $nodes, string $slug, ?string $activeId = null, int $level = 0, string $path = '', string $assetBasePath = ''): string {
@@ -7478,15 +8244,15 @@ function is_share_partial_request(): bool {
 function route_share(string $slug, ?string $docId = null): void {
     $share = find_share_by_slug($slug);
     if (!$share) {
-        http_response_code(404);
-        echo '分享不存在。';
-        exit;
+        render_share_not_found_page();
+        return;
     }
     $shareId = (int)$share['id'];
     $viewer = current_user();
     $shareTitleRaw = (string)$share['title'];
     $shareTitle = htmlspecialchars($shareTitleRaw);
     $redirectPath = '/s/' . $slug . ($docId ? '/' . rawurlencode($docId) : '');
+    $resumeAssetPath = resolve_asset_resume_redirect_path($share);
     $isPartial = is_share_partial_request();
 
     if (share_is_expired($share)) {
@@ -7515,6 +8281,9 @@ function route_share(string $slug, ?string $docId = null): void {
             $input = trim((string)($_POST['share_password'] ?? ''));
             if ($input !== '' && password_verify($input, (string)$share['password_hash'])) {
                 grant_share_access($shareId);
+                if ($resumeAssetPath !== '') {
+                    redirect($resumeAssetPath);
+                }
                 redirect($redirectPath);
             }
             $error = '访问密码错误';
@@ -7535,21 +8304,27 @@ function route_share(string $slug, ?string $docId = null): void {
         return;
     }
 
-    if (share_visitor_limit($share) > 0) {
-        register_share_visitor($shareId, get_visitor_id());
-    }
     $pdo = db();
-    $pdo->prepare('UPDATE shares SET access_count = access_count + 1 WHERE id = :id')
-        ->execute([':id' => $shareId]);
-    $share['access_count'] = (int)($share['access_count'] ?? 0) + 1;
-    $stmt = $pdo->prepare('SELECT * FROM share_docs WHERE share_id = :sid ORDER BY sort_order ASC, id ASC');
+    $stmt = $pdo->prepare('SELECT id, doc_id, title, icon, hpath, parent_id, sort_index, sort_order, updated_at FROM share_docs WHERE share_id = :sid ORDER BY sort_order ASC, id ASC');
     $stmt->execute([':sid' => $shareId]);
     $docs = $stmt->fetchAll(PDO::FETCH_ASSOC);
     if (empty($docs)) {
-        http_response_code(404);
-        echo '文档不存在。';
-        exit;
+        render_share_not_found_page();
+        return;
     }
+    $accessCountRecorded = false;
+    $touchShareAccess = function () use (&$accessCountRecorded, &$share, $shareId, $pdo): void {
+        if ($accessCountRecorded) {
+            return;
+        }
+        if (share_visitor_limit($share) > 0) {
+            register_share_visitor($shareId, get_visitor_id());
+        }
+        $pdo->prepare('UPDATE shares SET access_count = access_count + 1 WHERE id = :id')
+            ->execute([':id' => $shareId]);
+        $share['access_count'] = (int)($share['access_count'] ?? 0) + 1;
+        $accessCountRecorded = true;
+    };
 
     $assetBasePath = base_path() . '/uploads/shares/' . $shareId . '/';
 
@@ -7569,9 +8344,8 @@ function route_share(string $slug, ?string $docId = null): void {
                 $activeDocId = (string)($doc['doc_id'] ?? '');
             }
             if (!$doc) {
-                http_response_code(404);
-                echo '文档不存在。';
-                exit;
+                render_share_not_found_page();
+                return;
             }
             $docTitleRaw = trim((string)($doc['title'] ?? '')) ?: $shareTitleRaw;
             $docTitle = htmlspecialchars($docTitleRaw);
@@ -7580,6 +8354,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $markdown = strip_duplicate_title_heading($markdown, $docTitleRaw);
             $markdown = replace_custom_emoji_tokens($markdown, (int)$shareId, $assetBasePath);
             $markdown = insert_adjacent_emoji_image_spacing($markdown);
+            $touchShareAccess();
             $reportTrigger = render_share_report_trigger($share);
             $shareMetaHtml = render_share_stats($share, $reportTrigger);
             record_share_access($share, (string)($doc['doc_id'] ?? ''), $docTitleRaw);
@@ -7587,6 +8362,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $reportModalHtml = render_share_report_form($share, $viewer, (string)$activeDocId);
             $treeHtml = render_doc_tree(build_doc_tree($docs, $activeDocId), $slug, $activeDocId, 0, '', $assetBasePath);
             $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
+            $sidebar .= render_share_search_box($slug);
             $sidebar .= '<div class="kb-side-tabs" data-share-tabs data-share-default="tree">';
             $sidebar .= '<button class="kb-side-tab is-active" type="button" data-share-tab="tree">文档树</button>';
             $sidebar .= '<button class="kb-side-tab" type="button" data-share-tab="toc">目录</button>';
@@ -7664,12 +8440,14 @@ function route_share(string $slug, ?string $docId = null): void {
         $markdown = strip_duplicate_title_heading($markdown, $docTitleRaw);
         $markdown = replace_custom_emoji_tokens($markdown, (int)$shareId, $assetBasePath);
         $markdown = insert_adjacent_emoji_image_spacing($markdown);
+        $touchShareAccess();
         $reportTrigger = render_share_report_trigger($share);
         $shareMetaHtml = render_share_stats($share, $reportTrigger);
         record_share_access($share, (string)($doc['doc_id'] ?? ''), $docTitleRaw);
         $commentHtml = render_share_comments($share, $viewer, null);
         $reportModalHtml = render_share_report_form($share, $viewer, null);
         $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
+        $sidebar .= render_share_search_box($slug);
         $sidebar .= '<div class="kb-side-tabs" data-share-tabs data-share-default="toc">';
         $sidebar .= '<button class="kb-side-tab is-active" type="button" data-share-tab="toc">目录</button>';
         $sidebar .= '</div>';
@@ -7699,6 +8477,7 @@ function route_share(string $slug, ?string $docId = null): void {
     if ($share['type'] === 'notebook') {
         $treeHtml = render_doc_tree(build_doc_tree($docs, $docId), $slug, $docId, 0, '', $assetBasePath);
         $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
+        $sidebar .= render_share_search_box($slug);
         $sidebar .= '<div class="kb-side-tabs" data-share-tabs data-share-default="tree">';
         $sidebar .= '<button class="kb-side-tab is-active" type="button" data-share-tab="tree">文档树</button>';
         $sidebar .= '<button class="kb-side-tab" type="button" data-share-tab="toc">目录</button>';
@@ -7725,9 +8504,8 @@ function route_share(string $slug, ?string $docId = null): void {
                 }
             }
             if (!$doc) {
-                http_response_code(404);
-                echo '文档不存在。';
-                exit;
+                render_share_not_found_page();
+                return;
             }
             $docTitleRaw = trim((string)($doc['title'] ?? '')) ?: $shareTitleRaw;
             $docTitle = htmlspecialchars($docTitleRaw);
@@ -7736,6 +8514,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $markdown = strip_duplicate_title_heading($markdown, $docTitleRaw);
             $markdown = replace_custom_emoji_tokens($markdown, (int)$shareId, $assetBasePath);
             $markdown = insert_adjacent_emoji_image_spacing($markdown);
+            $touchShareAccess();
             $reportTrigger = render_share_report_trigger($share);
             $shareMetaHtml = render_share_stats($share, $reportTrigger);
             record_share_access($share, (string)($doc['doc_id'] ?? ''), $docTitleRaw);
@@ -7779,6 +8558,7 @@ function route_share(string $slug, ?string $docId = null): void {
         }
 
         if (!$docId) {
+            $touchShareAccess();
             $mainHtml = '<div class="kb-main"><div class="share-empty">请先在文档树里面先打开一个文档</div></div>';
             if ($isPartial) {
                 api_response(200, [
@@ -7836,9 +8616,7 @@ function route_share(string $slug, ?string $docId = null): void {
         render_page($shareTitleRaw, $content, null, '', ['layout' => 'share']);
     }
 
-    http_response_code(404);
-    echo '分享不存在。';
-    exit;
+    render_share_not_found_page();
 }
 $path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH) ?: '/';
 $base = base_path();
@@ -7861,10 +8639,34 @@ if (strpos($path, '/api/v1/') === 0) {
     handle_api($path);
 }
 
+if (preg_match('#^/s/([a-zA-Z0-9_-]+)/res/(.+)$#', $path, $matches)) {
+    handle_share_asset_request($matches[1], $matches[2]);
+}
+
+if (str_starts_with($path, '/uploads/')) {
+    handle_legacy_upload_asset_request($path);
+}
+
+if (preg_match('#^/s/([a-zA-Z0-9_-]+)/comment$#', $path, $matches) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    handle_share_comment_submit($matches[1]);
+}
+
+if (preg_match('#^/s/([a-zA-Z0-9_-]+)/comment/upload$#', $path, $matches) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    handle_share_comment_upload($matches[1]);
+}
 
 
+if (preg_match('#^/s/([a-zA-Z0-9_-]+)/comment/delete$#', $path, $matches) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    handle_share_comment_delete($matches[1]);
+}
 
+if (preg_match('#^/s/([a-zA-Z0-9_-]+)/report$#', $path, $matches) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    handle_share_report_submit($matches[1]);
+}
 
+if (preg_match('#^/s/([a-zA-Z0-9_-]+)/search$#', $path, $matches) && $_SERVER['REQUEST_METHOD'] === 'GET') {
+    handle_share_search($matches[1]);
+}
 
 if (preg_match('#^/s/([a-zA-Z0-9_-]+)(?:/([^/]+))?$#', $path, $matches)) {
     route_share($matches[1], $matches[2] ?? null);
@@ -7896,7 +8698,7 @@ if ($path === '/email-code' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         redirect('/register');
     }
     $captchaInput = (string)($_POST['captcha'] ?? '');
-    if (captcha_enabled() && $captchaInput !== '' && !check_captcha($captchaInput)) {
+    if (captcha_enabled() && !check_captcha($captchaInput)) {
         flash('error', '验证码错误');
         redirect('/register?step=verify');
     }
@@ -8612,7 +9414,7 @@ if ($path === '/account') {
         ]);
         unset($_SESSION['user_id'], $_SESSION['password_hash']);
         session_regenerate_id(true);
-        flash('info', '???????????');
+        flash('info', '密码修改成功，请重新登录');
         redirect('/login');
     }
 
@@ -10424,6 +11226,5 @@ if ($path === '/') {
     render_page('首页', $content, null);
 }
 
-http_response_code(404);
-echo '未找到。';
+render_404_page();
 

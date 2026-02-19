@@ -1,10 +1,13 @@
 <IfModule mod_rewrite.c>
     RewriteEngine On
-    
+
+    # 强制 uploads 请求走 index.php，由服务端执行分享权限校验。
+    RewriteRule ^uploads/(.*)$ index.php [QSA,L]
+
     # 如果文件或目录存在则直接访问
     RewriteCond %{REQUEST_FILENAME} !-f
     RewriteCond %{REQUEST_FILENAME} !-d
-    
+
     # 否则重写到 index.php
     RewriteRule ^(.*)$ index.php [QSA,L]
 </IfModule>
