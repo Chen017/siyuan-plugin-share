@@ -1003,6 +1003,7 @@ function adjust_share_size(int $shareId, int $delta): void {
 }
 
 function render_share_stats(array $share, string $extraHtml = ''): string {
+    return '';
     $count = (int)($share['access_count'] ?? 0);
     $created = format_share_datetime((string)($share['created_at'] ?? ''));
     $expiresAt = (int)($share['expires_at'] ?? 0);
@@ -2814,6 +2815,7 @@ function render_comment_node(array $comment, array $share, ?array $user, string 
 }
 
 function render_share_comments(array $share, ?array $user, ?string $docId = null): string {
+    return '';
     $shareId = (int)($share['id'] ?? 0);
     $slug = (string)($share['slug'] ?? '');
     if ($shareId <= 0 || $slug === '') {
