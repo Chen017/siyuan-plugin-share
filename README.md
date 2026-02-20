@@ -22,6 +22,10 @@ Share a **single page, sub-documents, or an entire notebook**. You can **exclude
 
 Uses an **incremental update** algorithm (faster and saves data). Features built-in analytics, allowing you to track **visitor counts, locations, and other key insights** at a glance.
 
+**🔄 Auto-Update: Effortless & Worry-free** 
+
+Once enabled, it automatically detects document changes in the background and updates the shared page, eliminating the need for repeated manual updates. It also provides running status, queues, and history logs to ensure your shared content is always up to date.
+
 ---
 
 ## ✨ Usage Guide
