@@ -1,4 +1,4 @@
-﻿/* SiYuan Share - SiYuan plugin (no-build single file) */
+/* SiYuan Share - SiYuan plugin (no-build single file) */
 /* eslint-disable no-console */
 
 const {
@@ -26,6 +26,7 @@ const STORAGE_SITE_SHARES = "sharesBySite";
 const STORAGE_SHARE_OPTIONS = "shareOptions";
 const STORAGE_INCREMENTAL_CURSOR = "incrementalCursorBySite";
 const STORAGE_EXPORT_RETRY_CACHE_INDEX = "exportRetryCacheIndexBySite";
+const STORAGE_AUTO_UPDATE_RUNTIME = "autoUpdateRuntimeBySite";
 const DOCK_TYPE = "siyuan-plugin-share-dock";
 const MB = 1024 * 1024;
 const UPLOAD_CHUNK_MIN_SIZE = 256 * 1024;
@@ -44,6 +45,10 @@ const UPLOAD_RETRY_MAX_DELAY = 2000;
 const UPLOAD_MISSING_CHUNK_RETRY_LIMIT = 8;
 const EXPORT_RETRY_CACHE_DIR_NAME = "export-retry-cache";
 const EXPORT_RETRY_CACHE_VERSION = 1;
+const AUTO_UPDATE_HISTORY_LIMIT = 2000;
+const AUTO_UPDATE_HISTORY_RENDER_LIMIT = 200;
+const AUTO_UPDATE_HISTORY_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
+const AUTO_UPDATE_QUIET_DEDUP_WINDOW_MS = 1200;
 
 const REMOTE_API = {
   verify: "/api/v1/auth/verify",
@@ -327,8 +332,8 @@ const SPS_QR_STYLES = [
   { id: "dark", bg: "#1a1a1a", fg: "#e0e0e0", finderFg: "#64b5f6", finderRadius: 0.8 },
 ];
 const SPS_QR_ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="16" height="16" fill="currentColor"><path d="M48.384 45.376l412.224 0 0 84.992-412.224 0 0-84.992ZM565.44 45.376l238.656 0 0 84.992-238.656 0 0-84.992ZM891.584 45.376l86.72 0 0 86.72-86.72 0 0-86.72ZM48.384 374.4l412.224 0 0 85.056-412.224 0 0-85.056ZM45.696 45.376l84.992 0 0 412.224-84.992 0 0-412.224ZM375.616 45.376l84.992 0 0 412.224-84.992 0 0-412.224ZM189.376 200.832l115.712 0 0 115.712-115.712 0 0-115.712ZM565.44 130.368l82.752 0 0 87.232-82.752 0 0-87.232ZM804.032 130.368l90.752 0 0 160.512-90.752 0 0-160.512ZM891.584 217.6l86.72 0 0 151.872-86.72 0 0-151.872ZM651.328 282.688l152.768 0 0 109.312-152.768 0 0-109.312ZM736.832 369.408l155.392 0 0 88.128-155.392 0 0-88.128ZM565.952 372.16l85.376 0 0 85.376-85.376 0 0-85.376ZM45.696 542.784l84.992 0 0 192.576-84.992 0 0-192.576ZM130.88 717.248l91.968 0 0 92.032-91.968 0 0-92.032ZM45.696 805.632l85.184 0 0 173.056-85.184 0 0-173.056ZM217.664 542.784l261.696 0 0 105.728-261.696 0 0-105.728ZM281.344 639.104l109.184 0 0 100.48-109.184 0 0-100.48ZM370.176 717.248l109.184 0 0 174.848-109.184 0 0-174.848ZM285.44 805.632l105.088 0 0 173.056-105.088 0 0-173.056ZM197.952 869.12l102.016 0 0 109.568-102.016 0 0-109.568ZM629.184 542.784l195.264 0 0 174.464-195.264 0 0-174.464ZM871.168 542.784l107.136 0 0 107.136-107.136 0 0-107.136ZM545.088 630.016l107.136 0 0 194.304-107.136 0 0-194.304ZM716.672 692.8l107.776 0 0 111.872-107.776 0 0-111.872ZM545.088 869.12l107.136 0 0 109.568-107.136 0 0-109.568ZM802.816 892.096l175.488 0 0 86.592-175.488 0 0-86.592ZM890.56 804.672l87.744 0 0 105.728-87.744 0 0-105.728Z"/></svg>';
-const DEFAULT_DOC_ICON_LEAF = "📄";
-const DEFAULT_DOC_ICON_PARENT = "📑";
+const DEFAULT_DOC_ICON_LEAF = "\u{1F4C4}";
+const DEFAULT_DOC_ICON_PARENT = "\u{1F4D1}";
 const BLOCK_REF_ID_PATTERN = "[0-9]{14}-[0-9a-z]{7,}";
 const BLOCK_REF_RE = new RegExp(
   `\\(\\(${BLOCK_REF_ID_PATTERN}(?:\\s+\\"[^\\"]*\\")?\\)\\)`,
@@ -339,6 +344,10 @@ const BLOCK_REF_LINK_RE = new RegExp(`siyuan://blocks/${BLOCK_REF_ID_PATTERN}`, 
 const TREE_SHARE_CLASS = "sps-tree-share";
 const TREE_SHARED_CLASS = "sps-tree-item--shared";
 const TREE_SHARE_ICON_ID = "iconSiyuanShare";
+const TREE_SHARE_QUIET_ICON_ID = "iconSiyuanShareQuiet";
+const TREE_SHARE_QUEUED_ICON_ID = "iconSiyuanShareQueued";
+const TREE_SHARE_SYNCING_ICON_ID = "iconSiyuanShareSyncing";
+const TREE_SHARE_ERROR_ICON_ID = "iconSiyuanShareError";
 const HASH_HEX_RE = /^[a-f0-9]{64}$/i;
 const SHARE_SLUG_MIN_LENGTH = 6;
 const SHARE_SLUG_MAX_LENGTH = 32;
@@ -1730,6 +1739,20 @@ function deriveParentIdFromPath(pathValue, selfId = "") {
   return "";
 }
 
+function collectDocIdsFromPath(pathValue) {
+  if (!pathValue) return [];
+  const parts = String(pathValue || "")
+    .split("/")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const out = [];
+  parts.forEach((part) => {
+    const docId = extractDocIdFromValue(part);
+    if (docId && !out.includes(docId)) out.push(docId);
+  });
+  return out;
+}
+
 function getDocTreeNodeId(node) {
   if (!node) return "";
   const candidates = [
@@ -1908,6 +1931,7 @@ class SiYuanSharePlugin extends Plugin {
       sites: [],
       activeSiteId: "",
       refWarningDisabled: false,
+      autoUpdateScanStampBySite: {},
     };
     this.remoteUploadLimits = null;
     this.remoteFeatures = null;
@@ -1930,13 +1954,59 @@ class SiYuanSharePlugin extends Plugin {
     this.docTreeObserver = null;
     this.docTreeBindTimer = null;
     this.docTreeRefreshTimer = null;
+    this.docTreeDeferredTimers = [];
+    this.docTreeStructSnapshot = new Map();
+    this.docTreeStructDetectTimer = null;
+    this.docTreeStructDetectRunning = false;
+    this.docTreeStructDetectPending = false;
     this.backgroundSyncTimer = null;
+    this.backgroundSyncLoopRunner = null;
     this.backgroundSyncing = false;
     this.backgroundSyncDelayMs = 3 * 60 * 1000;
     this.backgroundSyncMinDelayMs = 3 * 60 * 1000;
     this.backgroundSyncMaxDelayMs = 3 * 60 * 60 * 1000;
     this.backgroundSyncHiddenMinDelayMs = 10 * 60 * 1000;
     this.backgroundSyncHiddenMaxDelayMs = 3 * 60 * 60 * 1000;
+    this.autoUpdateTimer = null;
+    this.autoUpdateLoopRunner = null;
+    this.autoUpdating = false;
+    this.autoUpdateDelayMs = 15 * 1000;
+    this.autoUpdateHiddenDelayMs = 60 * 1000;
+    this.autoUpdateRetryBaseDelayMs = 30 * 1000;
+    this.autoUpdateRetryMaxDelayMs = 30 * 60 * 1000;
+    this.autoUpdateQuietWindowMs = 10 * 1000;
+    this.autoUpdateQueue = [];
+    this.autoUpdateQueuedSet = new Set();
+    this.autoUpdateRerunSet = new Set();
+    this.autoUpdateCurrentShareId = "";
+    this.autoUpdateCurrentController = null;
+    this.autoUpdateShareStates = {};
+    this.autoUpdateRetryStateByShare = {};
+    this.autoUpdateShareChangeSeqById = {};
+    this.autoUpdateAbortByQuietSet = new Set();
+    this.autoUpdateAbortByManualSet = new Set();
+    this.autoUpdateQuietDeadlineByShare = {};
+    this.autoUpdateQuietPendingSet = new Set();
+    this.autoUpdateQuietFlushTimer = null;
+    this.autoUpdateQuietNextFlushAt = 0;
+    this.autoUpdateWsDocIdSet = new Set();
+    this.autoUpdateWsFlushTimer = null;
+    this.autoUpdateWsDetectRunning = false;
+    this.autoUpdateWsDetectPending = false;
+    this.autoUpdateHistory = [];
+    this.autoUpdateNextRunAt = 0;
+    this.autoUpdateLastScanAt = 0;
+    this.autoUpdateLastResult = null;
+    this.autoUpdateStatusDialog = null;
+    this.autoUpdateStatusRefreshTimer = null;
+    this.autoUpdateRuntimeBySite = {};
+    this.autoUpdateStructDigestByShare = {};
+    this.autoUpdateStructReconcileQueue = [];
+    this.autoUpdateStructReconcileTimer = null;
+    this.autoUpdateStructReconcileRunning = false;
+    this.autoUpdateStructReconcileSiteId = "";
+    this.autoUpdatePersistTimer = null;
+    this.autoUpdatePersistDelayMs = 500;
     this.progressDialog = null;
     this.settingVisible = false;
     this.settingEls = {
@@ -1944,6 +2014,9 @@ class SiYuanSharePlugin extends Plugin {
       apiKeyInput: null,
       siteSelect: null,
       siteNameInput: null,
+      autoUpdateInput: null,
+      autoUpdateRow: null,
+      connectActions: null,
       currentWrap: null,
       sharesWrap: null,
       envHint: null,
@@ -1979,7 +2052,19 @@ class SiYuanSharePlugin extends Plugin {
     });
 
     this.addIcons(`<symbol id="iconSiyuanShare" viewBox="0 0 24 24">
-  <path fill="currentColor" d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.03-.47-.09-.7l7.02-4.11c.53.5 1.23.81 2.06.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.03.47.09.7L8.91 9.81C8.38 9.31 7.68 9 6.84 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.84 0 1.54-.31 2.07-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.52 1.23 2.75 2.75 2.75S21 23.52 21 22s-1.34-2.75-3-2.75z"/>
+  <path fill="currentColor" d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z"/>
+  </symbol>
+  <symbol id="iconSiyuanShareQuiet" viewBox="0 0 24 24">
+    <path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10s10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/>
+  </symbol>
+  <symbol id="iconSiyuanShareQueued" viewBox="0 0 24 24">
+    <path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/>
+  </symbol>
+  <symbol id="iconSiyuanShareSyncing" viewBox="0 0 24 24">
+    <path fill="currentColor" d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>
+  </symbol>
+  <symbol id="iconSiyuanShareError" viewBox="0 0 24 24">
+    <path fill="currentColor" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/>
 </symbol>`);
 
     this.initSettingPanel();
@@ -1994,6 +2079,8 @@ class SiYuanSharePlugin extends Plugin {
     this.eventBus.on("switch-protyle", this.onSwitchProtyle);
     this.eventBus.on("loaded-protyle-static", this.onLoadedProtyle);
     this.eventBus.on("loaded-protyle-dynamic", this.onLoadedProtyle);
+    this.eventBus.on("ws-main", this.onWsMain);
+    document.addEventListener("click", this.onGlobalTreeShareClick, true);
 
     this.bindDocTreeLater();
     void this.refreshCurrentDocContext();
@@ -2001,6 +2088,14 @@ class SiYuanSharePlugin extends Plugin {
 
   onunload() {
     setGlobalI18nProvider(null);
+    this.closeAutoUpdateStatusDialog();
+    this.stopAutoUpdateStructureReconcile();
+    this.stopBackgroundSync();
+    this.stopAutoUpdate({clearState: false, refreshTreeOnClear: false, preservePendingOnPause: true});
+    // Keep persisted runtime/history, but clear volatile in-memory UI state
+    // so plugin disable/enable won't replay stale tree icon statuses.
+    this.autoUpdateShareStates = {};
+    this.shares = [];
     if (this.dockElement) {
       this.dockElement.removeEventListener("click", this.onDockClick);
       this.dockElement.removeEventListener("change", this.onDockChange);
@@ -2010,6 +2105,8 @@ class SiYuanSharePlugin extends Plugin {
     this.eventBus.off("switch-protyle", this.onSwitchProtyle);
     this.eventBus.off("loaded-protyle-static", this.onLoadedProtyle);
     this.eventBus.off("loaded-protyle-dynamic", this.onLoadedProtyle);
+    this.eventBus.off("ws-main", this.onWsMain);
+    document.removeEventListener("click", this.onGlobalTreeShareClick, true);
     if (this.docTreeBindTimer) {
       clearInterval(this.docTreeBindTimer);
       this.docTreeBindTimer = null;
@@ -2018,6 +2115,24 @@ class SiYuanSharePlugin extends Plugin {
       clearTimeout(this.docTreeRefreshTimer);
       this.docTreeRefreshTimer = null;
     }
+    if (this.docTreeDeferredTimers.length) {
+      this.docTreeDeferredTimers.forEach((t) => clearTimeout(t));
+      this.docTreeDeferredTimers = [];
+    }
+    if (this.docTreeStructDetectTimer) {
+      clearTimeout(this.docTreeStructDetectTimer);
+      this.docTreeStructDetectTimer = null;
+    }
+    if (this.autoUpdateWsFlushTimer) {
+      clearTimeout(this.autoUpdateWsFlushTimer);
+      this.autoUpdateWsFlushTimer = null;
+    }
+    this.autoUpdateWsDocIdSet.clear();
+    this.autoUpdateWsDetectRunning = false;
+    this.autoUpdateWsDetectPending = false;
+    this.docTreeStructSnapshot = new Map();
+    this.docTreeStructDetectRunning = false;
+    this.docTreeStructDetectPending = false;
     this.detachDocTree();
     this.clearDocTreeMarks();
     if (this.settingEls.sharesWrap) {
@@ -2025,6 +2140,15 @@ class SiYuanSharePlugin extends Plugin {
     }
     if (this.settingEls.currentWrap) {
       this.settingEls.currentWrap.removeEventListener("click", this.onSettingCurrentClick);
+    }
+    if (this.settingEls.autoUpdateInput) {
+      this.settingEls.autoUpdateInput.removeEventListener("change", this.onSettingAutoUpdateToggleChange);
+    }
+    if (this.settingEls.autoUpdateRow) {
+      this.settingEls.autoUpdateRow.removeEventListener("click", this.onSettingActionsClick);
+    }
+    if (this.settingEls.connectActions) {
+      this.settingEls.connectActions.removeEventListener("click", this.onSettingActionsClick);
     }
     if (this.settingLayoutObserver) {
       try {
@@ -2042,13 +2166,14 @@ class SiYuanSharePlugin extends Plugin {
       }
       this.progressDialog = null;
     }
-    this.stopBackgroundSync();
+    void this.flushAutoUpdateRuntimePersist();
   }
 
   async uninstall() {
     await this.removeData(STORAGE_SETTINGS);
     await this.removeData(STORAGE_SHARES);
     await this.removeData(STORAGE_SITE_SHARES);
+    await this.removeData(STORAGE_AUTO_UPDATE_RUNTIME);
     await this.removeData(STORAGE_INCREMENTAL_CURSOR);
     await this.removeData(STORAGE_EXPORT_RETRY_CACHE_INDEX);
     await this.clearExportRetryCacheFiles();
@@ -2056,17 +2181,189 @@ class SiYuanSharePlugin extends Plugin {
 
   onSwitchProtyle = ({detail}) => {
     void this.refreshCurrentDocContext(detail?.protyle);
+    this.scheduleAutoUpdateNow(1200);
   };
 
   onLoadedProtyle = ({detail}) => {
     void this.refreshCurrentDocContext(detail?.protyle);
+    this.scheduleAutoUpdateNow(1200);
   };
+
+  onWsMain = (event) => {
+    if (!this.isAutoUpdateEnabledForActiveSite()) return;
+    if (!Array.isArray(this.shares) || this.shares.length === 0) return;
+    const payload =
+      event?.detail && typeof event.detail === "object" && !Array.isArray(event.detail)
+        ? event.detail
+        : event;
+    const cmd = String(payload?.cmd || "").trim().toLowerCase();
+    if (cmd && (cmd === "movedoc" || cmd.includes("move"))) {
+      this.scheduleAutoUpdateStructureReconcile({immediate: false, reset: false});
+    }
+    const docIds = this.extractAutoUpdateDocIdsFromWsPayload(payload);
+    if (!docIds.length) return;
+    docIds.forEach((docId) => {
+      const id = String(docId || "").trim();
+      if (isValidDocId(id)) {
+        this.autoUpdateWsDocIdSet.add(id);
+      }
+    });
+    this.scheduleAutoUpdateWsDetectFlush(220);
+  };
+
+  scheduleAutoUpdateWsDetectFlush(delayMs = 220) {
+    if (this.autoUpdateWsFlushTimer) return;
+    const delay = Math.max(80, Math.floor(Number(delayMs) || 0));
+    this.autoUpdateWsFlushTimer = setTimeout(() => {
+      this.autoUpdateWsFlushTimer = null;
+      void this.flushAutoUpdateWsDetect();
+    }, delay);
+  }
+
+  extractAutoUpdateDocIdsFromWsPayload(event) {
+    const payload =
+      event?.detail && typeof event.detail === "object" && !Array.isArray(event.detail)
+        ? event.detail
+        : event;
+    const cmd = String(payload?.cmd || "").trim().toLowerCase();
+    if (!cmd) return [];
+    // Keep ws-main detection narrow to avoid false positives (for example lock/unlock/no-op attr events).
+    const shouldInspect =
+      cmd === "savedoc" ||
+      cmd === "renamedoc" ||
+      cmd === "movedoc" ||
+      cmd.includes("rename") ||
+      cmd.includes("move");
+    if (!shouldInspect) return [];
+    const out = new Set();
+    const addDocId = (raw) => {
+      const id = String(raw || "").trim();
+      if (isValidDocId(id)) {
+        out.add(id);
+      }
+    };
+    const addDocIdList = (list) => {
+      (Array.isArray(list) ? list : []).forEach((id) => addDocId(id));
+    };
+    const data = payload?.data;
+    addDocId(payload?.rootID || payload?.rootId || payload?.docID || payload?.docId || payload?.id);
+    addDocIdList(payload?.ids);
+    if (typeof data === "string") {
+      addDocId(data);
+    } else if (Array.isArray(data)) {
+      addDocIdList(data);
+    }
+    if (data && typeof data === "object") {
+      addDocId(data?.rootID || data?.rootId || data?.docID || data?.docId || data?.id);
+      addDocId(data?.parentID || data?.parentId);
+      addDocIdList(data?.ids || data?.docIds || data?.rootIDs || data?.rootIds);
+    }
+    if (cmd === "savedoc") {
+      return Array.from(out);
+    }
+    const skipLargeTextKey = /^(markdown|content|dom|html|text|source|sources|kramdown|ial|attrs?)$/i;
+    const walk = (value, depth = 0) => {
+      if (depth > 5 || out.size >= 240 || value == null) return;
+      if (typeof value === "string") {
+        const text = String(value || "").trim();
+        if (text.length <= 32) {
+          addDocId(text);
+        }
+        return;
+      }
+      if (Array.isArray(value)) {
+        const count = Math.min(value.length, 80);
+        for (let i = 0; i < count; i += 1) {
+          walk(value[i], depth + 1);
+          if (out.size >= 240) return;
+        }
+        return;
+      }
+      if (typeof value !== "object") return;
+      const entries = Object.entries(value);
+      const count = Math.min(entries.length, 80);
+      for (let i = 0; i < count; i += 1) {
+        const [key, next] = entries[i];
+        if (skipLargeTextKey.test(String(key || ""))) continue;
+        if (typeof next === "string") {
+          const text = String(next || "").trim();
+          if (text.length <= 32) addDocId(text);
+          continue;
+        }
+        if (next && (Array.isArray(next) || typeof next === "object")) {
+          walk(next, depth + 1);
+          if (out.size >= 240) return;
+        }
+      }
+    };
+    walk(data, 0);
+    return Array.from(out);
+  }
+
+  async flushAutoUpdateWsDetect() {
+    if (this.autoUpdateWsDetectRunning) {
+      this.autoUpdateWsDetectPending = true;
+      return;
+    }
+    this.autoUpdateWsDetectRunning = true;
+    try {
+      while (this.autoUpdateWsDocIdSet.size > 0) {
+        if (!this.isAutoUpdateEnabledForActiveSite() || !Array.isArray(this.shares) || this.shares.length === 0) {
+          this.autoUpdateWsDocIdSet.clear();
+          break;
+        }
+        const batch = Array.from(this.autoUpdateWsDocIdSet).slice(0, 180);
+        batch.forEach((id) => this.autoUpdateWsDocIdSet.delete(id));
+        try {
+          const changedIds = Array.from(
+            new Set(
+              (Array.isArray(batch) ? batch : [])
+                .map((id) => String(id || "").trim())
+                .filter((id) => isValidDocId(id)),
+            ),
+          );
+          let mergedIds = changedIds.slice();
+          if (changedIds.length > 0) {
+            try {
+              const refImpacted = await this.queryRefImpactedDocIdsByTargets(changedIds);
+              const extra = Array.from(
+                new Set(
+                  (Array.isArray(refImpacted) ? refImpacted : [])
+                    .map((id) => String(id || "").trim())
+                    .filter((id) => isValidDocId(id)),
+                ),
+              );
+              if (extra.length > 0) {
+                mergedIds = Array.from(new Set([...changedIds, ...extra]));
+              }
+            } catch (refErr) {
+              if (!isAbortError(refErr)) {
+                console.warn("ws-main ref-impact detect failed", refErr);
+              }
+            }
+          }
+          await this.enqueueAutoUpdateByDocIds(mergedIds, {source: "ws"});
+        } catch (err) {
+          if (!isAbortError(err)) {
+            console.warn("ws-main auto-update detect failed", err);
+          }
+        }
+      }
+    } finally {
+      this.autoUpdateWsDetectRunning = false;
+      if (this.autoUpdateWsDetectPending || this.autoUpdateWsDocIdSet.size > 0) {
+        this.autoUpdateWsDetectPending = false;
+        this.scheduleAutoUpdateWsDetectFlush(180);
+      }
+    }
+  }
 
   bindDocTreeLater() {
     if (this.docTreeBindTimer) clearInterval(this.docTreeBindTimer);
     this.docTreeBindTimer = setInterval(() => {
       const attached = this.attachDocTree();
-      if (attached) {
+      const alreadyBound = !!(this.docTreeContainer && this.docTreeContainer.isConnected);
+      if (attached || alreadyBound) {
         clearInterval(this.docTreeBindTimer);
         this.docTreeBindTimer = null;
       }
@@ -2082,8 +2379,29 @@ class SiYuanSharePlugin extends Plugin {
     this.docTreeContainer = container;
     this.docTreeContainer.setAttribute("data-sps-share-tree", "1");
     this.docTreeContainer.addEventListener("click", this.onDocTreeClick, true);
-    this.docTreeObserver = new MutationObserver(() => this.scheduleDocTreeRefresh());
-    this.docTreeObserver.observe(this.docTreeContainer, {childList: true, subtree: true});
+    this.docTreeObserver = new MutationObserver((mutations) => {
+      const isOurMutation = (m) => {
+        if (m.type !== "childList") {
+          const targetEl = m.target instanceof Element ? m.target : m.target?.parentElement;
+          if (targetEl instanceof Element && targetEl.closest?.(`.${TREE_SHARE_CLASS}`)) return true;
+          return false;
+        }
+        if (m.target instanceof Element && m.target.closest?.(`.${TREE_SHARE_CLASS}`)) return true;
+        const ourNode = (n) => n instanceof Element && n.classList?.contains(TREE_SHARE_CLASS);
+        return Array.from(m.addedNodes).every(ourNode) && Array.from(m.removedNodes).every(ourNode);
+      };
+      if (!mutations.every(isOurMutation)) {
+        this.scheduleDocTreeRefresh();
+        this.scheduleDocTreeStructureDetect();
+      }
+    });
+    this.docTreeObserver.observe(this.docTreeContainer, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true,
+    });
+    this.docTreeStructSnapshot = this.captureDocTreeStructureSnapshot();
     if (!skipRefresh) {
       this.refreshDocTreeMarks();
     }
@@ -2091,6 +2409,13 @@ class SiYuanSharePlugin extends Plugin {
   }
 
   detachDocTree() {
+    if (this.docTreeStructDetectTimer) {
+      clearTimeout(this.docTreeStructDetectTimer);
+      this.docTreeStructDetectTimer = null;
+    }
+    this.docTreeStructSnapshot = new Map();
+    this.docTreeStructDetectRunning = false;
+    this.docTreeStructDetectPending = false;
     if (this.docTreeContainer) {
       this.docTreeContainer.removeAttribute("data-sps-share-tree");
       this.docTreeContainer.removeEventListener("click", this.onDocTreeClick, true);
@@ -2102,12 +2427,172 @@ class SiYuanSharePlugin extends Plugin {
     this.docTreeContainer = null;
   }
 
-  scheduleDocTreeRefresh() {
-    if (this.docTreeRefreshTimer) return;
+  getTreeItemIconSignature(item) {
+    if (!item) return "";
+    const iconEl =
+      item.querySelector?.(".b3-list-item__icon") ||
+      item.querySelector?.(".b3-list-item__graphic") ||
+      item.querySelector?.(".b3-list-item__emoji");
+    if (!iconEl) return "";
+    const text = normalizeDocIconValue(iconEl.textContent || "");
+    const useEl = iconEl.querySelector?.("use");
+    const useHref = String(useEl?.getAttribute?.("xlink:href") || useEl?.getAttribute?.("href") || "").trim();
+    const cls = String(iconEl.className || "").replace(/\s+/g, " ").trim();
+    const style = String(iconEl.getAttribute?.("style") || "").replace(/\s+/g, " ").trim();
+    const attrParts = [];
+    try {
+      Array.from(iconEl.attributes || []).forEach((attr) => {
+        const name = String(attr?.name || "").trim();
+        if (!name) return;
+        const value = String(attr?.value || "").replace(/\s+/g, " ").trim();
+        attrParts.push(`${name}:${value}`);
+      });
+      attrParts.sort();
+    } catch {
+      // ignore
+    }
+    const html = String(iconEl.innerHTML || "").replace(/\s+/g, " ").trim().slice(0, 180);
+    return [text ? `text:${text}` : "", useHref ? `svg:${useHref}` : "", cls ? `class:${cls}` : "", style ? `style:${style}` : "", attrParts.length ? `attrs:${attrParts.join(";")}` : "", html ? `html:${html}` : ""]
+      .filter(Boolean)
+      .join("|");
+  }
+
+  captureDocTreeStructureSnapshot() {
+    const container = this.docTreeContainer;
+    const out = new Map();
+    if (!container || !container.isConnected) return out;
+    const allItems = Array.from(container.querySelectorAll(".b3-list-item")).filter((item) => isProbablyDocTreeItem(item));
+    if (!allItems.length) return out;
+    const itemSet = new Set(allItems);
+    const sortIndexMap = new Map();
+    const childrenMap = new Map();
+    allItems.forEach((item) => {
+      const parentItem = item.parentElement?.closest?.(".b3-list-item");
+      const key = parentItem && itemSet.has(parentItem) ? parentItem : null;
+      if (!childrenMap.has(key)) childrenMap.set(key, []);
+      childrenMap.get(key).push(item);
+    });
+    childrenMap.forEach((items) => {
+      items.forEach((item, index) => {
+        sortIndexMap.set(item, index);
+      });
+    });
+    allItems.forEach((item) => {
+      const info = resolveTreeItemInfo(item);
+      const docId = String(info?.id || "").trim();
+      if (!isValidDocId(docId) || info?.isNotebook || out.has(docId)) return;
+      const parentItem = item.parentElement?.closest?.(".b3-list-item");
+      let parentId = "";
+      if (parentItem && itemSet.has(parentItem)) {
+        const parentInfo = resolveTreeItemInfo(parentItem);
+        if (!parentInfo?.isNotebook && isValidDocId(parentInfo?.id)) {
+          parentId = String(parentInfo.id || "").trim();
+        }
+      }
+      out.set(docId, {
+        docId,
+        title: String(findTitleFromTree(item) || ""),
+        icon: this.getTreeItemIconSignature(item),
+        parentId,
+        sortIndex: Math.max(0, Math.floor(Number(sortIndexMap.get(item)) || 0)),
+      });
+    });
+    return out;
+  }
+
+  scheduleDocTreeStructureDetect() {
+    if (this.docTreeStructDetectRunning) {
+      this.docTreeStructDetectPending = true;
+      return;
+    }
+    if (this.docTreeStructDetectTimer) return;
+    this.docTreeStructDetectTimer = setTimeout(() => {
+      this.docTreeStructDetectTimer = null;
+      void this.flushDocTreeStructureDetect();
+    }, 240);
+  }
+
+  async flushDocTreeStructureDetect() {
+    if (this.docTreeStructDetectRunning) {
+      this.docTreeStructDetectPending = true;
+      return;
+    }
+    this.docTreeStructDetectRunning = true;
+    if (!this.docTreeContainer || !this.docTreeContainer.isConnected) {
+      this.docTreeStructSnapshot = new Map();
+      this.docTreeStructDetectRunning = false;
+      this.docTreeStructDetectPending = false;
+      return;
+    }
+    try {
+      const prev = this.docTreeStructSnapshot instanceof Map ? this.docTreeStructSnapshot : new Map();
+      const next = this.captureDocTreeStructureSnapshot();
+      this.docTreeStructSnapshot = next;
+      if (!prev.size || !next.size) return;
+      const changedDocIdSet = new Set();
+      const forceDocIdSet = new Set();
+      const markChanged = (row) => {
+        const docId = String(row?.docId || "").trim();
+        if (isValidDocId(docId)) changedDocIdSet.add(docId);
+        const parentId = String(row?.parentId || "").trim();
+        if (isValidDocId(parentId)) changedDocIdSet.add(parentId);
+      };
+      const markForce = (row) => {
+        const docId = String(row?.docId || "").trim();
+        if (isValidDocId(docId)) forceDocIdSet.add(docId);
+      };
+      next.forEach((row, docId) => {
+        const old = prev.get(docId);
+        if (!old) {
+          markChanged(row);
+          return;
+        }
+        const titleChanged = String(row.title || "") !== String(old.title || "");
+        const iconChanged = String(row.icon || "") !== String(old.icon || "");
+        const parentChanged = String(row.parentId || "") !== String(old.parentId || "");
+        const sortChanged = Number(row.sortIndex || 0) !== Number(old.sortIndex || 0);
+        if (titleChanged || iconChanged || parentChanged || sortChanged) {
+          markChanged(row);
+          markChanged(old);
+          if (titleChanged || iconChanged) {
+            markForce(row);
+            markForce(old);
+          }
+        }
+      });
+      prev.forEach((row, docId) => {
+        if (next.has(docId)) return;
+        markChanged(row);
+      });
+      if (!changedDocIdSet.size) return;
+      try {
+        await this.enqueueAutoUpdateByDocIds(Array.from(changedDocIdSet), {
+          source: "tree",
+          forceDocIds: Array.from(forceDocIdSet),
+        });
+      } catch (err) {
+        console.warn("tree structure auto-update detect failed", err);
+      }
+    } finally {
+      this.docTreeStructDetectRunning = false;
+      if (this.docTreeStructDetectPending) {
+        this.docTreeStructDetectPending = false;
+        this.scheduleDocTreeStructureDetect();
+      }
+    }
+  }
+
+  scheduleDocTreeRefresh(delayMs = 80, {force = false} = {}) {
+    const delay = Math.max(0, Math.floor(Number(delayMs) || 0));
+    if (this.docTreeRefreshTimer) {
+      if (!force) return;
+      clearTimeout(this.docTreeRefreshTimer);
+      this.docTreeRefreshTimer = null;
+    }
     this.docTreeRefreshTimer = setTimeout(() => {
       this.docTreeRefreshTimer = null;
       this.refreshDocTreeMarks();
-    }, 80);
+    }, delay);
   }
 
   refreshDocTreeMarksLater() {
@@ -2115,8 +2600,9 @@ class SiYuanSharePlugin extends Plugin {
     this.refreshDocTreeMarks();
     this.scheduleDocTreeRefresh();
     this.bindDocTreeLater();
-    setTimeout(() => this.scheduleDocTreeRefresh(), 300);
-    setTimeout(() => this.scheduleDocTreeRefresh(), 800);
+    const t1 = setTimeout(() => this.scheduleDocTreeRefresh(), 300);
+    const t2 = setTimeout(() => this.scheduleDocTreeRefresh(), 800);
+    this.docTreeDeferredTimers.push(t1, t2);
   }
 
   clearDocTreeMarks() {
@@ -2133,6 +2619,60 @@ class SiYuanSharePlugin extends Plugin {
       return;
     }
     clearScope(document);
+  }
+
+  getTreeShareIconIdByAutoState(autoState = "") {
+    if (autoState === "quiet") return TREE_SHARE_QUIET_ICON_ID;
+    if (autoState === "queued") return TREE_SHARE_QUEUED_ICON_ID;
+    if (autoState === "syncing") return TREE_SHARE_SYNCING_ICON_ID;
+    if (autoState === "error") return TREE_SHARE_ERROR_ICON_ID;
+    return TREE_SHARE_ICON_ID;
+  }
+
+  getAutoUpdateQuietRemainingSeconds(shareId, now = nowTs()) {
+    const id = String(shareId || "").trim();
+    if (!id) return 0;
+    const deadline = Math.max(0, Math.floor(Number(this.autoUpdateQuietDeadlineByShare?.[id]) || 0));
+    if (!deadline) return 0;
+    const remainMs = Math.max(0, deadline - Math.floor(Number(now) || 0));
+    if (!remainMs) return 0;
+    return Math.max(1, Math.ceil(remainMs / 1000));
+  }
+
+  getTreeShareIconTooltip(shareId, autoStateInfo = null) {
+    const id = String(shareId || "").trim();
+    if (!id) return "";
+    const stateInfo = autoStateInfo || this.getAutoUpdateShareState(id);
+    const autoState = String(stateInfo?.state || "").trim();
+    if (autoState === "syncing") {
+      return this.t("siyuanShare.message.autoUpdateSyncing");
+    }
+    if (autoState === "quiet") {
+      const seconds = this.getAutoUpdateQuietRemainingSeconds(id);
+      if (seconds > 0) {
+        return this.t("siyuanShare.message.autoUpdateQuietRemaining", {seconds});
+      }
+      return this.t("siyuanShare.message.autoUpdateQueued");
+    }
+    if (autoState === "queued") {
+      return this.t("siyuanShare.message.autoUpdateQueued");
+    }
+    if (autoState === "error") {
+      return stateInfo?.message || this.t("siyuanShare.message.autoUpdateFailed");
+    }
+    return this.isAutoUpdateEnabledForActiveSite()
+      ? this.t("siyuanShare.message.autoUpdateIdle")
+      : this.t("siyuanShare.message.autoUpdateDisabled");
+  }
+
+  updateTreeShareIconTooltip(icon, shareId, autoStateInfo = null) {
+    if (!icon) return;
+    const title = this.getTreeShareIconTooltip(shareId, autoStateInfo);
+    if (title) {
+      icon.setAttribute("title", title);
+    } else {
+      icon.removeAttribute("title");
+    }
   }
 
   refreshDocTreeMarks() {
@@ -2172,9 +2712,27 @@ class SiYuanSharePlugin extends Plugin {
             icon.className = TREE_SHARE_CLASS;
             titleEl.appendChild(icon);
           }
+          this.bindTreeShareIconEvents(icon);
           icon.setAttribute("data-share-type", share.type);
           icon.setAttribute("data-share-id", info.id);
-          icon.innerHTML = `<svg><use xlink:href="#${TREE_SHARE_ICON_ID}"></use></svg>`;
+          icon.setAttribute("data-share-record-id", share.id);
+          const autoStateInfo = this.getAutoUpdateShareState(share.id);
+          const autoState = autoStateInfo?.state || "";
+          icon.classList.toggle("sps-tree-share--quiet", autoState === "quiet");
+          icon.classList.toggle("sps-tree-share--queued", autoState === "queued");
+          icon.classList.toggle("sps-tree-share--syncing", autoState === "syncing");
+          icon.classList.toggle("sps-tree-share--error", autoState === "error");
+          if (autoState) {
+            icon.setAttribute("data-auto-update-state", autoState);
+          } else {
+            icon.removeAttribute("data-auto-update-state");
+          }
+          this.updateTreeShareIconTooltip(icon, share.id, autoStateInfo);
+          const iconId = this.getTreeShareIconIdByAutoState(autoState);
+          if (icon.getAttribute("data-icon-id") !== iconId) {
+            icon.innerHTML = `<svg><use xlink:href="#${iconId}"></use></svg>`;
+            icon.setAttribute("data-icon-id", iconId);
+          }
         } else {
           item.classList.remove(TREE_SHARED_CLASS);
           if (existing) existing.remove();
@@ -2183,24 +2741,82 @@ class SiYuanSharePlugin extends Plugin {
     };
     if (hasTreeRoot) {
       applyMarks(this.docTreeContainer, false);
-      applyMarks(document, true);
       return;
     }
     applyMarks(document, true);
   }
 
-  onDocTreeClick = (event) => {
-    const icon = event.target?.closest?.(`.${TREE_SHARE_CLASS}`);
+  bindTreeShareIconEvents(icon) {
+    if (!icon || icon.getAttribute("data-sps-tree-bound") === "1") return;
+    icon.setAttribute("data-sps-tree-bound", "1");
+    icon.addEventListener("mouseenter", this.onTreeShareIconMouseEnter, true);
+    icon.addEventListener("click", this.onTreeShareIconClick, true);
+  }
+
+  onTreeShareIconMouseEnter = (event) => {
+    const icon =
+      event?.currentTarget?.classList?.contains?.(TREE_SHARE_CLASS)
+        ? event.currentTarget
+        : event?.target?.closest?.(`.${TREE_SHARE_CLASS}`);
     if (!icon) return;
-    const type = icon.getAttribute("data-share-type");
-    const id = icon.getAttribute("data-share-id");
-    if (!type || !id) return;
+    const shareId = String(icon.getAttribute("data-share-record-id") || "").trim();
+    if (!shareId) return;
+    this.updateTreeShareIconTooltip(icon, shareId);
+  };
+
+  consumeTreeShareIconEvent(event, {open = false, requireLeftClick = false, icon = null} = {}) {
+    if (!event) return false;
+    const target = event.target;
+    const iconEl =
+      (icon && icon.classList?.contains?.(TREE_SHARE_CLASS) ? icon : null) ||
+      target?.closest?.(`.${TREE_SHARE_CLASS}`) ||
+      (event.currentTarget?.classList?.contains?.(TREE_SHARE_CLASS) ? event.currentTarget : null);
+    if (!iconEl) return false;
+    if (requireLeftClick) {
+      const isClickEvent = String(event.type || "").toLowerCase() === "click";
+      const button = Number(event.button);
+      if (!isClickEvent || button !== 0) {
+        return false;
+      }
+    }
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
-    const item = icon.closest(".b3-list-item") || icon.parentElement;
-    const title = findTitleFromTree(item) || id;
-    void this.openShareDialogFor({type, id, title});
+    if (open) this.openAutoUpdateStatusDialog();
+    return true;
+  }
+
+  onTreeShareIconClick = (event) => {
+    this.consumeTreeShareIconEvent(event, {open: true, requireLeftClick: true});
+  };
+
+  onDocTreeClick = (event) => {
+    const icon = event.target?.closest?.(`.${TREE_SHARE_CLASS}`);
+    const item = event.target?.closest?.(".b3-list-item");
+    let matchedIcon = icon;
+    if (!matchedIcon && item) {
+      const maybeIcon = item.querySelector?.(`.${TREE_SHARE_CLASS}[data-share-id]`) || null;
+      if (maybeIcon) {
+        const rect = maybeIcon.getBoundingClientRect();
+        const x = Number(event?.clientX) || 0;
+        const y = Number(event?.clientY) || 0;
+        const slack = 10;
+        if (
+          x >= rect.left - slack &&
+          x <= rect.right + slack &&
+          y >= rect.top - slack &&
+          y <= rect.bottom + slack
+        ) {
+          matchedIcon = maybeIcon;
+        }
+      }
+    }
+    if (!matchedIcon) return;
+    this.consumeTreeShareIconEvent(event, {open: true, requireLeftClick: true, icon: matchedIcon});
+  };
+
+  onGlobalTreeShareClick = (event) => {
+    this.consumeTreeShareIconEvent(event, {open: true, requireLeftClick: true});
   };
 
   getDocIdFromProtyle(protyle) {
@@ -2279,20 +2895,24 @@ class SiYuanSharePlugin extends Plugin {
     return out;
   }
 
-  async fillDocIcons(docs) {
+  async fillDocIcons(docs, {preferDbIconDocIdSet = null} = {}) {
     if (!Array.isArray(docs) || docs.length === 0) return;
     if (!this.docIconCache) this.docIconCache = new Map();
     const pending = [];
     docs.forEach((doc) => {
       const docId = String(doc?.docId || "").trim();
       if (!isValidDocId(docId)) return;
+      const preferDb = preferDbIconDocIdSet instanceof Set && preferDbIconDocIdSet.has(docId);
+      if (preferDb && this.docIconCache.has(docId)) {
+        this.docIconCache.delete(docId);
+      }
       const provided = normalizeDocIconValue(doc?.icon);
-      if (provided) {
+      if (provided && !preferDb) {
         this.docIconCache.set(docId, provided);
         doc.icon = provided;
         return;
       }
-      if (this.docIconCache.has(docId)) {
+      if (!preferDb && this.docIconCache.has(docId)) {
         const cached = this.docIconCache.get(docId) || "";
         if (cached) {
           doc.icon = cached;
@@ -2345,6 +2965,17 @@ class SiYuanSharePlugin extends Plugin {
     const icon = extractDocIconFromAttrs(attrs);
     this.docIconCache.set(id, icon || "");
     return icon || "";
+  }
+
+  invalidateDocIconCacheByDocIds(docIds = []) {
+    if (!this.docIconCache || typeof this.docIconCache.delete !== "function") return;
+    const ids = Array.from(
+      new Set((Array.isArray(docIds) ? docIds : []).map((id) => String(id || "").trim()).filter((id) => isValidDocId(id))),
+    );
+    if (!ids.length) return;
+    ids.forEach((id) => {
+      this.docIconCache.delete(id);
+    });
   }
 
   async resolveIconUpload(
@@ -2681,6 +3312,7 @@ class SiYuanSharePlugin extends Plugin {
       map.set(docId, {
         docId,
         title: String(item?.title || ""),
+        icon: normalizeDocIconValue(item?.icon || ""),
         parentId: String(item?.parentId || "").trim(),
         sortIndex: Number.isFinite(Number(item?.sortIndex)) ? Number(item.sortIndex) : index,
         sortOrder: Number.isFinite(Number(item?.sortOrder)) ? Number(item.sortOrder) : index,
@@ -3855,6 +4487,10 @@ class SiYuanSharePlugin extends Plugin {
           await this.disconnectRemote();
           return;
         }
+        if (action === "auto-update-status") {
+          this.openAutoUpdateStatusDialog();
+          return;
+        }
         if (action === "copy-link") {
           const shareId = target.getAttribute("data-share-id");
           await this.copyShareLink(shareId);
@@ -4782,6 +5418,18 @@ class SiYuanSharePlugin extends Plugin {
     return {close, update, confirm, setBarVisible};
   }
 
+  createProgressHandle(message, controller, {background = false} = {}) {
+    if (!background) {
+      return this.openProgressDialog(message, controller);
+    }
+    return {
+      close: () => {},
+      update: () => {},
+      confirm: async () => true,
+      setBarVisible: () => {},
+    };
+  }
+
   async loadState() {
     const settings = (await this.loadData(STORAGE_SETTINGS)) || {};
     const legacyShares = (await this.loadData(STORAGE_SHARES)) || [];
@@ -4789,6 +5437,8 @@ class SiYuanSharePlugin extends Plugin {
     const shareOptionsRaw = (await this.loadData(STORAGE_SHARE_OPTIONS)) || {};
     const incrementalCursorRaw = (await this.loadData(STORAGE_INCREMENTAL_CURSOR)) || {};
     const exportRetryCacheIndexRaw = (await this.loadData(STORAGE_EXPORT_RETRY_CACHE_INDEX)) || {};
+    const autoUpdateRuntimeRaw = (await this.loadData(STORAGE_AUTO_UPDATE_RUNTIME)) || {};
+    const autoUpdateScanStampBySite = this.normalizeAutoUpdateScanStampBySite(settings.autoUpdateScanStampBySite);
     const siteShares =
       siteSharesRaw && typeof siteSharesRaw === "object" && !Array.isArray(siteSharesRaw) ? siteSharesRaw : {};
     const shareOptions = this.normalizeShareOptionsMap(shareOptionsRaw);
@@ -4803,6 +5453,7 @@ class SiYuanSharePlugin extends Plugin {
         name: this.resolveSiteName("", settings.siteUrl || "", 0),
         siteUrl: String(settings.siteUrl || "").trim(),
         apiKey: String(settings.apiKey || "").trim(),
+        autoUpdateEnabled: false,
       };
       sites.push(fallback);
       activeSiteId = fallback.id;
@@ -4826,6 +5477,7 @@ class SiYuanSharePlugin extends Plugin {
     this.shareOptions = shareOptions;
     this.incrementalCursorBySite = incrementalCursorBySite;
     this.exportRetryCacheIndexBySite = exportRetryCacheIndexBySite;
+    this.autoUpdateRuntimeBySite = this.normalizeAutoUpdateRuntimeBySite(autoUpdateRuntimeRaw);
     this.settings = {
       siteUrl: activeSite?.siteUrl || "",
       apiKey: activeSite?.apiKey || "",
@@ -4840,9 +5492,11 @@ class SiYuanSharePlugin extends Plugin {
       sites,
       activeSiteId,
       refWarningDisabled: !!settings.refWarningDisabled,
+      autoUpdateScanStampBySite,
     };
     const activeShares = activeSiteId ? this.siteShares[activeSiteId] : null;
     this.shares = Array.isArray(activeShares) ? activeShares.filter((s) => s && s.id && s.type) : [];
+    this.restoreAutoUpdateRuntimeForSite(activeSiteId);
     this.hasNodeFs = !!(fs && path);
     this.workspaceDir = "";
     this.syncRemoteStatusFromSite(activeSite);
@@ -4858,6 +5512,7 @@ class SiYuanSharePlugin extends Plugin {
       await this.saveData(STORAGE_SITE_SHARES, this.siteShares);
     }
     this.startBackgroundSync({immediate: true});
+    this.refreshAutoUpdateLoop({immediate: true});
   }
 
   initSettingPanel() {
@@ -4891,6 +5546,28 @@ class SiYuanSharePlugin extends Plugin {
     apiKeyInput.type = "password";
     apiKeyInput.placeholder = t("siyuanShare.label.apiKey");
 
+    const autoUpdateWrap = document.createElement("label");
+    autoUpdateWrap.className = "sps-switch";
+    autoUpdateWrap.innerHTML = `<input type="checkbox" aria-label="${escapeAttr(
+      t("siyuanShare.label.autoUpdateEnabled"),
+    )}" />
+<span class="sps-switch__slider" aria-hidden="true"></span>`;
+    const autoUpdateInput = autoUpdateWrap.querySelector("input");
+    if (autoUpdateInput) {
+      autoUpdateInput.addEventListener("change", this.onSettingAutoUpdateToggleChange);
+    }
+
+    const autoUpdateRow = document.createElement("div");
+    autoUpdateRow.className = "siyuan-plugin-share__actions sps-setting-actions-inline sps-auto-update-row";
+    autoUpdateRow.appendChild(autoUpdateWrap);
+    autoUpdateRow.insertAdjacentHTML(
+      "beforeend",
+      `<button class="b3-button b3-button--outline" data-action="settings-auto-update-status">${escapeHtml(
+        t("siyuanShare.action.autoUpdateStatus"),
+      )}</button>`,
+    );
+    autoUpdateRow.addEventListener("click", this.onSettingActionsClick);
+
     const currentWrap = document.createElement("div");
     currentWrap.className = "siyuan-plugin-share";
     currentWrap.addEventListener("click", this.onSettingCurrentClick);
@@ -4907,6 +5584,9 @@ class SiYuanSharePlugin extends Plugin {
       apiKeyInput,
       siteSelect,
       siteNameInput,
+      autoUpdateInput,
+      autoUpdateRow,
+      connectActions: null,
       currentWrap,
       sharesWrap,
       envHint,
@@ -4946,8 +5626,14 @@ class SiYuanSharePlugin extends Plugin {
       createActionElement: () => apiKeyInput,
     });
 
+    this.setting.addItem({
+      title: t("siyuanShare.label.autoUpdate"),
+      description: t("siyuanShare.hint.autoUpdate"),
+      createActionElement: () => autoUpdateRow,
+    });
+
     const connectActions = document.createElement("div");
-    connectActions.className = "siyuan-plugin-share__actions";
+    connectActions.className = "siyuan-plugin-share__actions sps-setting-actions-inline";
     connectActions.innerHTML = `
   <button class="b3-button b3-button--outline" data-action="settings-sync">${t(
     "siyuanShare.action.verifySync",
@@ -4957,10 +5643,10 @@ class SiYuanSharePlugin extends Plugin {
   )}</button>
 `;
     connectActions.addEventListener("click", this.onSettingActionsClick);
+    this.settingEls.connectActions = connectActions;
     this.setting.addItem({
       title: t("siyuanShare.label.connectionSync"),
       description: t("siyuanShare.hint.connectionSync"),
-      direction: "column",
       createActionElement: () => connectActions,
     });
 
@@ -5073,10 +5759,256 @@ class SiYuanSharePlugin extends Plugin {
       const remoteUser = this.normalizeRemoteUser(raw.remoteUser);
       const remoteVerifiedAt = this.normalizeRemoteVerifiedAt(raw.remoteVerifiedAt);
       const remoteFeatures = this.normalizeRemoteFeatures(raw.remoteFeatures);
-      sites.push({id, name, siteUrl, apiKey, remoteUser, remoteVerifiedAt, remoteFeatures});
+      const autoUpdateEnabled = !!raw.autoUpdateEnabled;
+      sites.push({id, name, siteUrl, apiKey, remoteUser, remoteVerifiedAt, remoteFeatures, autoUpdateEnabled});
       seen.add(id);
     });
     return sites;
+  }
+
+  normalizeAutoUpdateScanCursor(raw) {
+    let updated = "";
+    let docId = "";
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      updated = normalizeDocUpdatedStamp(raw.updated || raw.stamp || raw.value || "");
+      docId = String(raw.docId || raw.id || "").trim();
+    } else {
+      updated = normalizeDocUpdatedStamp(raw);
+    }
+    if (!updated) return null;
+    if (!isValidDocId(docId)) docId = "";
+    return {updated, docId};
+  }
+
+  normalizeAutoUpdateScanStampBySite(raw) {
+    const out = {};
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+    Object.entries(raw).forEach(([siteIdRaw, cursorRaw]) => {
+      const siteId = String(siteIdRaw || "").trim();
+      if (!siteId) return;
+      const cursor = this.normalizeAutoUpdateScanCursor(cursorRaw);
+      if (!cursor) return;
+      out[siteId] = cursor;
+    });
+    return out;
+  }
+
+  normalizeAutoUpdateQueue(raw) {
+    const out = [];
+    const seen = new Set();
+    if (!Array.isArray(raw)) return out;
+    raw.forEach((shareIdRaw) => {
+      const shareId = String(shareIdRaw || "").trim();
+      if (!shareId || seen.has(shareId)) return;
+      seen.add(shareId);
+      out.push(shareId);
+    });
+    return out;
+  }
+
+  normalizeAutoUpdateRetryStateByShare(raw) {
+    const out = {};
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+    Object.entries(raw).forEach(([shareIdRaw, rowRaw]) => {
+      const shareId = String(shareIdRaw || "").trim();
+      if (!shareId) return;
+      if (!rowRaw || typeof rowRaw !== "object" || Array.isArray(rowRaw)) return;
+      const attempt = Math.max(1, Math.floor(Number(rowRaw.attempt) || 1));
+      const nextRetryAt = Math.max(0, Math.floor(Number(rowRaw.nextRetryAt) || 0));
+      const message = String(rowRaw.message || "").trim();
+      if (!nextRetryAt) return;
+      out[shareId] = {attempt, nextRetryAt, message};
+    });
+    return out;
+  }
+
+  normalizeAutoUpdateStructDigestByShare(raw) {
+    const out = {};
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+    Object.entries(raw).forEach(([shareIdRaw, digestRaw]) => {
+      const shareId = String(shareIdRaw || "").trim();
+      if (!shareId) return;
+      const digest = normalizeHashHex(digestRaw);
+      if (!digest) return;
+      out[shareId] = digest;
+    });
+    return out;
+  }
+
+  normalizeAutoUpdateHistoryList(raw) {
+    const out = [];
+    if (!Array.isArray(raw)) return out;
+    const now = nowTs();
+    const minTs = now - AUTO_UPDATE_HISTORY_RETENTION_MS;
+    raw.forEach((rowRaw) => {
+      if (!rowRaw || typeof rowRaw !== "object" || Array.isArray(rowRaw)) return;
+      const ts = Math.max(0, Math.floor(Number(rowRaw.ts) || 0));
+      if (!ts || ts < minTs) return;
+      const levelRaw = String(rowRaw.level || "info").trim();
+      const level = ["info", "success", "error"].includes(levelRaw) ? levelRaw : "info";
+      const shareId = String(rowRaw.shareId || "").trim();
+      const message = String(rowRaw.message || "").trim();
+      const detail = String(rowRaw.detail || "").trim();
+      if (!message) return;
+      out.push({ts, level, shareId, message, detail});
+    });
+    out.sort((a, b) => b.ts - a.ts);
+    if (out.length > AUTO_UPDATE_HISTORY_LIMIT) {
+      out.length = AUTO_UPDATE_HISTORY_LIMIT;
+    }
+    return out;
+  }
+
+  normalizeAutoUpdateRuntimeBySite(raw) {
+    const out = {};
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+    Object.entries(raw).forEach(([siteIdRaw, rowRaw]) => {
+      const siteId = String(siteIdRaw || "").trim();
+      if (!siteId) return;
+      if (!rowRaw || typeof rowRaw !== "object" || Array.isArray(rowRaw)) return;
+      const queue = this.normalizeAutoUpdateQueue(rowRaw.queue || []);
+      const retryStateByShare = this.normalizeAutoUpdateRetryStateByShare(rowRaw.retryStateByShare || {});
+      const history = this.normalizeAutoUpdateHistoryList(rowRaw.history || []);
+      const structDigestByShare = this.normalizeAutoUpdateStructDigestByShare(
+        rowRaw.structDigestByShare || rowRaw.structureDigestByShare || {},
+      );
+      if (!queue.length && !Object.keys(retryStateByShare).length && !history.length && !Object.keys(structDigestByShare).length) return;
+      out[siteId] = {queue, retryStateByShare, history, structDigestByShare};
+    });
+    return out;
+  }
+
+  syncAutoUpdateRuntimeRecordForSite(siteId = "") {
+    const id = String(siteId || this.getActiveSiteId()).trim();
+    if (!id) return;
+    const store = this.normalizeAutoUpdateRuntimeBySite(this.autoUpdateRuntimeBySite || {});
+    const queue = this.normalizeAutoUpdateQueue(this.autoUpdateQueue || []);
+    const retryStateByShare = this.normalizeAutoUpdateRetryStateByShare(this.autoUpdateRetryStateByShare || {});
+    const history = this.normalizeAutoUpdateHistoryList(this.autoUpdateHistory || []);
+    const structDigestByShare = this.normalizeAutoUpdateStructDigestByShare(this.autoUpdateStructDigestByShare || {});
+    if (!queue.length && !Object.keys(retryStateByShare).length && !history.length && !Object.keys(structDigestByShare).length) {
+      if (Object.prototype.hasOwnProperty.call(store, id)) {
+        delete store[id];
+      }
+    } else {
+      store[id] = {queue, retryStateByShare, history, structDigestByShare};
+    }
+    this.autoUpdateRuntimeBySite = store;
+  }
+
+  restoreAutoUpdateRuntimeForSite(siteId = "") {
+    const id = String(siteId || this.getActiveSiteId()).trim();
+    const store = this.normalizeAutoUpdateRuntimeBySite(this.autoUpdateRuntimeBySite || {});
+    this.autoUpdateRuntimeBySite = store;
+    const row = id ? store[id] || null : null;
+    const shareIdSet = new Set(
+      (Array.isArray(this.shares) ? this.shares : [])
+        .map((share) => String(share?.id || "").trim())
+        .filter((shareId) => shareId),
+    );
+    let queue = this.normalizeAutoUpdateQueue(row?.queue || []);
+    let retryStateByShare = this.normalizeAutoUpdateRetryStateByShare(row?.retryStateByShare || {});
+    let structDigestByShare = this.normalizeAutoUpdateStructDigestByShare(row?.structDigestByShare || {});
+    let shouldPersist = false;
+    if (shareIdSet.size > 0) {
+      const prevQueueLength = queue.length;
+      const prevRetryCount = Object.keys(retryStateByShare).length;
+      const prevDigestCount = Object.keys(structDigestByShare).length;
+      queue = queue.filter((shareId) => shareIdSet.has(shareId));
+      const prunedRetry = {};
+      Object.entries(retryStateByShare).forEach(([shareId, retry]) => {
+        if (!shareIdSet.has(String(shareId))) return;
+        prunedRetry[shareId] = retry;
+      });
+      retryStateByShare = prunedRetry;
+      const prunedDigest = {};
+      Object.entries(structDigestByShare).forEach(([shareId, digest]) => {
+        if (!shareIdSet.has(String(shareId))) return;
+        const normalizedDigest = normalizeHashHex(digest);
+        if (!normalizedDigest) return;
+        prunedDigest[shareId] = normalizedDigest;
+      });
+      structDigestByShare = prunedDigest;
+      if (
+        queue.length !== prevQueueLength ||
+        Object.keys(retryStateByShare).length !== prevRetryCount ||
+        Object.keys(structDigestByShare).length !== prevDigestCount
+      ) {
+        shouldPersist = true;
+      }
+    }
+    const history = this.normalizeAutoUpdateHistoryList(row?.history || []);
+    if (row && Array.isArray(row.history) && history.length !== row.history.length) {
+      shouldPersist = true;
+    }
+    this.autoUpdateQueue = queue;
+    this.autoUpdateQueuedSet = new Set(queue);
+    this.autoUpdateRetryStateByShare = retryStateByShare;
+    this.autoUpdateStructDigestByShare = structDigestByShare;
+    this.autoUpdateShareChangeSeqById = {};
+    if (this.autoUpdateQuietFlushTimer) {
+      clearTimeout(this.autoUpdateQuietFlushTimer);
+      this.autoUpdateQuietFlushTimer = null;
+    }
+    this.autoUpdateQuietNextFlushAt = 0;
+    this.autoUpdateQuietPendingSet.clear();
+    this.autoUpdateQuietDeadlineByShare = {};
+    this.autoUpdateHistory = history;
+    this.autoUpdateCurrentShareId = "";
+    this.autoUpdateCurrentController = null;
+    this.autoUpdateRerunSet.clear();
+    this.autoUpdateAbortByQuietSet.clear();
+    this.autoUpdateAbortByManualSet.clear();
+    this.refreshAutoUpdateStatusTextInDock();
+    if (this.autoUpdateStatusDialog?.element?.isConnected) {
+      this.renderAutoUpdateStatusDialog();
+    }
+    if (shouldPersist) {
+      this.schedulePersistAutoUpdateRuntime();
+    }
+  }
+
+  schedulePersistAutoUpdateRuntime() {
+    const siteId = this.getActiveSiteId();
+    if (!siteId) return;
+    this.syncAutoUpdateRuntimeRecordForSite(siteId);
+    if (this.autoUpdatePersistTimer) return;
+    this.autoUpdatePersistTimer = setTimeout(() => {
+      this.autoUpdatePersistTimer = null;
+      void this.persistAutoUpdateRuntimeNow();
+    }, this.autoUpdatePersistDelayMs);
+  }
+
+  async persistAutoUpdateRuntimeNow() {
+    const siteId = this.getActiveSiteId();
+    if (siteId) {
+      this.syncAutoUpdateRuntimeRecordForSite(siteId);
+    }
+    const store = this.normalizeAutoUpdateRuntimeBySite(this.autoUpdateRuntimeBySite || {});
+    this.autoUpdateRuntimeBySite = store;
+    await this.saveData(STORAGE_AUTO_UPDATE_RUNTIME, store);
+  }
+
+  async flushAutoUpdateRuntimePersist() {
+    if (this.autoUpdatePersistTimer) {
+      clearTimeout(this.autoUpdatePersistTimer);
+      this.autoUpdatePersistTimer = null;
+    }
+    try {
+      await this.persistAutoUpdateRuntimeNow();
+    } catch {
+      // ignore
+    }
+  }
+
+  async removeAutoUpdateRuntimeForSite(siteId) {
+    const id = String(siteId || "").trim();
+    if (!id) return;
+    const store = this.normalizeAutoUpdateRuntimeBySite(this.autoUpdateRuntimeBySite || {});
+    if (!Object.prototype.hasOwnProperty.call(store, id)) return;
+    delete store[id];
+    this.autoUpdateRuntimeBySite = store;
+    await this.saveData(STORAGE_AUTO_UPDATE_RUNTIME, store);
   }
 
   normalizeIncrementalCursorBySite(raw) {
@@ -6000,7 +6932,7 @@ class SiYuanSharePlugin extends Plugin {
   }
 
   syncSettingInputs() {
-    const {siteInput, apiKeyInput, envHint, siteSelect, siteNameInput} = this.settingEls || {};
+    const {siteInput, apiKeyInput, envHint, siteSelect, siteNameInput, autoUpdateInput} = this.settingEls || {};
     if (siteInput) siteInput.value = this.settings.siteUrl || "";
     if (apiKeyInput) apiKeyInput.value = this.settings.apiKey || "";
     if (siteSelect) {
@@ -6021,6 +6953,10 @@ class SiYuanSharePlugin extends Plugin {
       const active = this.getActiveSite();
       siteNameInput.value = active?.name || "";
     }
+    if (autoUpdateInput) {
+      const active = this.getActiveSite();
+      autoUpdateInput.checked = !!active?.autoUpdateEnabled;
+    }
     if (envHint) {
       const t = this.t.bind(this);
       const base = normalizeUrlBase(this.settings.siteUrl);
@@ -6040,15 +6976,16 @@ class SiYuanSharePlugin extends Plugin {
             time: escapeHtml(this.formatTime(this.remoteVerifiedAt)),
           })
         : "";
-      envHint.innerHTML = timeLabel ? `${userLabel} · ${timeLabel}` : userLabel;
+      envHint.innerHTML = timeLabel ? `${userLabel} | ${timeLabel}` : userLabel;
     }
   }
 
   persistCurrentSiteInputs() {
-    const {siteInput, apiKeyInput, siteNameInput} = this.settingEls || {};
+    const {siteInput, apiKeyInput, siteNameInput, autoUpdateInput} = this.settingEls || {};
     const siteUrl = (siteInput?.value || "").trim();
     const apiKey = (apiKeyInput?.value || "").trim();
     const siteName = (siteNameInput?.value || "").trim();
+    const autoUpdateEnabled = !!autoUpdateInput?.checked;
     let sites = this.normalizeSiteList(this.settings.sites);
     let activeSiteId = String(this.settings.activeSiteId || "");
     let activeSite = sites.find((site) => String(site.id) === activeSiteId);
@@ -6061,6 +6998,7 @@ class SiYuanSharePlugin extends Plugin {
         name: this.resolveSiteName(siteName, siteUrl, sites.length),
         siteUrl,
         apiKey,
+        autoUpdateEnabled,
         remoteUser: null,
         remoteVerifiedAt: 0,
         remoteFeatures: null,
@@ -6069,6 +7007,7 @@ class SiYuanSharePlugin extends Plugin {
     } else if (activeSite) {
       activeSite.siteUrl = siteUrl;
       activeSite.apiKey = apiKey;
+      activeSite.autoUpdateEnabled = autoUpdateEnabled;
       activeSite.name = this.resolveSiteName(siteName || activeSite.name, siteUrl, sites.indexOf(activeSite));
       if (prevSiteUrl !== siteUrl || prevApiKey !== apiKey) {
         activeSite.remoteUser = null;
@@ -6076,6 +7015,7 @@ class SiYuanSharePlugin extends Plugin {
         activeSite.remoteFeatures = null;
         this.remoteUploadLimits = null;
         this.remoteFeatures = null;
+        this.stopAutoUpdate({clearState: true});
       }
     }
     this.settings = {
@@ -6086,10 +7026,12 @@ class SiYuanSharePlugin extends Plugin {
       activeSiteId,
     };
     this.syncRemoteStatusFromSite(activeSite);
-    return {siteUrl, apiKey, siteName, sites, activeSiteId};
+    return {siteUrl, apiKey, siteName, autoUpdateEnabled, sites, activeSiteId};
   }
 
   async applyActiveSite(siteId, {persist = true} = {}) {
+    await this.flushAutoUpdateRuntimePersist();
+    this.stopAutoUpdate({clearState: true});
     const sites = this.normalizeSiteList(this.settings.sites);
     const next = sites.find((site) => String(site.id) === String(siteId)) || sites[0] || null;
     const activeSiteId = next ? String(next.id) : "";
@@ -6103,6 +7045,7 @@ class SiYuanSharePlugin extends Plugin {
     this.syncRemoteStatusFromSite(next);
     this.remoteUploadLimits = null;
     this.shares = Array.isArray(this.siteShares?.[activeSiteId]) ? this.siteShares[activeSiteId] : [];
+    this.restoreAutoUpdateRuntimeForSite(activeSiteId);
     if (persist) {
       await this.saveData(STORAGE_SETTINGS, this.settings);
     }
@@ -6111,6 +7054,7 @@ class SiYuanSharePlugin extends Plugin {
     this.renderSettingCurrent();
     this.renderSettingShares();
     this.updateTopBarState();
+    this.refreshAutoUpdateLoop({immediate: true});
   }
 
   saveSettingsFromSetting = async ({notify = true} = {}) => {
@@ -6130,6 +7074,7 @@ class SiYuanSharePlugin extends Plugin {
     this.renderDock();
     this.renderSettingShares();
     this.syncSettingInputs();
+    this.refreshAutoUpdateLoop({immediate: true});
     if (notify) this.notify(t("siyuanShare.message.disconnected"));
   };
 
@@ -6141,6 +7086,18 @@ class SiYuanSharePlugin extends Plugin {
         this.persistCurrentSiteInputs();
         await this.applyActiveSite(nextId, {persist: false});
         await this.saveData(STORAGE_SETTINGS, this.settings);
+      } catch (err) {
+        this.showErr(err);
+      }
+    })();
+  };
+
+  onSettingAutoUpdateToggleChange = () => {
+    void (async () => {
+      try {
+        this.persistCurrentSiteInputs();
+        await this.saveData(STORAGE_SETTINGS, this.settings);
+        this.refreshAutoUpdateLoop({immediate: true});
       } catch (err) {
         this.showErr(err);
       }
@@ -6168,6 +7125,7 @@ class SiYuanSharePlugin extends Plugin {
             name: this.resolveSiteName("", siteUrl, sites.length),
             siteUrl,
             apiKey,
+            autoUpdateEnabled: false,
             remoteUser: null,
             remoteVerifiedAt: 0,
             remoteFeatures: null,
@@ -6183,6 +7141,7 @@ class SiYuanSharePlugin extends Plugin {
             activeSite.remoteFeatures = null;
             this.remoteUploadLimits = null;
             this.remoteFeatures = null;
+            this.stopAutoUpdate({clearState: true});
           }
         }
         this.settings = {
@@ -6209,6 +7168,9 @@ class SiYuanSharePlugin extends Plugin {
       try {
         if (action === "site-add") {
           this.persistCurrentSiteInputs();
+          // Persist old site's auto-update runtime before switching
+          await this.flushAutoUpdateRuntimePersist();
+          this.stopAutoUpdate({clearState: true});
           const sites = this.normalizeSiteList(this.settings.sites);
           const newSiteId = randomSlug(10);
           const newSite = {
@@ -6216,6 +7178,7 @@ class SiYuanSharePlugin extends Plugin {
             name: this.resolveSiteName("", "", sites.length),
             siteUrl: "",
             apiKey: "",
+            autoUpdateEnabled: false,
             remoteUser: null,
             remoteVerifiedAt: 0,
             remoteFeatures: null,
@@ -6241,17 +7204,27 @@ class SiYuanSharePlugin extends Plugin {
           this.renderSettingCurrent();
           this.renderSettingShares();
           this.updateTopBarState();
+          this.refreshAutoUpdateLoop({immediate: true});
           return;
         }
         if (action === "site-remove") {
           const activeId = String(this.settings.activeSiteId || "");
           if (!activeId) return;
+          await this.flushAutoUpdateRuntimePersist();
+          this.stopAutoUpdate({clearState: true});
           const sites = this.normalizeSiteList(this.settings.sites).filter(
             (site) => String(site.id) !== activeId,
           );
+          const autoUpdateScanStampBySite = this.normalizeAutoUpdateScanStampBySite(
+            this.settings.autoUpdateScanStampBySite || {},
+          );
+          if (Object.prototype.hasOwnProperty.call(autoUpdateScanStampBySite, activeId)) {
+            delete autoUpdateScanStampBySite[activeId];
+          }
           if (this.siteShares?.[activeId]) {
             delete this.siteShares[activeId];
           }
+          await this.removeAutoUpdateRuntimeForSite(activeId);
           const nextSite = sites[0] || null;
           this.settings = {
             ...this.settings,
@@ -6259,10 +7232,14 @@ class SiYuanSharePlugin extends Plugin {
             activeSiteId: nextSite?.id || "",
             siteUrl: nextSite?.siteUrl || "",
             apiKey: nextSite?.apiKey || "",
+            autoUpdateScanStampBySite,
           };
           this.shares = nextSite?.id && this.siteShares?.[nextSite.id] ? this.siteShares[nextSite.id] : [];
           this.syncRemoteStatusFromSite(nextSite);
           this.remoteUploadLimits = null;
+          if (nextSite?.id) {
+            this.restoreAutoUpdateRuntimeForSite(nextSite.id);
+          }
           await this.saveData(STORAGE_SETTINGS, this.settings);
           await this.saveData(STORAGE_SITE_SHARES, this.siteShares);
           this.syncSettingInputs();
@@ -6270,6 +7247,7 @@ class SiYuanSharePlugin extends Plugin {
           this.renderSettingCurrent();
           this.renderSettingShares();
           this.updateTopBarState();
+          this.refreshAutoUpdateLoop({immediate: true});
           return;
         }
       } catch (err) {
@@ -6293,6 +7271,10 @@ class SiYuanSharePlugin extends Plugin {
         }
         if (action === "settings-disconnect") {
           await this.disconnectRemote();
+          return;
+        }
+        if (action === "settings-auto-update-status") {
+          this.openAutoUpdateStatusDialog();
           return;
         }
       } catch (err) {
@@ -6533,6 +7515,7 @@ class SiYuanSharePlugin extends Plugin {
         name: this.resolveSiteName("", siteUrl, sites.length),
         siteUrl,
         apiKey,
+        autoUpdateEnabled: false,
         remoteUser: null,
         remoteVerifiedAt: 0,
         remoteFeatures: null,
@@ -6548,6 +7531,7 @@ class SiYuanSharePlugin extends Plugin {
         activeSite.remoteFeatures = null;
         this.remoteUploadLimits = null;
         this.remoteFeatures = null;
+        this.stopAutoUpdate({clearState: true});
       }
     }
     this.settings = {
@@ -6575,6 +7559,7 @@ class SiYuanSharePlugin extends Plugin {
     this.renderDock();
     this.renderSettingShares();
     this.updateTopBarState();
+    this.refreshAutoUpdateLoop({immediate: true});
   }
 
   getInputValue(id) {
@@ -7505,6 +8490,15 @@ class SiYuanSharePlugin extends Plugin {
     };
   }
 
+  isIncrementalPlanNoop(plan) {
+    const summary = plan?.summary || {};
+    const changedDocs = Math.max(0, Math.floor(Number(summary?.changedDocs) || 0));
+    const changedAssets = Math.max(0, Math.floor(Number(summary?.changedAssets) || 0));
+    const deletedDocs = Math.max(0, Math.floor(Number(summary?.deletedDocs) || 0));
+    const deletedAssets = Math.max(0, Math.floor(Number(summary?.deletedAssets) || 0));
+    return changedDocs === 0 && changedAssets === 0 && deletedDocs === 0 && deletedAssets === 0;
+  }
+
   formatIncrementSummaryDetail(summary) {
     const t = this.t.bind(this);
     const toCount = (value) => Math.max(0, Math.floor(Number(value) || 0));
@@ -7752,16 +8746,19 @@ class SiYuanSharePlugin extends Plugin {
       includeChildren = false,
       excludedDocIds = [],
       allowRequestError = true,
+      background = false,
+      controller: externalController = null,
+      autoUpdateExpectedChangeSeq = null,
     } = {},
   ) {
     const t = this.t.bind(this);
     if (!isValidDocId(docId)) throw new Error(t("siyuanShare.error.invalidDocId"));
-    const controller = new AbortController();
-    const progress = this.openProgressDialog(t("siyuanShare.progress.creatingShare"), controller);
+    const controller = externalController || new AbortController();
+    const progress = this.createProgressHandle(t("siyuanShare.progress.creatingShare"), controller, {background});
     const incrementalCursorStamp = formatDocUpdatedStampFromMs(nowTs());
     try {
       progress.update(t("siyuanShare.progress.verifyingSite"));
-      await this.verifyRemote({controller, progress});
+      await this.verifyRemote({silent: background, controller, progress, background});
       throwIfAborted(controller, t("siyuanShare.message.cancelled"));
       progress.update(t("siyuanShare.progress.fetchingDocInfo"));
       const info = await this.resolveDocInfoFromAnyId(docId);
@@ -7960,7 +8957,9 @@ class SiYuanSharePlugin extends Plugin {
         console.warn("Some assets failed to download.", resourceFailures);
       }
       const refDocIds = scopeDocs.map((doc) => String(doc?.docId || ""));
-      await this.maybeWarnExportReference(exportedMarkdowns, refDocIds);
+      if (!background) {
+        await this.maybeWarnExportReference(exportedMarkdowns, refDocIds);
+      }
       throwIfAborted(controller, t("siyuanShare.message.cancelled"));
       const rootPayload = docPayloads.find((row) => String(row?.docId || "") === String(docId));
       if (!useChildren && !useIncremental && !rootPayload) {
@@ -8033,18 +9032,29 @@ class SiYuanSharePlugin extends Plugin {
           assumeExisting: !!existingShare?.id && !shareMissingRemotely,
         });
       }
+      if (background && this.isIncrementalPlanNoop(plan)) {
+        if (existingShare?.id) {
+          await this.setIncrementalCursor(existingShare.id, incrementalCursorStamp);
+          await this.syncAutoUpdateStructDigestAfterShareSuccess(existingShare.id, {
+            expectedChangeSeq: autoUpdateExpectedChangeSeq,
+          });
+        }
+        return;
+      }
       const detail = this.formatIncrementSummaryDetail(plan.summary);
-      let proceed = false;
-      progress.setBarVisible?.(false);
-      try {
-        proceed = await progress.confirm({
-          text: t("siyuanShare.progress.incrementReady"),
-          detail,
-          continueText: t("siyuanShare.action.continueUpload"),
-          autoProceedSeconds: 10,
-        });
-      } finally {
-        progress.setBarVisible?.(true);
+      let proceed = true;
+      if (!background) {
+        progress.setBarVisible?.(false);
+        try {
+          proceed = await progress.confirm({
+            text: t("siyuanShare.progress.incrementReady"),
+            detail,
+            continueText: t("siyuanShare.action.continueUpload"),
+            autoProceedSeconds: 10,
+          });
+        } finally {
+          progress.setBarVisible?.(true);
+        }
       }
       if (!proceed) {
         throw createAbortError(t("siyuanShare.message.cancelled"));
@@ -8102,6 +9112,7 @@ class SiYuanSharePlugin extends Plugin {
           method: "POST",
           body: {uploadId},
           progressText: t("siyuanShare.progress.uploadingContent"),
+          controller,
           progress,
         });
         uploadComplete = true;
@@ -8112,6 +9123,7 @@ class SiYuanSharePlugin extends Plugin {
             await this.remoteRequest(REMOTE_API.shareUploadCancel, {
               method: "POST",
               body: {uploadId},
+              controller,
               progress,
             });
           } catch (cancelErr) {
@@ -8122,7 +9134,7 @@ class SiYuanSharePlugin extends Plugin {
       progress.update(t("siyuanShare.progress.syncingShareList"));
       let syncError = null;
       try {
-        await this.syncRemoteShares({silent: true, controller, progress});
+        await this.syncRemoteShares({silent: true, controller, progress, background});
       } catch (err) {
         syncError = err;
       }
@@ -8142,14 +9154,19 @@ class SiYuanSharePlugin extends Plugin {
       await this.saveData(STORAGE_SHARE_OPTIONS, this.shareOptions);
       await this.updateSharePasswordCache(share.id, {password, clearPassword});
       await this.setIncrementalCursor(share.id, incrementalCursorStamp);
+      await this.syncAutoUpdateStructDigestAfterShareSuccess(share.id, {
+        expectedChangeSeq: autoUpdateExpectedChangeSeq,
+      });
       if (requestError) {
         console.warn("shareDoc response error, but share exists after sync", requestError);
       }
       const url = this.getShareUrl(share);
       this.renderSettingCurrent();
       this.refreshDocTreeMarksLater();
-      this.notify(t("siyuanShare.message.shareCreated", {value: url || title}));
-      if (url) await this.tryCopyToClipboard(url);
+      if (!background) {
+        this.notify(t("siyuanShare.message.shareCreated", {value: url || title}));
+        if (url) await this.tryCopyToClipboard(url);
+      }
     } finally {
       progress?.close();
     }
@@ -8167,16 +9184,21 @@ class SiYuanSharePlugin extends Plugin {
       clearVisitorLimit = false,
       excludedDocIds = [],
       allowRequestError = true,
+      background = false,
+      controller: externalController = null,
+      autoUpdateExpectedChangeSeq = null,
     } = {},
   ) {
     const t = this.t.bind(this);
     if (!isValidNotebookId(notebookId)) throw new Error(t("siyuanShare.error.invalidNotebookId"));
-    const controller = new AbortController();
-    const progress = this.openProgressDialog(t("siyuanShare.progress.creatingNotebookShare"), controller);
+    const controller = externalController || new AbortController();
+    const progress = this.createProgressHandle(t("siyuanShare.progress.creatingNotebookShare"), controller, {
+      background,
+    });
     const incrementalCursorStamp = formatDocUpdatedStampFromMs(nowTs());
     try {
       progress.update(t("siyuanShare.progress.verifyingSite"));
-      await this.verifyRemote({controller, progress});
+      await this.verifyRemote({silent: background, controller, progress, background});
       throwIfAborted(controller, t("siyuanShare.message.cancelled"));
       if (!this.notebooks.length) {
         progress.update(t("siyuanShare.progress.fetchingNotebookList"));
@@ -8350,7 +9372,9 @@ class SiYuanSharePlugin extends Plugin {
         console.warn("Some assets failed to download.", failureCount);
       }
       const refDocIds = scopeDocs.map((doc) => String(doc?.docId || ""));
-      await this.maybeWarnExportReference(exportedMarkdowns, refDocIds);
+      if (!background) {
+        await this.maybeWarnExportReference(exportedMarkdowns, refDocIds);
+      }
       throwIfAborted(controller, t("siyuanShare.message.cancelled"));
       const payload = {
         notebookId,
@@ -8406,18 +9430,29 @@ class SiYuanSharePlugin extends Plugin {
           assumeExisting: !!existingShare?.id && !shareMissingRemotely,
         });
       }
+      if (background && this.isIncrementalPlanNoop(plan)) {
+        if (existingShare?.id) {
+          await this.setIncrementalCursor(existingShare.id, incrementalCursorStamp);
+          await this.syncAutoUpdateStructDigestAfterShareSuccess(existingShare.id, {
+            expectedChangeSeq: autoUpdateExpectedChangeSeq,
+          });
+        }
+        return;
+      }
       const detail = this.formatIncrementSummaryDetail(plan.summary);
-      let proceed = false;
-      progress.setBarVisible?.(false);
-      try {
-        proceed = await progress.confirm({
-          text: t("siyuanShare.progress.incrementReady"),
-          detail,
-          continueText: t("siyuanShare.action.continueUpload"),
-          autoProceedSeconds: 10,
-        });
-      } finally {
-        progress.setBarVisible?.(true);
+      let proceed = true;
+      if (!background) {
+        progress.setBarVisible?.(false);
+        try {
+          proceed = await progress.confirm({
+            text: t("siyuanShare.progress.incrementReady"),
+            detail,
+            continueText: t("siyuanShare.action.continueUpload"),
+            autoProceedSeconds: 10,
+          });
+        } finally {
+          progress.setBarVisible?.(true);
+        }
       }
       if (!proceed) {
         throw createAbortError(t("siyuanShare.message.cancelled"));
@@ -8470,6 +9505,7 @@ class SiYuanSharePlugin extends Plugin {
           method: "POST",
           body: {uploadId},
           progressText: t("siyuanShare.progress.uploadingContent"),
+          controller,
           progress,
         });
         uploadComplete = true;
@@ -8480,6 +9516,7 @@ class SiYuanSharePlugin extends Plugin {
             await this.remoteRequest(REMOTE_API.shareUploadCancel, {
               method: "POST",
               body: {uploadId},
+              controller,
               progress,
             });
           } catch (cancelErr) {
@@ -8490,7 +9527,7 @@ class SiYuanSharePlugin extends Plugin {
       progress.update(t("siyuanShare.progress.syncingShareList"));
       let syncError = null;
       try {
-        await this.syncRemoteShares({silent: true, controller, progress});
+        await this.syncRemoteShares({silent: true, controller, progress, background});
       } catch (err) {
         syncError = err;
       }
@@ -8510,13 +9547,18 @@ class SiYuanSharePlugin extends Plugin {
       await this.saveData(STORAGE_SHARE_OPTIONS, this.shareOptions);
       await this.updateSharePasswordCache(share.id, {password, clearPassword});
       await this.setIncrementalCursor(share.id, incrementalCursorStamp);
+      await this.syncAutoUpdateStructDigestAfterShareSuccess(share.id, {
+        expectedChangeSeq: autoUpdateExpectedChangeSeq,
+      });
       if (requestError) {
         console.warn("shareNotebook response error, but share exists after sync", requestError);
       }
       const url = this.getShareUrl(share);
       this.refreshDocTreeMarksLater();
-      this.notify(t("siyuanShare.message.shareCreated", {value: url || title}));
-      if (url) await this.tryCopyToClipboard(url);
+      if (!background) {
+        this.notify(t("siyuanShare.message.shareCreated", {value: url || title}));
+        if (url) await this.tryCopyToClipboard(url);
+      }
     } finally {
       progress?.close();
     }
@@ -8892,10 +9934,42 @@ class SiYuanSharePlugin extends Plugin {
       clearVisitorLimit = false,
       includeChildren = null,
       excludedDocIds = null,
+      background = false,
+      controller = null,
+      autoUpdateExpectedChangeSeq = null,
     } = {},
   ) {
     const t = this.t.bind(this);
     if (!shareId) throw new Error(t("siyuanShare.error.missingShareId"));
+    if (!background) {
+      this.autoUpdateAbortByManualSet.delete(shareId);
+      // Abort any in-progress auto-update for this share to avoid concurrent uploads
+      if (
+        this.autoUpdateCurrentShareId === shareId &&
+        this.autoUpdateCurrentController &&
+        !this.autoUpdateCurrentController.signal?.aborted
+      ) {
+        this.autoUpdateAbortByManualSet.add(shareId);
+        try {
+          this.autoUpdateCurrentController.abort();
+        } catch {
+          // ignore
+        }
+      }
+      // Remove from auto-update queue
+      if (this.autoUpdateQueuedSet.has(shareId)) {
+        this.autoUpdateQueue = this.autoUpdateQueue.filter((id) => id !== shareId);
+        this.autoUpdateQueuedSet.delete(shareId);
+      }
+      if (Object.prototype.hasOwnProperty.call(this.autoUpdateQuietDeadlineByShare || {}, shareId)) {
+        delete this.autoUpdateQuietDeadlineByShare[shareId];
+      }
+      this.autoUpdateQuietPendingSet.delete(shareId);
+      this.autoUpdateAbortByQuietSet.delete(shareId);
+      this.scheduleAutoUpdateQuietFlush();
+      this.autoUpdateRerunSet.delete(shareId);
+      this.setAutoUpdateShareState(shareId, "");
+    }
     const existing = this.getShareById(shareId);
     if (!existing) throw new Error(t("siyuanShare.error.shareNotFound"));
     const option = this.getShareOptionValue(existing.id, {
@@ -8918,27 +9992,34 @@ class SiYuanSharePlugin extends Plugin {
         clearVisitorLimit,
         excludedDocIds: excludedDocIdsValue,
         allowRequestError: false,
+        background,
+        controller,
+        autoUpdateExpectedChangeSeq,
       });
-      return;
+    } else {
+      const includeChildrenValue =
+        typeof includeChildren === "boolean"
+          ? includeChildren
+          : typeof option?.includeChildren === "boolean"
+            ? option.includeChildren
+            : !!existing.includeChildren;
+      await this.shareDoc(existing.docId, {
+        slugOverride: slugOverrideValue,
+        password,
+        clearPassword,
+        expiresAt,
+        clearExpires,
+        visitorLimit,
+        clearVisitorLimit,
+        includeChildren: includeChildrenValue,
+        excludedDocIds: excludedDocIdsValue,
+        allowRequestError: false,
+        background,
+        controller,
+        autoUpdateExpectedChangeSeq,
+      });
     }
-    const includeChildrenValue =
-      typeof includeChildren === "boolean"
-        ? includeChildren
-        : typeof option?.includeChildren === "boolean"
-          ? option.includeChildren
-          : !!existing.includeChildren;
-    await this.shareDoc(existing.docId, {
-      slugOverride: slugOverrideValue,
-      password,
-      clearPassword,
-      expiresAt,
-      clearExpires,
-      visitorLimit,
-      clearVisitorLimit,
-      includeChildren: includeChildrenValue,
-      excludedDocIds: excludedDocIdsValue,
-      allowRequestError: false,
-    });
+    this.clearAutoUpdateRetryState(shareId);
   }
 
   async updateShareAccess(
@@ -9008,6 +10089,23 @@ class SiYuanSharePlugin extends Plugin {
     const existing = this.getShareById(shareId);
     if (!existing) throw new Error(t("siyuanShare.error.shareNotFound"));
 
+    // Abort any in-progress auto-update for this share to avoid concurrent operations
+    if (this.autoUpdateCurrentShareId === shareId && this.autoUpdateCurrentController) {
+      try {
+        this.autoUpdateCurrentController.abort();
+      } catch {
+        // ignore
+      }
+    }
+    // Remove from auto-update queue
+    if (this.autoUpdateQueuedSet.has(shareId)) {
+      this.autoUpdateQueue = this.autoUpdateQueue.filter((id) => id !== shareId);
+      this.autoUpdateQueuedSet.delete(shareId);
+    }
+    this.autoUpdateRerunSet.delete(shareId);
+    this.setAutoUpdateShareState(shareId, "");
+    this.clearAutoUpdateRetryState(shareId);
+
     const ok = await new Promise((resolve) => {
       confirm(
         t("siyuanShare.confirm.deleteShareTitle"),
@@ -9032,8 +10130,29 @@ class SiYuanSharePlugin extends Plugin {
       delete this.shareOptions[key];
       await this.saveData(STORAGE_SHARE_OPTIONS, this.shareOptions);
     }
+    if (key && Object.prototype.hasOwnProperty.call(this.autoUpdateStructDigestByShare || {}, key)) {
+      delete this.autoUpdateStructDigestByShare[key];
+      this.schedulePersistAutoUpdateRuntime();
+    }
+    if (key && Object.prototype.hasOwnProperty.call(this.autoUpdateShareChangeSeqById || {}, key)) {
+      delete this.autoUpdateShareChangeSeqById[key];
+    }
+    if (key && Object.prototype.hasOwnProperty.call(this.autoUpdateQuietDeadlineByShare || {}, key)) {
+      delete this.autoUpdateQuietDeadlineByShare[key];
+    }
+    if (key) {
+      this.autoUpdateQuietPendingSet.delete(key);
+      this.scheduleAutoUpdateQuietFlush();
+    }
+    if (key) {
+      this.autoUpdateAbortByQuietSet.delete(key);
+    }
+    if (key) {
+      this.autoUpdateAbortByManualSet.delete(key);
+    }
     if (key) {
       await this.clearIncrementalCursor(key);
+      this.setAutoUpdateShareState(key, "");
     }
     if (existing?.type === SHARE_TYPES.DOC && isValidDocId(existing?.docId)) {
       await this.removeExportRetryCacheForTarget({
@@ -9471,6 +10590,7 @@ class SiYuanSharePlugin extends Plugin {
     const withPasswords = this.applySharePasswords(rawShares, passwordMap);
     const shares = this.applyShareOptions(withPasswords);
     this.shares = shares;
+    this.pruneAutoUpdateShareStates();
     if (activeSiteId) {
       this.siteShares[activeSiteId] = shares;
       await this.saveData(STORAGE_SITE_SHARES, this.siteShares);
@@ -9484,6 +10604,9 @@ class SiYuanSharePlugin extends Plugin {
     this.renderSettingShares();
     this.refreshDocTreeMarks();
     this.updateTopBarState();
+    if (!background && this.isAutoUpdateEnabledForActiveSite()) {
+      this.scheduleAutoUpdateStructureReconcile({immediate: false, reset: true});
+    }
     if (!silent) this.notify(t("siyuanShare.message.verifySuccess"));
     return shares;
   }
@@ -9516,6 +10639,7 @@ class SiYuanSharePlugin extends Plugin {
     this.renderSettingCurrent();
     this.renderSettingShares();
     this.updateTopBarState();
+    this.refreshAutoUpdateLoop({immediate: false});
     this.notify(t("siyuanShare.message.disconnected"));
   }
 
@@ -9865,6 +10989,7 @@ class SiYuanSharePlugin extends Plugin {
             user: escapeHtml(displayName),
           })
         : t("siyuanShare.hint.statusConnectedNoUser");
+    const autoUpdateStatusLabel = this.getAutoUpdateSummaryLabel();
     const rows = this.shares
       .map((s) => {
         const url = this.getShareUrl(s);
@@ -9932,8 +11057,12 @@ class SiYuanSharePlugin extends Plugin {
     <button class="b3-button b3-button--outline" data-action="disconnect">${escapeHtml(
       t("siyuanShare.action.disconnect"),
     )}</button>
+    <button class="b3-button b3-button--outline" data-action="auto-update-status">${escapeHtml(
+      t("siyuanShare.action.autoUpdateStatus"),
+    )}</button>
   </div>
   <div class="siyuan-plugin-share__muted">${statusLabel}</div>
+  <div id="sps-auto-update-status" class="siyuan-plugin-share__muted">${escapeHtml(autoUpdateStatusLabel)}</div>
   <div class="siyuan-plugin-share__muted">${escapeHtml(t("siyuanShare.hint.checkApiKey"))}</div>
 </div>
 
@@ -9968,6 +11097,1914 @@ class SiYuanSharePlugin extends Plugin {
     }
   }
 
+  getAutoUpdateShareLabel(shareId) {
+    const t = this.t.bind(this);
+    const id = String(shareId || "").trim();
+    if (!id) return t("siyuanShare.label.unknown");
+    const share = this.getShareById(id);
+    if (!share) return id;
+    const title = String(share?.title || "").trim() || t("siyuanShare.label.untitled");
+    const typeLabel =
+      share?.type === SHARE_TYPES.NOTEBOOK ? t("siyuanShare.label.notebook") : t("siyuanShare.label.document");
+    return `${title} (${typeLabel})`;
+  }
+
+  getAutoUpdateShareLogMeta(shareId) {
+    const t = this.t.bind(this);
+    const id = String(shareId || "").trim();
+    if (!id) {
+      return {
+        shareId: "",
+        typeLabel: t("siyuanShare.label.unknown"),
+        title: t("siyuanShare.label.unknown"),
+        targetId: "",
+      };
+    }
+    const share = this.getShareById(id);
+    if (!share) {
+      return {
+        shareId: id,
+        typeLabel: t("siyuanShare.label.unknown"),
+        title: t("siyuanShare.label.unknown"),
+        targetId: id,
+      };
+    }
+    const typeLabel =
+      share?.type === SHARE_TYPES.NOTEBOOK ? t("siyuanShare.label.notebook") : t("siyuanShare.label.document");
+    const title = String(share?.title || "").trim() || t("siyuanShare.label.untitled");
+    const targetId =
+      share?.type === SHARE_TYPES.NOTEBOOK
+        ? String(share?.notebookId || "").trim()
+        : String(share?.docId || "").trim();
+    return {
+      shareId: id,
+      typeLabel,
+      title,
+      targetId: targetId || id,
+    };
+  }
+
+  getAutoUpdateShareLogLabel(shareId) {
+    const meta = this.getAutoUpdateShareLogMeta(shareId);
+    return `${meta.typeLabel}:${meta.title} | id:${meta.targetId}`;
+  }
+
+  getTextDisplayWidth(text) {
+    let width = 0;
+    for (const ch of String(text || "")) {
+      const code = ch.codePointAt(0) || 0;
+      width += code <= 0x7f ? 1 : 2;
+    }
+    return width;
+  }
+
+  trimTextByDisplayWidth(text, maxWidth) {
+    const input = String(text || "");
+    const limit = Math.max(0, Math.floor(Number(maxWidth) || 0));
+    if (!limit) return "";
+    let width = 0;
+    let out = "";
+    for (const ch of input) {
+      const code = ch.codePointAt(0) || 0;
+      const step = code <= 0x7f ? 1 : 2;
+      if (width + step > limit) break;
+      out += ch;
+      width += step;
+    }
+    return out;
+  }
+
+  padLogColumn(text, width, {truncate = true} = {}) {
+    const input = String(text || "").replace(/\s+/g, " ").trim();
+    const limit = Math.max(0, Math.floor(Number(width) || 0));
+    if (!limit) return "";
+    let content = input;
+    let contentWidth = this.getTextDisplayWidth(content);
+    if (truncate && contentWidth > limit) {
+      const ellipsis = "...";
+      const ellipsisWidth = this.getTextDisplayWidth(ellipsis);
+      const keepWidth = Math.max(0, limit - ellipsisWidth);
+      content = `${this.trimTextByDisplayWidth(content, keepWidth)}${ellipsis}`;
+      contentWidth = this.getTextDisplayWidth(content);
+    }
+    const padWidth = Math.max(0, limit - contentWidth);
+    return `${content}${" ".repeat(padWidth)}`;
+  }
+
+  pushAutoUpdateHistory(level, text, {shareId = "", detail = ""} = {}) {
+    const message = String(text || "").trim();
+    if (!message) return;
+    const entry = {
+      ts: nowTs(),
+      level: String(level || "info"),
+      shareId: String(shareId || "").trim(),
+      message,
+      detail: String(detail || "").trim(),
+    };
+    this.autoUpdateHistory.unshift(entry);
+    if (this.autoUpdateHistory.length > AUTO_UPDATE_HISTORY_LIMIT) {
+      this.autoUpdateHistory.length = AUTO_UPDATE_HISTORY_LIMIT;
+    }
+    if (this.autoUpdateStatusDialog?.element?.isConnected) {
+      this.renderAutoUpdateStatusDialog();
+    }
+    this.schedulePersistAutoUpdateRuntime();
+  }
+
+  getAutoUpdateRetryState(shareId) {
+    const id = String(shareId || "").trim();
+    if (!id) return null;
+    const raw = this.autoUpdateRetryStateByShare?.[id];
+    if (!raw || typeof raw !== "object") return null;
+    const attempt = Math.max(1, Math.floor(Number(raw.attempt) || 1));
+    const nextRetryAt = Math.max(0, Math.floor(Number(raw.nextRetryAt) || 0));
+    const message = String(raw.message || "");
+    return {attempt, nextRetryAt, message};
+  }
+
+  clearAutoUpdateRetryState(shareId) {
+    const id = String(shareId || "").trim();
+    if (!id) return;
+    if (Object.prototype.hasOwnProperty.call(this.autoUpdateRetryStateByShare || {}, id)) {
+      delete this.autoUpdateRetryStateByShare[id];
+      this.schedulePersistAutoUpdateRuntime();
+    }
+  }
+
+  getAutoUpdateRetryDelayMs(attempt = 1) {
+    const safeAttempt = Math.max(1, Math.floor(Number(attempt) || 1));
+    const step = Math.min(10, safeAttempt - 1);
+    const base = this.autoUpdateRetryBaseDelayMs * 2 ** step;
+    const jitter = Math.floor(Math.random() * 5000);
+    return Math.min(base + jitter, this.autoUpdateRetryMaxDelayMs);
+  }
+
+  isAutoUpdateRetryBlocked(shareId, now = nowTs()) {
+    const state = this.getAutoUpdateRetryState(shareId);
+    if (!state) return {blocked: false, remainMs: 0, retryAt: 0, attempt: 0, message: ""};
+    const retryAt = Math.max(0, Math.floor(Number(state.nextRetryAt) || 0));
+    const remainMs = Math.max(0, retryAt - Math.floor(Number(now) || 0));
+    if (remainMs > 0) {
+      return {
+        blocked: true,
+        remainMs,
+        retryAt,
+        attempt: state.attempt,
+        message: String(state.message || ""),
+      };
+    }
+    return {
+      blocked: false,
+      remainMs: 0,
+      retryAt,
+      attempt: state.attempt,
+      message: String(state.message || ""),
+    };
+  }
+
+  getDueAutoUpdateRetryShareIds(now = nowTs()) {
+    const ts = Math.floor(Number(now) || 0);
+    return Object.entries(this.autoUpdateRetryStateByShare || {})
+      .map(([shareId, row]) => {
+        const id = String(shareId || "").trim();
+        const retryAt = Math.max(0, Math.floor(Number(row?.nextRetryAt) || 0));
+        return {shareId: id, retryAt};
+      })
+      .filter((row) => row.shareId && row.retryAt > 0 && row.retryAt <= ts)
+      .sort((a, b) => a.retryAt - b.retryAt)
+      .map((row) => row.shareId);
+  }
+
+  buildAutoUpdateRetryMessage({attempt = 1, retryAt = 0, error = ""} = {}) {
+    const t = this.t.bind(this);
+    const time = retryAt > 0 ? this.formatTime(retryAt) : t("siyuanShare.label.unknown");
+    const base = t("siyuanShare.message.autoUpdateRetryAt", {
+      attempt: Math.max(1, Math.floor(Number(attempt) || 1)),
+      time,
+    });
+    const detail = String(error || "").trim();
+    return detail ? `${base} | ${detail}` : base;
+  }
+
+  markAutoUpdateShareFailure(shareId, err) {
+    const id = String(shareId || "").trim();
+    if (!id) return;
+    const errorText = String(err?.message || err || "").trim();
+    const prev = this.getAutoUpdateRetryState(id);
+    const attempt = Math.max(1, (prev?.attempt || 0) + 1);
+    const delayMs = this.getAutoUpdateRetryDelayMs(attempt);
+    const retryAt = nowTs() + delayMs;
+    const message = this.buildAutoUpdateRetryMessage({attempt, retryAt, error: errorText});
+    this.autoUpdateRetryStateByShare[id] = {
+      attempt,
+      nextRetryAt: retryAt,
+      message,
+    };
+    this.setAutoUpdateShareState(id, "error", {message});
+    this.pushAutoUpdateHistory("error", this.t("siyuanShare.message.autoUpdateFailed"), {
+      shareId: id,
+      detail: message,
+    });
+    this.scheduleAutoUpdateNow(Math.min(delayMs + 120, this.getAutoUpdateDelayMs()));
+  }
+
+  scheduleAutoUpdateRetryWakeup() {
+    const now = nowTs();
+    const nextRetryAt = Object.values(this.autoUpdateRetryStateByShare || {}).reduce((min, row) => {
+      const retryAt = Math.max(0, Math.floor(Number(row?.nextRetryAt) || 0));
+      if (!retryAt || retryAt <= now) return min;
+      if (!min || retryAt < min) return retryAt;
+      return min;
+    }, 0);
+    if (!nextRetryAt) return;
+    const remain = Math.max(0, nextRetryAt - now);
+    if (remain <= this.getAutoUpdateDelayMs() + 1000) {
+      this.scheduleAutoUpdateNow(remain + 120);
+    }
+  }
+
+  getAutoUpdateSummaryLabel() {
+    const t = this.t.bind(this);
+    if (!this.isAutoUpdateEnabledForActiveSite()) {
+      return t("siyuanShare.message.autoUpdateDisabled");
+    }
+    if (this.autoUpdateCurrentShareId) {
+      return t("siyuanShare.message.autoUpdateRunningOne", {
+        name: this.getAutoUpdateShareLabel(this.autoUpdateCurrentShareId),
+      });
+    }
+    if (this.autoUpdateQueue.length > 0) {
+      return t("siyuanShare.message.autoUpdateQueuedCount", {count: this.autoUpdateQueue.length});
+    }
+    if (this.autoUpdateNextRunAt > 0) {
+      return t("siyuanShare.message.autoUpdateNextScan", {
+        time: this.formatTime(this.autoUpdateNextRunAt),
+      });
+    }
+    return t("siyuanShare.message.autoUpdateIdle");
+  }
+
+  refreshAutoUpdateStatusTextInDock() {
+    if (!this.dockElement) return;
+    const el = this.dockElement.querySelector?.("#sps-auto-update-status");
+    if (!el) return;
+    el.textContent = this.getAutoUpdateSummaryLabel();
+  }
+
+  closeAutoUpdateStatusDialog() {
+    if (this.autoUpdateStatusRefreshTimer) {
+      clearInterval(this.autoUpdateStatusRefreshTimer);
+      this.autoUpdateStatusRefreshTimer = null;
+    }
+    if (this.autoUpdateStatusDialog) {
+      try {
+        this.autoUpdateStatusDialog.destroy();
+      } catch {
+        // ignore
+      }
+      this.autoUpdateStatusDialog = null;
+    }
+  }
+
+  renderAutoUpdateStatusDialog() {
+    const dialog = this.autoUpdateStatusDialog;
+    const root = dialog?.element?.querySelector?.(".sps-auto-status");
+    if (!root) return;
+    const scrollState = {};
+    root.querySelectorAll("[data-log]").forEach((el) => {
+      const key = String(el.getAttribute("data-log") || "").trim();
+      if (!key) return;
+      scrollState[key] = {
+        top: Number(el.scrollTop) || 0,
+        left: Number(el.scrollLeft) || 0,
+      };
+    });
+    const t = this.t.bind(this);
+    const enabled = this.isAutoUpdateEnabledForActiveSite();
+    const queueList = this.autoUpdateQueue.map((shareId, index) => {
+      const meta = this.getAutoUpdateShareLogMeta(shareId);
+      return {
+        index: index + 1,
+        shareId: meta.shareId,
+        typeLabel: meta.typeLabel,
+        title: meta.title,
+        targetId: meta.targetId,
+      };
+    });
+    const retryList = Object.entries(this.autoUpdateRetryStateByShare || {})
+      .map(([shareId, row]) => {
+        const id = String(shareId || "").trim();
+        const meta = this.getAutoUpdateShareLogMeta(id);
+        const attempt = Math.max(1, Math.floor(Number(row?.attempt) || 1));
+        const retryAt = Math.max(0, Math.floor(Number(row?.nextRetryAt) || 0));
+        const message = String(row?.message || "").trim();
+        return {
+          shareId: id,
+          typeLabel: meta.typeLabel,
+          title: meta.title,
+          targetId: meta.targetId,
+          attempt,
+          retryAt,
+          message,
+        };
+      })
+      .filter((row) => row.shareId)
+      .sort((a, b) => a.retryAt - b.retryAt);
+    const historyRowsAll = (Array.isArray(this.autoUpdateHistory) ? this.autoUpdateHistory : []).slice(
+      0,
+      AUTO_UPDATE_HISTORY_LIMIT,
+    );
+    const historyRows = historyRowsAll.slice(0, AUTO_UPDATE_HISTORY_RENDER_LIMIT);
+    const summaryRows = [
+      {
+        label: t("siyuanShare.label.autoUpdateEnabled"),
+        value: enabled ? t("siyuanShare.label.statusEnabled") : t("siyuanShare.label.statusDisabled"),
+      },
+      {
+        label: t("siyuanShare.label.autoUpdateState"),
+        value: this.getAutoUpdateSummaryLabel(),
+      },
+      {
+        label: t("siyuanShare.label.autoUpdateCurrent"),
+        value: this.autoUpdateCurrentShareId
+          ? this.getAutoUpdateShareLabel(this.autoUpdateCurrentShareId)
+          : t("siyuanShare.label.none"),
+      },
+      {
+        label: t("siyuanShare.label.autoUpdateQueue"),
+        value: String(this.autoUpdateQueue.length),
+      },
+      {
+        label: t("siyuanShare.label.autoUpdateLastScan"),
+        value: this.autoUpdateLastScanAt ? this.formatTime(this.autoUpdateLastScanAt) : t("siyuanShare.label.none"),
+      },
+      {
+        label: t("siyuanShare.label.autoUpdateNextScan"),
+        value: this.autoUpdateNextRunAt ? this.formatTime(this.autoUpdateNextRunAt) : t("siyuanShare.label.none"),
+      },
+    ];
+    const summaryHtml = summaryRows
+      .map(
+        (row) => `<div class="sps-auto-status__row">
+  <div class="sps-auto-status__key">${escapeHtml(row.label)}</div>
+  <div class="sps-auto-status__value">${escapeHtml(row.value)}</div>
+</div>`,
+      )
+      .join("");
+    const queueContentHtml = queueList.length
+      ? (() => {
+          const rowsHtml = queueList
+            .map((row) => {
+              const shareLabel = `${row.typeLabel}:${row.title}`;
+              return `<div class="sps-auto-history__row">
+  <span class="sps-auto-history__cell">${escapeHtml(`[${row.index}]`)}</span>
+  <span class="sps-auto-history__sep">|</span>
+  <span class="sps-auto-history__cell">${escapeHtml(shareLabel)}</span>
+  <span class="sps-auto-history__sep">|</span>
+  <span class="sps-auto-history__cell">${escapeHtml(`id:${row.targetId}`)}</span>
+</div>`;
+            })
+            .join("\n");
+          return `<div class="sps-auto-status__log sps-auto-status__history-log sps-auto-status__list-log" data-log="queue">
+  <div class="sps-auto-history__table">
+    ${rowsHtml}
+  </div>
+</div>`;
+        })()
+      : `<pre class="sps-auto-status__log" data-log="queue">${escapeHtml(
+          t("siyuanShare.message.autoUpdateQueueEmpty"),
+        )}</pre>`;
+    const retryContentHtml = retryList.length
+      ? (() => {
+          const rowsHtml = retryList
+            .map((row) => {
+              const retryLabel = `${t("siyuanShare.label.retry")} ${row.attempt}`;
+              const timeLabel = row.retryAt ? this.formatTime(row.retryAt) : t("siyuanShare.label.none");
+              const shareLabel = `${row.typeLabel}:${row.title}`;
+              const message = row.message || "-";
+              return `<div class="sps-auto-history__row">
+  <span class="sps-auto-history__cell">${escapeHtml(`[${retryLabel}]`)}</span>
+  <span class="sps-auto-history__sep">|</span>
+  <span class="sps-auto-history__cell">${escapeHtml(`[${timeLabel}]`)}</span>
+  <span class="sps-auto-history__sep">|</span>
+  <span class="sps-auto-history__cell">${escapeHtml(shareLabel)}</span>
+  <span class="sps-auto-history__sep">|</span>
+  <span class="sps-auto-history__cell">${escapeHtml(`id:${row.targetId}`)}</span>
+  <span class="sps-auto-history__sep">|</span>
+  <span class="sps-auto-history__cell">${escapeHtml(message)}</span>
+</div>`;
+            })
+            .join("\n");
+          return `<div class="sps-auto-status__log sps-auto-status__history-log sps-auto-status__list-log" data-log="retry">
+  <div class="sps-auto-history__table">
+    ${rowsHtml}
+  </div>
+</div>`;
+        })()
+      : `<pre class="sps-auto-status__log" data-log="retry">${escapeHtml(
+          t("siyuanShare.message.autoUpdateRetryEmpty"),
+        )}</pre>`;
+    const historyContentHtml = historyRows.length
+      ? (() => {
+          const rowsHtml = historyRows
+            .map((row) => {
+              const tag =
+                row.level === "error"
+                  ? t("siyuanShare.label.statusError")
+                  : row.level === "success"
+                    ? t("siyuanShare.label.statusSuccess")
+                    : t("siyuanShare.label.statusInfo");
+              const shareMeta = row.shareId ? this.getAutoUpdateShareLogMeta(row.shareId) : null;
+              const shareLabel = shareMeta ? `${shareMeta.typeLabel}:${shareMeta.title}` : "-";
+              const targetId = shareMeta ? shareMeta.targetId : "-";
+              const detail = row.detail ? String(row.detail || "") : "";
+              const fullMsg = detail ? `${String(row.message || "")} | ${detail}` : String(row.message || "");
+              return `<div class="sps-auto-history__row">
+  <span class="sps-auto-history__cell">${escapeHtml(`[${this.formatTime(row.ts)}]`)}</span>
+  <span class="sps-auto-history__sep">|</span>
+  <span class="sps-auto-history__cell">${escapeHtml(`[${tag}]`)}</span>
+  <span class="sps-auto-history__sep">|</span>
+  <span class="sps-auto-history__cell">${escapeHtml(fullMsg)}</span>
+  <span class="sps-auto-history__sep">|</span>
+  <span class="sps-auto-history__cell">${escapeHtml(shareLabel)}</span>
+  <span class="sps-auto-history__sep">|</span>
+  <span class="sps-auto-history__cell">${escapeHtml(`id:${targetId}`)}</span>
+</div>`;
+            })
+            .join("\n");
+          return `<div class="sps-auto-status__log sps-auto-status__history-log" data-log="history">
+  <div class="sps-auto-history__table">
+    ${rowsHtml}
+  </div>
+</div>`;
+        })()
+      : `<pre class="sps-auto-status__log" data-log="history">${escapeHtml(
+          t("siyuanShare.message.autoUpdateHistoryEmpty"),
+        )}</pre>`;
+    root.innerHTML = `<div class="sps-auto-status__section">
+  <div class="sps-auto-status__title">${escapeHtml(t("siyuanShare.title.autoUpdateSummary"))}</div>
+  <div class="sps-auto-status__grid">${summaryHtml}</div>
+</div>
+<div class="sps-auto-status__section">
+  <div class="sps-auto-status__title">${escapeHtml(t("siyuanShare.title.autoUpdateQueue"))}</div>
+  ${queueContentHtml}
+</div>
+<div class="sps-auto-status__section">
+  <div class="sps-auto-status__title">${escapeHtml(t("siyuanShare.title.autoUpdateRetry"))}</div>
+  ${retryContentHtml}
+</div>
+<div class="sps-auto-status__section">
+  <div class="sps-auto-status__title">${escapeHtml(t("siyuanShare.title.autoUpdateHistory"))}</div>
+  ${historyContentHtml}
+</div>`;
+    Object.entries(scrollState).forEach(([key, pos]) => {
+      const el = root.querySelector(`[data-log="${key}"]`);
+      if (!el) return;
+      el.scrollTop = Number(pos?.top) || 0;
+      el.scrollLeft = Number(pos?.left) || 0;
+    });
+  }
+
+  openAutoUpdateStatusDialog() {
+    const t = this.t.bind(this);
+    if (this.autoUpdateStatusDialog?.element?.isConnected) {
+      this.renderAutoUpdateStatusDialog();
+      return;
+    }
+    if (this.autoUpdateStatusRefreshTimer) {
+      clearInterval(this.autoUpdateStatusRefreshTimer);
+      this.autoUpdateStatusRefreshTimer = null;
+    }
+    const content = `<div class="b3-dialog__content sps-auto-status"></div>
+<div class="b3-dialog__action">
+  <button class="b3-button b3-button--outline" data-action="auto-update-run-now">${escapeHtml(
+    t("siyuanShare.action.autoUpdateRunNow"),
+  )}</button>
+  <div class="fn__space"></div>
+  <button class="b3-button b3-button--cancel" data-action="close">${escapeHtml(t("siyuanShare.action.close"))}</button>
+</div>`;
+    let dialog = null;
+    const onClick = (event) => {
+      const btn = event.target?.closest?.("[data-action]");
+      if (!btn) return;
+      const action = btn.getAttribute("data-action");
+      if (action === "close") {
+        dialog?.destroy();
+        return;
+      }
+      if (action === "auto-update-run-now") {
+        this.scheduleAutoUpdateNow(0);
+        this.renderAutoUpdateStatusDialog();
+      }
+    };
+    dialog = new Dialog({
+      title: t("siyuanShare.title.autoUpdateStatus"),
+      content,
+      width: "min(860px, 94vw)",
+      height: "min(82vh, 760px)",
+      destroyCallback: () => {
+        if (this.autoUpdateStatusRefreshTimer) {
+          clearInterval(this.autoUpdateStatusRefreshTimer);
+          this.autoUpdateStatusRefreshTimer = null;
+        }
+        dialog?.element?.removeEventListener?.("click", onClick);
+        if (this.autoUpdateStatusDialog === dialog) {
+          this.autoUpdateStatusDialog = null;
+        }
+      },
+    });
+    this.autoUpdateStatusDialog = dialog;
+    dialog.element?.addEventListener?.("click", onClick);
+    this.renderAutoUpdateStatusDialog();
+    // Periodically refresh the status dialog so countdown / state stays current
+    this.autoUpdateStatusRefreshTimer = setInterval(() => {
+      if (!this.autoUpdateStatusDialog?.element?.isConnected) {
+        clearInterval(this.autoUpdateStatusRefreshTimer);
+        this.autoUpdateStatusRefreshTimer = null;
+        return;
+      }
+      this.renderAutoUpdateStatusDialog();
+    }, 2000);
+  }
+
+  isAutoUpdateEnabledForActiveSite() {
+    const active = this.getActiveSite();
+    if (!active) return false;
+    return !!active.autoUpdateEnabled;
+  }
+
+  getAutoUpdateDelayMs() {
+    return document?.hidden ? this.autoUpdateHiddenDelayMs : this.autoUpdateDelayMs;
+  }
+
+  scheduleAutoUpdateNow(delayMs = 0) {
+    if (!this.autoUpdateLoopRunner) return;
+    if (!this.isAutoUpdateEnabledForActiveSite()) return;
+    // If currently processing, skip rescheduling — the active loop will reschedule when done
+    if (this.autoUpdating) return;
+    if (this.autoUpdateTimer) {
+      clearTimeout(this.autoUpdateTimer);
+      this.autoUpdateTimer = null;
+    }
+    const delay = Math.max(0, Math.floor(Number(delayMs) || 0));
+    this.autoUpdateNextRunAt = nowTs() + delay;
+    this.refreshAutoUpdateStatusTextInDock();
+    this.autoUpdateTimer = setTimeout(this.autoUpdateLoopRunner, delay);
+  }
+
+  refreshAutoUpdateLoop({immediate = false} = {}) {
+    if (this.isAutoUpdateEnabledForActiveSite()) {
+      this.startAutoUpdate({immediate});
+      this.scheduleAutoUpdateStructureReconcile({immediate: true, reset: false});
+      return;
+    }
+    this.stopAutoUpdateStructureReconcile();
+    this.stopAutoUpdate({clearState: false});
+    if (Object.keys(this.autoUpdateShareStates || {}).length > 0) {
+      this.autoUpdateShareStates = {};
+      this.refreshDocTreeMarksLater();
+    }
+  }
+
+  startAutoUpdate({immediate = false} = {}) {
+    if (!this.isAutoUpdateEnabledForActiveSite()) {
+      this.stopAutoUpdate({clearState: true});
+      return;
+    }
+    if (this.autoUpdateLoopRunner) {
+      if (immediate) this.scheduleAutoUpdateNow(0);
+      return;
+    }
+    const loop = async () => {
+      if (this.autoUpdateLoopRunner !== loop) return;
+      if (this.autoUpdateTimer) {
+        clearTimeout(this.autoUpdateTimer);
+        this.autoUpdateTimer = null;
+      }
+      const delay = this.getAutoUpdateDelayMs();
+      const scheduleNext = () => {
+        if (this.autoUpdateLoopRunner !== loop) return;
+        this.autoUpdateNextRunAt = nowTs() + delay;
+        this.refreshAutoUpdateStatusTextInDock();
+        this.autoUpdateTimer = setTimeout(loop, delay);
+      };
+      if (!this.isAutoUpdateEnabledForActiveSite()) {
+        this.stopAutoUpdate({clearState: true});
+        return;
+      }
+      await this.runAutoUpdateOnce();
+      if (this.autoUpdateLoopRunner !== loop) return;
+      scheduleNext();
+    };
+    this.autoUpdateLoopRunner = loop;
+    this.autoUpdateNextRunAt = nowTs() + (immediate ? 0 : this.getAutoUpdateDelayMs());
+    this.refreshAutoUpdateStatusTextInDock();
+    this.autoUpdateTimer = setTimeout(loop, immediate ? 0 : this.getAutoUpdateDelayMs());
+  }
+
+  stopAutoUpdate({clearState = false, refreshTreeOnClear = true, preservePendingOnPause = false} = {}) {
+    const shouldPreservePending = !clearState && !!preservePendingOnPause;
+    const pendingResumeShareIds = shouldPreservePending
+      ? this.normalizeAutoUpdateQueue([
+          ...this.autoUpdateQueue,
+          ...Array.from(this.autoUpdateQuietPendingSet || []),
+          String(this.autoUpdateCurrentShareId || "").trim(),
+        ])
+      : [];
+    this.stopAutoUpdateStructureReconcile();
+    if (this.autoUpdateTimer) {
+      clearTimeout(this.autoUpdateTimer);
+      this.autoUpdateTimer = null;
+    }
+    this.autoUpdateNextRunAt = 0;
+    this.refreshAutoUpdateStatusTextInDock();
+    this.autoUpdateLoopRunner = null;
+    if (this.autoUpdateCurrentController && !this.autoUpdateCurrentController.signal?.aborted) {
+      try {
+        this.autoUpdateCurrentController.abort();
+      } catch {
+        // ignore
+      }
+    }
+    this.autoUpdateCurrentController = null;
+    this.autoUpdateCurrentShareId = "";
+    this.autoUpdating = false;
+    this.autoUpdateQueue = [];
+    this.autoUpdateQueuedSet.clear();
+    this.autoUpdateRerunSet.clear();
+    this.autoUpdateAbortByQuietSet.clear();
+    this.autoUpdateAbortByManualSet.clear();
+    if (this.autoUpdateQuietFlushTimer) {
+      clearTimeout(this.autoUpdateQuietFlushTimer);
+      this.autoUpdateQuietFlushTimer = null;
+    }
+    this.autoUpdateQuietNextFlushAt = 0;
+    this.autoUpdateQuietPendingSet.clear();
+    this.autoUpdateQuietDeadlineByShare = {};
+    if (this.autoUpdateWsFlushTimer) {
+      clearTimeout(this.autoUpdateWsFlushTimer);
+      this.autoUpdateWsFlushTimer = null;
+    }
+    this.autoUpdateWsDocIdSet.clear();
+    this.autoUpdateWsDetectRunning = false;
+    this.autoUpdateWsDetectPending = false;
+    if (clearState) {
+      this.autoUpdateShareStates = {};
+      this.autoUpdateRetryStateByShare = {};
+      this.autoUpdateShareChangeSeqById = {};
+      this.autoUpdateHistory = [];
+      this.autoUpdateLastResult = null;
+      if (refreshTreeOnClear) {
+        this.refreshDocTreeMarksLater();
+      }
+    } else if (shouldPreservePending && pendingResumeShareIds.length > 0) {
+      this.autoUpdateQueue = pendingResumeShareIds;
+      this.autoUpdateQueuedSet = new Set(pendingResumeShareIds);
+      pendingResumeShareIds.forEach((shareId) => {
+        if (!this.getShareById(shareId)) return;
+        this.setAutoUpdateShareState(shareId, "queued");
+      });
+      this.schedulePersistAutoUpdateRuntime();
+    }
+  }
+
+  getAutoUpdateScanCursor(siteId) {
+    const id = String(siteId || "").trim();
+    if (!id) return {updated: "", docId: ""};
+    const map = this.normalizeAutoUpdateScanStampBySite(this.settings?.autoUpdateScanStampBySite || {});
+    const cursor = this.normalizeAutoUpdateScanCursor(map[id]);
+    return cursor || {updated: "", docId: ""};
+  }
+
+  async setAutoUpdateScanCursor(siteId, cursorRaw) {
+    const id = String(siteId || "").trim();
+    const cursor = this.normalizeAutoUpdateScanCursor(cursorRaw);
+    if (!id || !cursor) return;
+    const nextMap = this.normalizeAutoUpdateScanStampBySite(this.settings?.autoUpdateScanStampBySite || {});
+    const prev = this.normalizeAutoUpdateScanCursor(nextMap[id]);
+    if (prev && prev.updated === cursor.updated && String(prev.docId || "") === String(cursor.docId || "")) {
+      return;
+    }
+    nextMap[id] = cursor;
+    this.settings = {
+      ...this.settings,
+      autoUpdateScanStampBySite: nextMap,
+    };
+    await this.saveData(STORAGE_SETTINGS, this.settings);
+  }
+
+  getAutoUpdateScanStamp(siteId) {
+    return this.getAutoUpdateScanCursor(siteId).updated;
+  }
+
+  async setAutoUpdateScanStamp(siteId, stamp) {
+    const normalized = normalizeDocUpdatedStamp(stamp);
+    if (!normalized) return;
+    await this.setAutoUpdateScanCursor(siteId, {updated: normalized, docId: ""});
+  }
+
+  setAutoUpdateShareState(shareId, state, {message = ""} = {}) {
+    const id = String(shareId || "").trim();
+    if (!id) return;
+    const normalizedState = String(state || "").trim();
+    const normalizedMessage = String(message || "");
+    const prev = this.autoUpdateShareStates?.[id] || null;
+    if (!normalizedState) {
+      if (prev) {
+        delete this.autoUpdateShareStates[id];
+        const forceImmediate = String(prev.state || "") === "syncing";
+        this.scheduleDocTreeRefresh(forceImmediate ? 0 : 80, {force: forceImmediate});
+        this.refreshAutoUpdateStatusTextInDock();
+      }
+      return;
+    }
+    if (prev && prev.state === normalizedState && String(prev.message || "") === normalizedMessage) {
+      return;
+    }
+    this.autoUpdateShareStates[id] = {
+      state: normalizedState,
+      message: normalizedMessage,
+      updatedAt: nowTs(),
+    };
+    const forceImmediate = normalizedState === "syncing";
+    this.scheduleDocTreeRefresh(forceImmediate ? 0 : 80, {force: forceImmediate});
+    this.refreshAutoUpdateStatusTextInDock();
+    if (this.autoUpdateStatusDialog?.element?.isConnected) {
+      this.renderAutoUpdateStatusDialog();
+    }
+  }
+
+  pruneAutoUpdateShareStates() {
+    const shareIdSet = new Set(
+      (Array.isArray(this.shares) ? this.shares : [])
+        .map((share) => String(share?.id || "").trim())
+        .filter((id) => id),
+    );
+    let changed = false;
+    const nextQueue = this.autoUpdateQueue.filter((shareId) => shareIdSet.has(String(shareId || "").trim()));
+    if (nextQueue.length !== this.autoUpdateQueue.length) {
+      this.autoUpdateQueue = nextQueue;
+      this.autoUpdateQueuedSet = new Set(nextQueue);
+      changed = true;
+    }
+    const nextRerun = new Set();
+    this.autoUpdateRerunSet.forEach((shareId) => {
+      if (!shareIdSet.has(String(shareId || "").trim())) {
+        changed = true;
+        return;
+      }
+      nextRerun.add(shareId);
+    });
+    this.autoUpdateRerunSet = nextRerun;
+    const nextQuietAbortSet = new Set();
+    this.autoUpdateAbortByQuietSet.forEach((shareId) => {
+      const id = String(shareId || "").trim();
+      if (!id || !shareIdSet.has(id)) {
+        changed = true;
+        return;
+      }
+      nextQuietAbortSet.add(id);
+    });
+    this.autoUpdateAbortByQuietSet = nextQuietAbortSet;
+    const nextManualAbortSet = new Set();
+    this.autoUpdateAbortByManualSet.forEach((shareId) => {
+      const id = String(shareId || "").trim();
+      if (!id || !shareIdSet.has(id)) {
+        changed = true;
+        return;
+      }
+      nextManualAbortSet.add(id);
+    });
+    this.autoUpdateAbortByManualSet = nextManualAbortSet;
+    if (this.autoUpdateCurrentShareId && !shareIdSet.has(this.autoUpdateCurrentShareId)) {
+      if (this.autoUpdateCurrentController && !this.autoUpdateCurrentController.signal?.aborted) {
+        try {
+          this.autoUpdateCurrentController.abort();
+        } catch {
+          // ignore
+        }
+      }
+      this.autoUpdateCurrentShareId = "";
+      this.autoUpdateCurrentController = null;
+      changed = true;
+    }
+    Object.keys(this.autoUpdateShareStates || {}).forEach((shareId) => {
+      if (shareIdSet.has(String(shareId))) return;
+      delete this.autoUpdateShareStates[shareId];
+      changed = true;
+    });
+    Object.keys(this.autoUpdateRetryStateByShare || {}).forEach((shareId) => {
+      if (shareIdSet.has(String(shareId))) return;
+      delete this.autoUpdateRetryStateByShare[shareId];
+      changed = true;
+    });
+    Object.keys(this.autoUpdateShareChangeSeqById || {}).forEach((shareId) => {
+      if (shareIdSet.has(String(shareId))) return;
+      delete this.autoUpdateShareChangeSeqById[shareId];
+      changed = true;
+    });
+    Object.keys(this.autoUpdateQuietDeadlineByShare || {}).forEach((shareId) => {
+      if (shareIdSet.has(String(shareId))) return;
+      delete this.autoUpdateQuietDeadlineByShare[shareId];
+      this.autoUpdateQuietPendingSet.delete(String(shareId || "").trim());
+      changed = true;
+    });
+    Object.keys(this.autoUpdateStructDigestByShare || {}).forEach((shareId) => {
+      if (shareIdSet.has(String(shareId))) return;
+      delete this.autoUpdateStructDigestByShare[shareId];
+      changed = true;
+    });
+    if (changed) {
+      this.scheduleAutoUpdateQuietFlush();
+      this.refreshDocTreeMarksLater();
+      this.refreshAutoUpdateStatusTextInDock();
+      this.schedulePersistAutoUpdateRuntime();
+    }
+  }
+
+  getAutoUpdateShareState(shareId) {
+    const id = String(shareId || "").trim();
+    if (!id) return null;
+    return this.autoUpdateShareStates?.[id] || null;
+  }
+
+  getAutoUpdateShareChangeSeq(shareId) {
+    const id = String(shareId || "").trim();
+    if (!id) return 0;
+    return Math.max(0, Math.floor(Number(this.autoUpdateShareChangeSeqById?.[id]) || 0));
+  }
+
+  markAutoUpdateShareChanged(shareIds) {
+    const ids = Array.from(
+      new Set(
+        (Array.isArray(shareIds) ? shareIds : [])
+          .map((id) => String(id || "").trim())
+          .filter((id) => id),
+      ),
+    );
+    if (!ids.length) return;
+    if (!this.autoUpdateShareChangeSeqById || typeof this.autoUpdateShareChangeSeqById !== "object") {
+      this.autoUpdateShareChangeSeqById = {};
+    }
+    ids.forEach((id) => {
+      const next = this.getAutoUpdateShareChangeSeq(id) + 1;
+      this.autoUpdateShareChangeSeqById[id] = next;
+    });
+  }
+
+  getAutoUpdateQuietWindowMs() {
+    return Math.max(0, Math.floor(Number(this.autoUpdateQuietWindowMs) || 0));
+  }
+
+  hasAutoUpdateQuietPending(shareId) {
+    const id = String(shareId || "").trim();
+    if (!id) return false;
+    if (!(this.autoUpdateQuietPendingSet instanceof Set) || !this.autoUpdateQuietPendingSet.has(id)) {
+      return false;
+    }
+    const deadline = Math.max(0, Math.floor(Number(this.autoUpdateQuietDeadlineByShare?.[id]) || 0));
+    if (deadline > 0) return true;
+    this.autoUpdateQuietPendingSet.delete(id);
+    return false;
+  }
+
+  scheduleAutoUpdateQuietFlush() {
+    if (!(this.autoUpdateQuietPendingSet instanceof Set) || this.autoUpdateQuietPendingSet.size === 0) {
+      if (this.autoUpdateQuietFlushTimer) {
+        clearTimeout(this.autoUpdateQuietFlushTimer);
+        this.autoUpdateQuietFlushTimer = null;
+      }
+      this.autoUpdateQuietNextFlushAt = 0;
+      return;
+    }
+    const now = nowTs();
+    let nextAt = 0;
+    const pendingIds = Array.from(this.autoUpdateQuietPendingSet).map((id) => String(id || "").trim()).filter((id) => id);
+    pendingIds.forEach((shareId) => {
+      if (!this.getShareById(shareId)) {
+        this.autoUpdateQuietPendingSet.delete(shareId);
+        if (Object.prototype.hasOwnProperty.call(this.autoUpdateQuietDeadlineByShare || {}, shareId)) {
+          delete this.autoUpdateQuietDeadlineByShare[shareId];
+        }
+        return;
+      }
+      const deadline = Math.max(0, Math.floor(Number(this.autoUpdateQuietDeadlineByShare?.[shareId]) || 0));
+      if (!deadline) {
+        this.autoUpdateQuietPendingSet.delete(shareId);
+        if (Object.prototype.hasOwnProperty.call(this.autoUpdateQuietDeadlineByShare || {}, shareId)) {
+          delete this.autoUpdateQuietDeadlineByShare[shareId];
+        }
+        return;
+      }
+      if (!nextAt || deadline < nextAt) {
+        nextAt = deadline;
+      }
+    });
+    if (!nextAt) {
+      if (this.autoUpdateQuietFlushTimer) {
+        clearTimeout(this.autoUpdateQuietFlushTimer);
+        this.autoUpdateQuietFlushTimer = null;
+      }
+      this.autoUpdateQuietNextFlushAt = 0;
+      return;
+    }
+    if (
+      this.autoUpdateQuietFlushTimer &&
+      this.autoUpdateQuietNextFlushAt > 0 &&
+      this.autoUpdateQuietNextFlushAt <= nextAt + 16
+    ) {
+      return;
+    }
+    if (this.autoUpdateQuietFlushTimer) {
+      clearTimeout(this.autoUpdateQuietFlushTimer);
+      this.autoUpdateQuietFlushTimer = null;
+    }
+    const delay = Math.max(0, nextAt - now);
+    this.autoUpdateQuietNextFlushAt = nextAt;
+    this.autoUpdateQuietFlushTimer = setTimeout(() => {
+      this.autoUpdateQuietFlushTimer = null;
+      this.autoUpdateQuietNextFlushAt = 0;
+      void this.flushAutoUpdateQuietPending();
+    }, delay + 24);
+  }
+
+  async flushAutoUpdateQuietPending() {
+    if (!(this.autoUpdateQuietPendingSet instanceof Set) || this.autoUpdateQuietPendingSet.size === 0) {
+      return 0;
+    }
+    if (!this.isAutoUpdateEnabledForActiveSite()) {
+      this.autoUpdateQuietPendingSet.clear();
+      this.autoUpdateQuietDeadlineByShare = {};
+      this.autoUpdateQuietNextFlushAt = 0;
+      return 0;
+    }
+    const now = nowTs();
+    const dueIds = [];
+    Array.from(this.autoUpdateQuietPendingSet).forEach((shareIdRaw) => {
+      const shareId = String(shareIdRaw || "").trim();
+      if (!shareId) return;
+      if (!this.getShareById(shareId)) {
+        this.autoUpdateQuietPendingSet.delete(shareId);
+        delete this.autoUpdateQuietDeadlineByShare[shareId];
+        return;
+      }
+      const deadline = Math.max(0, Math.floor(Number(this.autoUpdateQuietDeadlineByShare?.[shareId]) || 0));
+      if (!deadline || deadline > now) return;
+      dueIds.push(shareId);
+      this.autoUpdateQuietPendingSet.delete(shareId);
+      delete this.autoUpdateQuietDeadlineByShare[shareId];
+    });
+    let added = 0;
+    if (dueIds.length > 0) {
+      added = this.enqueueAutoUpdateShareIds(dueIds, {
+        ignoreRetryBlock: false,
+        markChange: false,
+        applyQuietWindow: false,
+      });
+      const hasPendingQueue =
+        added > 0 ||
+        dueIds.some((shareId) => this.autoUpdateQueuedSet.has(shareId) || this.autoUpdateCurrentShareId === shareId);
+      if (hasPendingQueue) {
+        this.scheduleAutoUpdateNow(80);
+      }
+      this.schedulePersistAutoUpdateRuntime();
+    }
+    if (this.autoUpdateQuietPendingSet.size > 0) {
+      this.scheduleAutoUpdateQuietFlush();
+    } else {
+      this.autoUpdateQuietNextFlushAt = 0;
+    }
+    return added;
+  }
+
+  async syncAutoUpdateStructDigestAfterShareSuccess(shareId, {expectedChangeSeq = null} = {}) {
+    const id = String(shareId || "").trim();
+    if (!id) return "";
+    if (!this.getShareById(id)) return "";
+    const expected = Number.isFinite(Number(expectedChangeSeq))
+      ? Math.max(0, Math.floor(Number(expectedChangeSeq)))
+      : null;
+    if (expected !== null && this.getAutoUpdateShareChangeSeq(id) !== expected) {
+      return "";
+    }
+    let digest = "";
+    try {
+      digest = normalizeHashHex(await this.computeAutoUpdateStructureDigestForShare(id));
+    } catch (err) {
+      if (!isAbortError(err)) {
+        console.warn("sync auto-update struct digest failed", err);
+      }
+      return "";
+    }
+    if (!digest) return "";
+    if (expected !== null && this.getAutoUpdateShareChangeSeq(id) !== expected) {
+      return "";
+    }
+    if (!this.autoUpdateStructDigestByShare || typeof this.autoUpdateStructDigestByShare !== "object") {
+      this.autoUpdateStructDigestByShare = {};
+    }
+    if (this.autoUpdateStructDigestByShare[id] !== digest) {
+      this.autoUpdateStructDigestByShare[id] = digest;
+      this.schedulePersistAutoUpdateRuntime();
+    }
+    return digest;
+  }
+
+  async enqueueAutoUpdateByDocIds(docIds, {source = "", forceDocIds = []} = {}) {
+    if (!this.isAutoUpdateEnabledForActiveSite()) return 0;
+    const siteId = String(this.getActiveSiteId() || "").trim();
+    if (!siteId) return 0;
+    const rules = this.buildAutoUpdateShareRules();
+    if (!rules.length) return 0;
+    const ids = Array.from(
+      new Set((Array.isArray(docIds) ? docIds : []).map((id) => String(id || "").trim()).filter((id) => isValidDocId(id))),
+    );
+    if (!ids.length) return 0;
+    if (source === "tree") {
+      this.invalidateDocIconCacheByDocIds(ids);
+    }
+    const metas = await this.queryDocMetaByIds(ids);
+    if (!Array.isArray(metas) || metas.length === 0) return 0;
+    const shareIdSet = new Set();
+    metas.forEach((meta) => this.collectAutoUpdateShareIdsByDocMeta(meta, rules, shareIdSet));
+    if (!shareIdSet.size) return 0;
+    const forceDocIdSet =
+      source === "tree"
+        ? new Set(
+            (Array.isArray(forceDocIds) ? forceDocIds : [])
+              .map((id) => String(id || "").trim())
+              .filter((id) => isValidDocId(id)),
+          )
+        : new Set();
+    const forceShareIdSet = new Set();
+    if (source === "tree" && forceDocIdSet.size > 0) {
+      metas.forEach((meta) => {
+        const docId = String(meta?.docId || "").trim();
+        if (!forceDocIdSet.has(docId)) return;
+        this.collectAutoUpdateShareIdsByDocMeta(meta, rules, forceShareIdSet);
+      });
+    }
+    let candidateShareIds = Array.from(shareIdSet);
+    if (source === "tree") {
+      const filteredCandidates = candidateShareIds.filter((shareId) => !forceShareIdSet.has(shareId));
+      const digestPassed = await this.filterAutoUpdateShareIdsByStructureDigest(filteredCandidates, {
+        createBaselineWhenMissing: false,
+        freshDocIds: ids,
+      });
+      candidateShareIds = Array.from(new Set([...forceShareIdSet, ...digestPassed]));
+    }
+    if (!candidateShareIds.length) return 0;
+    const added = this.enqueueAutoUpdateShareIds(candidateShareIds);
+    if (added > 0 || this.autoUpdateQueue.length > 0) {
+      this.scheduleAutoUpdateNow(source === "tree" ? 80 : 120);
+    }
+    return added;
+  }
+
+  async filterAutoUpdateShareIdsByStructureDigest(
+    shareIds,
+    {createBaselineWhenMissing = true, freshDocIds = []} = {},
+  ) {
+    const normalizedShareIds = Array.from(
+      new Set(
+        (Array.isArray(shareIds) ? shareIds : [])
+          .map((id) => String(id || "").trim())
+          .filter((id) => id),
+      ),
+    );
+    if (!normalizedShareIds.length) return [];
+    if (!this.autoUpdateStructDigestByShare || typeof this.autoUpdateStructDigestByShare !== "object") {
+      this.autoUpdateStructDigestByShare = {};
+    }
+    const preferDbIconDocIdSet = new Set(
+      (Array.isArray(freshDocIds) ? freshDocIds : [])
+        .map((id) => String(id || "").trim())
+        .filter((id) => isValidDocId(id)),
+    );
+    const out = [];
+    let digestStoreChanged = false;
+    for (const shareId of normalizedShareIds) {
+      if (!this.getShareById(shareId)) continue;
+      if (
+        this.autoUpdateCurrentShareId === shareId ||
+        this.autoUpdateQueuedSet?.has?.(shareId) ||
+        this.autoUpdateRerunSet?.has?.(shareId)
+      ) {
+        out.push(shareId);
+        continue;
+      }
+      try {
+        const nextDigest = normalizeHashHex(
+          await this.computeAutoUpdateStructureDigestForShare(shareId, {preferDbIconDocIdSet}),
+        );
+        if (!nextDigest) {
+          out.push(shareId);
+          continue;
+        }
+        const prevDigest = normalizeHashHex(this.autoUpdateStructDigestByShare?.[shareId]);
+        if (!prevDigest) {
+          if (createBaselineWhenMissing) {
+            this.autoUpdateStructDigestByShare[shareId] = nextDigest;
+            digestStoreChanged = true;
+          } else {
+            out.push(shareId);
+          }
+          continue;
+        }
+        if (prevDigest !== nextDigest) {
+          out.push(shareId);
+        }
+      } catch (err) {
+        if (!isAbortError(err)) {
+          console.warn("auto-update structure digest filter failed", err);
+        }
+        out.push(shareId);
+      }
+    }
+    if (digestStoreChanged) {
+      this.schedulePersistAutoUpdateRuntime();
+    }
+    return out;
+  }
+
+  normalizeAutoUpdateStructureDocs(rows) {
+    const out = [];
+    const seen = new Set();
+    (Array.isArray(rows) ? rows : []).forEach((row, index) => {
+      const docId = String(row?.docId || "").trim();
+      if (!isValidDocId(docId) || seen.has(docId)) return;
+      seen.add(docId);
+      out.push({
+        docId,
+        title: String(row?.title || ""),
+        parentId: String(row?.parentId || "").trim(),
+        sortIndex: Number.isFinite(Number(row?.sortIndex)) ? Number(row.sortIndex) : index,
+        sortOrder: Number.isFinite(Number(row?.sortOrder)) ? Number(row.sortOrder) : index,
+        icon: normalizeDocIconValue(row?.icon || ""),
+      });
+    });
+    return out;
+  }
+
+  async resolveAutoUpdateStructureScopeDocs(share, {controller = null, preferDbIconDocIdSet = null} = {}) {
+    const t = this.t.bind(this);
+    if (!share || typeof share !== "object") return [];
+    const shareId = String(share?.id || "").trim();
+    if (!shareId) return [];
+    const fallbackIncludeChildren =
+      share?.type === SHARE_TYPES.NOTEBOOK
+        ? true
+        : typeof share?.includeChildren === "boolean"
+          ? share.includeChildren
+          : false;
+    const option = this.getShareOptionValue(shareId, {fallbackIncludeChildren});
+    const excludedDocIds = normalizeDocIdList(option?.excludedDocIds || share?.excludedDocIds || []);
+    if (share?.type === SHARE_TYPES.NOTEBOOK) {
+      const notebookId = String(share?.notebookId || "").trim();
+      if (!isValidNotebookId(notebookId)) return [];
+      throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+      const tree = await this.listDocsInNotebook(notebookId, {fillIcons: false, controller});
+      const docsRaw = Array.isArray(tree?.docs) ? tree.docs : [];
+      const normalized = this.normalizeAutoUpdateStructureDocs(docsRaw);
+      const filtered = this.filterScopeDocsByExcludedDocIds(normalized, excludedDocIds);
+      const docs = this.normalizeAutoUpdateStructureDocs(filtered?.docs || []);
+      if (docs.length) {
+        await this.fillDocIcons(docs, {preferDbIconDocIdSet});
+        applyDefaultDocIcons(docs);
+      }
+      return docs;
+    }
+    const docId = String(share?.docId || "").trim();
+    if (!isValidDocId(docId)) return [];
+    const includeChildren =
+      typeof option?.includeChildren === "boolean"
+        ? option.includeChildren
+        : typeof share?.includeChildren === "boolean"
+          ? share.includeChildren
+          : false;
+    if (!includeChildren) {
+      throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+      const row = await this.fetchBlockRow(docId);
+      if (!row) return [];
+      const icon = await this.resolveDocIcon(docId);
+      const docs = this.normalizeAutoUpdateStructureDocs([
+        {
+          docId,
+          title: typeof row?.content === "string" ? row.content : "",
+          parentId: "",
+          sortIndex: 0,
+          sortOrder: 0,
+          icon,
+        },
+      ]);
+      if (docs.length) {
+        applyDefaultDocIcons(docs);
+      }
+      return docs;
+    }
+    throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+    const subtree = await this.listDocSubtree(docId, {fillIcons: false, controller});
+    const normalized = this.normalizeAutoUpdateStructureDocs(subtree || []);
+    const filtered = this.filterScopeDocsByExcludedDocIds(normalized, excludedDocIds, {lockedDocIds: [docId]});
+    const docs = this.normalizeAutoUpdateStructureDocs(filtered?.docs || []);
+    if (docs.length) {
+      await this.fillDocIcons(docs, {preferDbIconDocIdSet});
+      applyDefaultDocIcons(docs);
+    }
+    return docs;
+  }
+
+  buildAutoUpdateStructureDigestInput(share, docs) {
+    const rows = this.normalizeAutoUpdateStructureDocs(docs || []);
+    const rootDocId = share?.type === SHARE_TYPES.DOC ? String(share?.docId || "").trim() : "";
+    const ordered = this.buildDocSelectionRows(rows, {rootDocId});
+    const normalizedRows = ordered.map((doc, index) => ({
+      docId: String(doc?.docId || "").trim(),
+      title: String(doc?.title || ""),
+      parentId: String(doc?.parentId || ""),
+      sortIndex: normalizeSortIndexForHash(doc?.sortIndex ?? index),
+      sortOrder: Math.max(0, Math.floor(Number(doc?.sortOrder) || index)),
+      icon: normalizeDocIconValue(doc?.icon || ""),
+    }));
+    const key =
+      share?.type === SHARE_TYPES.NOTEBOOK ? String(share?.notebookId || "").trim() : String(share?.docId || "").trim();
+    return JSON.stringify({
+      version: 1,
+      shareId: String(share?.id || "").trim(),
+      type: String(share?.type || ""),
+      key,
+      rows: normalizedRows,
+    });
+  }
+
+  async computeAutoUpdateStructureDigestForShare(shareId, {controller = null, preferDbIconDocIdSet = null} = {}) {
+    const id = String(shareId || "").trim();
+    if (!id) return "";
+    const share = this.getShareById(id);
+    if (!share) return "";
+    const docs = await this.resolveAutoUpdateStructureScopeDocs(share, {controller, preferDbIconDocIdSet});
+    const input = this.buildAutoUpdateStructureDigestInput(share, docs);
+    if (!input) return "";
+    return normalizeHashHex(await hashTextSha256(input));
+  }
+
+  async refreshAutoUpdateStructDigestForShare(shareId, {controller = null} = {}) {
+    const id = String(shareId || "").trim();
+    if (!id) return "";
+    try {
+      const digest = await this.computeAutoUpdateStructureDigestForShare(id, {controller});
+      if (!digest) return "";
+      if (!this.autoUpdateStructDigestByShare || typeof this.autoUpdateStructDigestByShare !== "object") {
+        this.autoUpdateStructDigestByShare = {};
+      }
+      if (this.autoUpdateStructDigestByShare[id] !== digest) {
+        this.autoUpdateStructDigestByShare[id] = digest;
+        this.schedulePersistAutoUpdateRuntime();
+      }
+      return digest;
+    } catch (err) {
+      if (!isAbortError(err)) {
+        console.warn("refresh auto-update struct digest failed", err);
+      }
+      return "";
+    }
+  }
+
+  stopAutoUpdateStructureReconcile() {
+    if (this.autoUpdateStructReconcileTimer) {
+      clearTimeout(this.autoUpdateStructReconcileTimer);
+      this.autoUpdateStructReconcileTimer = null;
+    }
+    this.autoUpdateStructReconcileQueue = [];
+    this.autoUpdateStructReconcileRunning = false;
+    this.autoUpdateStructReconcileSiteId = "";
+  }
+
+  scheduleAutoUpdateStructureReconcile({immediate = false, reset = false} = {}) {
+    if (!this.isAutoUpdateEnabledForActiveSite()) return;
+    const siteId = String(this.getActiveSiteId() || "").trim();
+    if (!siteId) return;
+    const shareIds = (Array.isArray(this.shares) ? this.shares : [])
+      .map((share) => String(share?.id || "").trim())
+      .filter((id) => id);
+    if (!shareIds.length) return;
+    const shouldReset =
+      reset ||
+      this.autoUpdateStructReconcileSiteId !== siteId ||
+      !Array.isArray(this.autoUpdateStructReconcileQueue) ||
+      this.autoUpdateStructReconcileQueue.length === 0;
+    if (shouldReset) {
+      this.autoUpdateStructReconcileQueue = shareIds;
+      this.autoUpdateStructReconcileSiteId = siteId;
+    }
+    if (this.autoUpdateStructReconcileRunning) return;
+    if (this.autoUpdateStructReconcileTimer) {
+      if (!immediate) return;
+      clearTimeout(this.autoUpdateStructReconcileTimer);
+      this.autoUpdateStructReconcileTimer = null;
+    }
+    const delay = immediate ? 180 : 1200;
+    this.autoUpdateStructReconcileTimer = setTimeout(() => {
+      this.autoUpdateStructReconcileTimer = null;
+      void this.runAutoUpdateStructureReconcileStep({siteId});
+    }, delay);
+  }
+
+  async runAutoUpdateStructureReconcileStep({siteId = ""} = {}) {
+    const activeSiteId = String(this.getActiveSiteId() || "").trim();
+    const expectedSiteId = String(siteId || activeSiteId).trim();
+    if (!activeSiteId || !expectedSiteId || activeSiteId !== expectedSiteId) {
+      this.stopAutoUpdateStructureReconcile();
+      return;
+    }
+    if (!this.isAutoUpdateEnabledForActiveSite()) {
+      this.stopAutoUpdateStructureReconcile();
+      return;
+    }
+    if (this.autoUpdating || this.autoUpdateCurrentController || this.backgroundSyncing) {
+      this.scheduleAutoUpdateStructureReconcile({immediate: false, reset: false});
+      return;
+    }
+    const queue = Array.isArray(this.autoUpdateStructReconcileQueue) ? this.autoUpdateStructReconcileQueue : [];
+    const shareId = String(queue.shift() || "").trim();
+    this.autoUpdateStructReconcileQueue = queue;
+    if (!shareId) {
+      this.stopAutoUpdateStructureReconcile();
+      return;
+    }
+    if (this.autoUpdateStructReconcileRunning) return;
+    this.autoUpdateStructReconcileRunning = true;
+    try {
+      if (!this.getShareById(shareId)) {
+        return;
+      }
+      const digest = await this.computeAutoUpdateStructureDigestForShare(shareId);
+      if (digest) {
+        const prevDigest = normalizeHashHex(this.autoUpdateStructDigestByShare?.[shareId]);
+        if (!prevDigest) {
+          this.autoUpdateStructDigestByShare[shareId] = digest;
+          this.schedulePersistAutoUpdateRuntime();
+        } else if (prevDigest !== digest) {
+          const added = this.enqueueAutoUpdateShareIds([shareId], {suppressQuietReset: true});
+          if (added > 0 || this.autoUpdateQueuedSet.has(shareId)) {
+            this.scheduleAutoUpdateNow(80);
+          }
+        }
+      }
+    } catch (err) {
+      if (!isAbortError(err)) {
+        console.warn("auto-update structure reconcile failed", err);
+      }
+    } finally {
+      this.autoUpdateStructReconcileRunning = false;
+    }
+    if (
+      this.isAutoUpdateEnabledForActiveSite() &&
+      String(this.getActiveSiteId() || "").trim() === activeSiteId &&
+      this.autoUpdateStructReconcileQueue.length > 0
+    ) {
+      this.scheduleAutoUpdateStructureReconcile({immediate: false, reset: false});
+    }
+  }
+
+  normalizeAutoUpdateDocMetaRow(row) {
+    const docId = String(row?.id || "").trim();
+    if (!isValidDocId(docId)) return null;
+    const notebookId = String(row?.box || row?.notebookId || "").trim();
+    const path = String(row?.path || "").trim();
+    const updated = normalizeDocUpdatedStamp(row?.updated);
+    const pathIds = new Set(collectDocIdsFromPath(path));
+    pathIds.add(docId);
+    return {
+      docId,
+      notebookId,
+      path,
+      updated,
+      pathIds,
+    };
+  }
+
+  async queryChangedDocMetaSince(sinceCursor, {controller = null} = {}) {
+    const t = this.t.bind(this);
+    const cursor = this.normalizeAutoUpdateScanCursor(sinceCursor);
+    const sinceUpdated = normalizeDocUpdatedStamp(cursor?.updated);
+    if (!sinceUpdated) return [];
+    const sinceDocId = isValidDocId(cursor?.docId) ? String(cursor.docId || "").trim() : "";
+    const quotedUpdated = escapeSqlString(sinceUpdated);
+    const quotedDocId = escapeSqlString(sinceDocId || "");
+    throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+    const rows = await this.querySqlRows(
+      `SELECT id, box, path, updated FROM blocks WHERE type='d' AND (updated > '${quotedUpdated}' OR (updated = '${quotedUpdated}' AND id > '${quotedDocId}')) ORDER BY updated ASC, id ASC`,
+    );
+    if (!Array.isArray(rows)) {
+      throw new Error("Auto update detection failed while querying changed docs");
+    }
+    return rows.map((row) => this.normalizeAutoUpdateDocMetaRow(row)).filter(Boolean);
+  }
+
+  async queryDocMetaByIds(docIds, {controller = null} = {}) {
+    const t = this.t.bind(this);
+    const ids = Array.from(
+      new Set((Array.isArray(docIds) ? docIds : []).map((id) => String(id || "").trim()).filter((id) => isValidDocId(id))),
+    );
+    if (!ids.length) return [];
+    const out = [];
+    for (const part of chunkArray(ids, 200)) {
+      throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+      const quoted = part.map((id) => `'${escapeSqlString(id)}'`).join(",");
+      const rows = await this.querySqlRows(
+        `SELECT id, box, path, updated FROM blocks WHERE type='d' AND id IN (${quoted})`,
+      );
+      if (!Array.isArray(rows)) {
+        throw new Error("Auto update detection failed while querying doc meta");
+      }
+      rows.forEach((row) => {
+        const normalized = this.normalizeAutoUpdateDocMetaRow(row);
+        if (normalized) out.push(normalized);
+      });
+    }
+    return out;
+  }
+
+  async queryRefImpactedDocIdsByTargets(targetDocIds, {controller = null} = {}) {
+    const t = this.t.bind(this);
+    const schema = await this.resolveRefQuerySchema();
+    if (!schema) return [];
+    const targets = Array.from(
+      new Set(
+        (Array.isArray(targetDocIds) ? targetDocIds : [])
+          .map((id) => String(id || "").trim())
+          .filter((id) => isValidDocId(id)),
+      ),
+    );
+    if (!targets.length) return [];
+    const impacted = new Set();
+    for (const part of chunkArray(targets, 120)) {
+      throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+      const quoted = part.map((id) => `'${escapeSqlString(id)}'`).join(",");
+      const rows = await this.querySqlRows(
+        `SELECT DISTINCT ${schema.rootCol} AS docId FROM ${schema.table} WHERE ${schema.targetCol} IN (${quoted})`,
+      );
+      if (!Array.isArray(rows)) {
+        throw new Error("Auto update detection failed while querying refs");
+      }
+      rows.forEach((row) => {
+        const docId = String(row?.docId || "").trim();
+        if (isValidDocId(docId)) impacted.add(docId);
+      });
+    }
+    return Array.from(impacted);
+  }
+
+  isDocMetaExcludedByRoots(docMeta, excludedSet) {
+    if (!docMeta || !(excludedSet instanceof Set) || excludedSet.size === 0) return false;
+    if (excludedSet.has(docMeta.docId)) return true;
+    for (const id of docMeta.pathIds || []) {
+      if (excludedSet.has(id)) return true;
+    }
+    return false;
+  }
+
+  buildAutoUpdateShareRules() {
+    return (Array.isArray(this.shares) ? this.shares : [])
+      .map((share) => {
+        const shareId = String(share?.id || "").trim();
+        if (!shareId) return null;
+        const fallbackIncludeChildren =
+          share?.type === SHARE_TYPES.NOTEBOOK
+            ? true
+            : typeof share?.includeChildren === "boolean"
+              ? share.includeChildren
+              : false;
+        const option = this.getShareOptionValue(shareId, {fallbackIncludeChildren});
+        const excludedDocIds = normalizeDocIdList(option?.excludedDocIds || share?.excludedDocIds || []);
+        const excludedSet = new Set(excludedDocIds);
+        if (share?.type === SHARE_TYPES.DOC && isValidDocId(share?.docId)) {
+          excludedSet.delete(String(share.docId || "").trim());
+        }
+        return {
+          shareId,
+          type: String(share?.type || ""),
+          docId: String(share?.docId || "").trim(),
+          notebookId: String(share?.notebookId || "").trim(),
+          includeChildren: !!option?.includeChildren,
+          excludedSet,
+        };
+      })
+      .filter(Boolean);
+  }
+
+  collectAutoUpdateShareIdsByDocMeta(docMeta, rules, outSet) {
+    if (!docMeta || !Array.isArray(rules) || !(outSet instanceof Set)) return;
+    rules.forEach((rule) => {
+      if (rule.type === SHARE_TYPES.NOTEBOOK) {
+        if (!rule.notebookId || docMeta.notebookId !== rule.notebookId) return;
+        if (this.isDocMetaExcludedByRoots(docMeta, rule.excludedSet)) return;
+        outSet.add(rule.shareId);
+        return;
+      }
+      if (rule.type !== SHARE_TYPES.DOC || !rule.docId) return;
+      if (docMeta.docId === rule.docId) {
+        outSet.add(rule.shareId);
+        return;
+      }
+      if (!rule.includeChildren) return;
+      if (!docMeta.pathIds?.has?.(rule.docId)) return;
+      if (this.isDocMetaExcludedByRoots(docMeta, rule.excludedSet)) return;
+      outSet.add(rule.shareId);
+    });
+  }
+
+  async detectAutoUpdateShareCandidates({siteId = "", controller = null} = {}) {
+    const activeSiteId = String(siteId || this.getActiveSiteId()).trim();
+    if (!activeSiteId) {
+      return {
+        sinceCursor: {updated: "", docId: ""},
+        nextCursor: {updated: "", docId: ""},
+        sinceStamp: "",
+        nextStamp: "",
+        shareIds: [],
+        changedCount: 0,
+      };
+    }
+    const fallbackUpdated = formatDocUpdatedStampFromMs(nowTs() - 90 * 1000);
+    const sinceCursor = this.getAutoUpdateScanCursor(activeSiteId);
+    const effectiveCursor = this.normalizeAutoUpdateScanCursor(sinceCursor) || {
+      updated: fallbackUpdated,
+      docId: "",
+    };
+    const changedMetas = await this.queryChangedDocMetaSince(effectiveCursor, {controller});
+    if (!Array.isArray(changedMetas) || changedMetas.length === 0) {
+      return {
+        sinceCursor: effectiveCursor,
+        nextCursor: effectiveCursor,
+        sinceStamp: normalizeDocUpdatedStamp(effectiveCursor?.updated),
+        nextStamp: normalizeDocUpdatedStamp(effectiveCursor?.updated),
+        shareIds: [],
+        changedCount: 0,
+      };
+    }
+    const changedIds = Array.from(new Set(changedMetas.map((meta) => String(meta?.docId || "").trim())));
+    const changedSet = new Set(changedIds);
+    const refImpactedDocIds = await this.queryRefImpactedDocIdsByTargets(changedIds, {controller});
+    const extraDocIds = Array.from(
+      new Set(
+        (Array.isArray(refImpactedDocIds) ? refImpactedDocIds : [])
+          .map((id) => String(id || "").trim())
+          .filter((id) => isValidDocId(id) && !changedSet.has(id)),
+      ),
+    );
+    const extraMetas = extraDocIds.length ? await this.queryDocMetaByIds(extraDocIds, {controller}) : [];
+    const allMetas = [...changedMetas, ...(Array.isArray(extraMetas) ? extraMetas : [])];
+    const rules = this.buildAutoUpdateShareRules();
+    const shareIdSet = new Set();
+    allMetas.forEach((meta) => this.collectAutoUpdateShareIdsByDocMeta(meta, rules, shareIdSet));
+    const nextCursor = changedMetas.reduce(
+      (maxCursor, meta) => {
+        const stamp = normalizeDocUpdatedStamp(meta?.updated);
+        const docId = String(meta?.docId || "").trim();
+        if (!stamp || !isValidDocId(docId)) return maxCursor;
+        const maxStamp = normalizeDocUpdatedStamp(maxCursor?.updated);
+        const maxDocId = isValidDocId(maxCursor?.docId) ? String(maxCursor.docId || "").trim() : "";
+        if (!maxStamp || stamp > maxStamp || (stamp === maxStamp && docId > maxDocId)) {
+          return {updated: stamp, docId};
+        }
+        return maxCursor;
+      },
+      {
+        updated: normalizeDocUpdatedStamp(effectiveCursor?.updated) || fallbackUpdated,
+        docId: isValidDocId(effectiveCursor?.docId) ? String(effectiveCursor.docId || "").trim() : "",
+      },
+    );
+    return {
+      sinceCursor: effectiveCursor,
+      nextCursor,
+      sinceStamp: normalizeDocUpdatedStamp(effectiveCursor?.updated),
+      nextStamp: normalizeDocUpdatedStamp(nextCursor?.updated) || formatDocUpdatedStampFromMs(nowTs()) || "",
+      shareIds: Array.from(shareIdSet),
+      changedCount: changedMetas.length,
+    };
+  }
+
+  enqueueAutoUpdateShareIds(
+    shareIds,
+    {ignoreRetryBlock = false, markChange = true, applyQuietWindow = true, suppressQuietReset = false} = {},
+  ) {
+    const normalized = Array.from(
+      new Set(
+        (Array.isArray(shareIds) ? shareIds : [])
+          .map((id) => String(id || "").trim())
+          .filter((id) => id),
+      ),
+    );
+    if (!normalized.length) return 0;
+    if (markChange && applyQuietWindow) {
+      const quietMs = this.getAutoUpdateQuietWindowMs();
+      if (quietMs > 0) {
+        const now = nowTs();
+        const dedupWindowMs = Math.max(0, Math.floor(Number(AUTO_UPDATE_QUIET_DEDUP_WINDOW_MS) || 0));
+        if (!this.autoUpdateQuietDeadlineByShare || typeof this.autoUpdateQuietDeadlineByShare !== "object") {
+          this.autoUpdateQuietDeadlineByShare = {};
+        }
+        const removeQueuedShare = (id) => {
+          if (this.autoUpdateQueuedSet.has(id)) {
+            this.autoUpdateQueue = this.autoUpdateQueue.filter((queuedId) => String(queuedId || "").trim() !== id);
+            this.autoUpdateQueuedSet.delete(id);
+          }
+          this.autoUpdateRerunSet.delete(id);
+        };
+        let deferred = 0;
+        const immediateIds = [];
+        normalized.forEach((shareId) => {
+          if (!this.getShareById(shareId)) return;
+          const deadline = Math.max(0, Math.floor(Number(this.autoUpdateQuietDeadlineByShare?.[shareId]) || 0));
+          const alreadyQuiet = this.autoUpdateQuietPendingSet.has(shareId) && deadline > now;
+          if (alreadyQuiet && suppressQuietReset) {
+            this.setAutoUpdateShareState(shareId, "quiet");
+            return;
+          }
+          const isCurrent = this.autoUpdateCurrentShareId === shareId;
+          const isQueued = this.autoUpdateQueuedSet.has(shareId) || this.autoUpdateRerunSet.has(shareId);
+          if (suppressQuietReset && !alreadyQuiet && (isCurrent || isQueued)) {
+            immediateIds.push(shareId);
+            return;
+          }
+          const stateInfo = this.getAutoUpdateShareState(shareId);
+          const lastQuietAt =
+            String(stateInfo?.state || "") === "quiet"
+              ? Math.max(0, Math.floor(Number(stateInfo?.updatedAt) || 0))
+              : 0;
+          if (alreadyQuiet && dedupWindowMs > 0 && lastQuietAt > 0 && now - lastQuietAt <= dedupWindowMs) {
+            this.setAutoUpdateShareState(shareId, "quiet");
+            return;
+          }
+          this.markAutoUpdateShareChanged([shareId]);
+          removeQueuedShare(shareId);
+          this.autoUpdateQuietPendingSet.add(shareId);
+          this.autoUpdateQuietDeadlineByShare[shareId] = now + quietMs;
+          if (
+            this.autoUpdateCurrentShareId === shareId &&
+            this.autoUpdateCurrentController &&
+            !this.autoUpdateCurrentController.signal?.aborted
+          ) {
+            this.autoUpdateAbortByQuietSet.add(shareId);
+            try {
+              this.autoUpdateCurrentController.abort();
+            } catch {
+              // ignore
+            }
+          }
+          this.setAutoUpdateShareState(shareId, "quiet");
+          deferred += 1;
+        });
+        if (deferred > 0) {
+          this.scheduleAutoUpdateQuietFlush();
+          this.schedulePersistAutoUpdateRuntime();
+        }
+        if (immediateIds.length > 0) {
+          return this.enqueueAutoUpdateShareIds(immediateIds, {
+            ignoreRetryBlock,
+            markChange,
+            applyQuietWindow: false,
+            suppressQuietReset: false,
+          });
+        }
+        return 0;
+      }
+    }
+    const now = nowTs();
+    let added = 0;
+    normalized.forEach((shareId) => {
+      if (markChange) {
+        this.markAutoUpdateShareChanged([shareId]);
+      }
+      if (!ignoreRetryBlock) {
+        const retry = this.isAutoUpdateRetryBlocked(shareId, now);
+        if (retry.blocked) {
+          const message =
+            retry.message ||
+            this.buildAutoUpdateRetryMessage({
+              attempt: retry.attempt || 1,
+              retryAt: retry.retryAt,
+              error: "",
+            });
+          this.setAutoUpdateShareState(shareId, "error", {message});
+          this.scheduleAutoUpdateRetryWakeup();
+          return;
+        }
+      }
+      if (this.autoUpdateCurrentShareId && this.autoUpdateCurrentShareId === shareId) {
+        this.autoUpdateRerunSet.add(shareId);
+        if (this.getAutoUpdateShareState(shareId)?.state !== "syncing") {
+          this.setAutoUpdateShareState(shareId, "queued");
+        }
+        return;
+      }
+      if (this.autoUpdateQueuedSet.has(shareId)) {
+        this.setAutoUpdateShareState(shareId, "queued");
+        return;
+      }
+      this.autoUpdateQueue.push(shareId);
+      this.autoUpdateQueuedSet.add(shareId);
+      this.setAutoUpdateShareState(shareId, "queued");
+      this.pushAutoUpdateHistory("info", this.t("siyuanShare.message.autoUpdateQueued"), {shareId});
+      added += 1;
+    });
+    if (added > 0) {
+      this.schedulePersistAutoUpdateRuntime();
+    }
+    return added;
+  }
+
+  async processAutoUpdateQueue({siteId = ""} = {}) {
+    const currentSiteId = String(siteId || this.getActiveSiteId()).trim();
+    let hadFailure = false;
+    let interrupted = false;
+    while (this.autoUpdateQueue.length > 0) {
+      if (!this.isAutoUpdateEnabledForActiveSite()) {
+        interrupted = true;
+        break;
+      }
+      if (String(this.getActiveSiteId() || "") !== currentSiteId) {
+        interrupted = true;
+        break;
+      }
+      if (this.backgroundSyncing) {
+        interrupted = true;
+        break;
+      }
+      const shareId = String(this.autoUpdateQueue.shift() || "").trim();
+      if (!shareId) continue;
+      this.autoUpdateQueuedSet.delete(shareId);
+      const retryGate = this.isAutoUpdateRetryBlocked(shareId);
+      if (retryGate.blocked) {
+        const blockedMessage =
+          retryGate.message ||
+          this.buildAutoUpdateRetryMessage({
+            attempt: retryGate.attempt || 1,
+            retryAt: retryGate.retryAt,
+          });
+        this.setAutoUpdateShareState(shareId, "error", {message: blockedMessage});
+        continue;
+      }
+      const share = this.getShareById(shareId);
+      if (!share) {
+        this.setAutoUpdateShareState(shareId, "");
+        this.clearAutoUpdateRetryState(shareId);
+        continue;
+      }
+      const controller = new AbortController();
+      this.autoUpdateCurrentShareId = shareId;
+      this.autoUpdateCurrentController = controller;
+      const expectedChangeSeq = this.getAutoUpdateShareChangeSeq(shareId);
+      this.setAutoUpdateShareState(shareId, "syncing");
+      this.pushAutoUpdateHistory("info", this.t("siyuanShare.message.autoUpdateSyncing"), {shareId});
+      try {
+        await this.updateShare(shareId, {background: true, controller, autoUpdateExpectedChangeSeq: expectedChangeSeq});
+        this.clearAutoUpdateRetryState(shareId);
+        if (this.autoUpdateRerunSet.has(shareId)) {
+          this.autoUpdateRerunSet.delete(shareId);
+          if (this.hasAutoUpdateQuietPending(shareId)) {
+            this.setAutoUpdateShareState(shareId, "quiet");
+            this.scheduleAutoUpdateQuietFlush();
+          } else if (!this.autoUpdateQueuedSet.has(shareId)) {
+            this.autoUpdateQueue.push(shareId);
+            this.autoUpdateQueuedSet.add(shareId);
+            this.setAutoUpdateShareState(shareId, "queued");
+          }
+        } else if (this.hasAutoUpdateQuietPending(shareId)) {
+          this.setAutoUpdateShareState(shareId, "quiet");
+          this.scheduleAutoUpdateQuietFlush();
+        } else {
+          this.setAutoUpdateShareState(shareId, "");
+        }
+        this.pushAutoUpdateHistory("success", this.t("siyuanShare.message.autoUpdateSuccess"), {shareId});
+      } catch (err) {
+        if (isAbortError(err)) {
+          if (this.autoUpdateAbortByQuietSet.has(shareId)) {
+            this.autoUpdateAbortByQuietSet.delete(shareId);
+            if (this.autoUpdateQueuedSet.has(shareId)) {
+              this.autoUpdateQueue = this.autoUpdateQueue.filter((id) => String(id || "").trim() !== shareId);
+              this.autoUpdateQueuedSet.delete(shareId);
+            }
+            this.autoUpdateRerunSet.delete(shareId);
+            if (this.hasAutoUpdateQuietPending(shareId)) {
+              this.setAutoUpdateShareState(shareId, "quiet");
+              this.scheduleAutoUpdateQuietFlush();
+            } else {
+              this.setAutoUpdateShareState(shareId, "");
+            }
+            continue;
+          }
+          if (this.autoUpdateAbortByManualSet.has(shareId)) {
+            this.autoUpdateAbortByManualSet.delete(shareId);
+            if (this.autoUpdateQueuedSet.has(shareId)) {
+              this.autoUpdateQueue = this.autoUpdateQueue.filter((id) => String(id || "").trim() !== shareId);
+              this.autoUpdateQueuedSet.delete(shareId);
+            }
+            this.autoUpdateRerunSet.delete(shareId);
+            if (this.hasAutoUpdateQuietPending(shareId)) {
+              this.setAutoUpdateShareState(shareId, "quiet");
+              this.scheduleAutoUpdateQuietFlush();
+            } else {
+              this.setAutoUpdateShareState(shareId, "");
+            }
+            continue;
+          }
+          interrupted = true;
+          if (!this.autoUpdateQueuedSet.has(shareId) && this.isAutoUpdateEnabledForActiveSite()) {
+            this.autoUpdateQueue.unshift(shareId);
+            this.autoUpdateQueuedSet.add(shareId);
+            this.setAutoUpdateShareState(shareId, "queued");
+          }
+          break;
+        }
+        hadFailure = true;
+        this.markAutoUpdateShareFailure(shareId, err);
+      } finally {
+        this.autoUpdateCurrentShareId = "";
+        this.autoUpdateCurrentController = null;
+      }
+    }
+    this.scheduleAutoUpdateRetryWakeup();
+    this.schedulePersistAutoUpdateRuntime();
+    return {hadFailure, interrupted};
+  }
+
+  async runAutoUpdateOnce() {
+    if (!this.isAutoUpdateEnabledForActiveSite()) return null;
+    if (!this.settings.siteUrl || !this.settings.apiKey) return null;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return null;
+    if (this.autoUpdating) return null;
+    if (this.backgroundSyncing) return null;
+    const siteId = String(this.getActiveSiteId() || "").trim();
+    if (!siteId) return null;
+    this.autoUpdating = true;
+    this.autoUpdateLastScanAt = nowTs();
+    this.refreshAutoUpdateStatusTextInDock();
+    try {
+      await this.flushAutoUpdateQuietPending();
+      const result = await this.detectAutoUpdateShareCandidates({siteId});
+      const shareIds = Array.isArray(result?.shareIds) ? result.shareIds : [];
+      if (shareIds.length > 0) {
+        this.enqueueAutoUpdateShareIds(shareIds, {suppressQuietReset: true});
+      }
+      const retryShareIds = this.getDueAutoUpdateRetryShareIds();
+      if (retryShareIds.length > 0) {
+        this.enqueueAutoUpdateShareIds(retryShareIds, {
+          ignoreRetryBlock: true,
+          markChange: false,
+          applyQuietWindow: false,
+        });
+      }
+      const queueResult = await this.processAutoUpdateQueue({siteId});
+      if (String(this.getActiveSiteId() || "") !== siteId) {
+        this.autoUpdateLastResult = {
+          changed: shareIds.length > 0,
+          retried: retryShareIds.length,
+          failed: !!queueResult?.hadFailure,
+          interrupted: true,
+        };
+        return {
+          changed: shareIds.length > 0,
+          failed: !!queueResult?.hadFailure,
+          interrupted: true,
+        };
+      }
+      if (!queueResult?.interrupted && Number(result?.changedCount) > 0) {
+        const nextCursor = this.normalizeAutoUpdateScanCursor(result?.nextCursor || {updated: result?.nextStamp, docId: ""});
+        if (nextCursor?.updated) {
+          await this.setAutoUpdateScanCursor(siteId, nextCursor);
+        }
+      }
+      const finalResult = {
+        changed: shareIds.length > 0,
+        retried: retryShareIds.length,
+        failed: !!queueResult?.hadFailure,
+        interrupted: !!queueResult?.interrupted,
+      };
+      this.autoUpdateLastResult = finalResult;
+      return {
+        changed: finalResult.changed,
+        failed: finalResult.failed,
+        interrupted: finalResult.interrupted,
+      };
+    } catch (err) {
+      if (!isAbortError(err)) {
+        console.warn("auto update failed", err);
+        this.pushAutoUpdateHistory("error", this.t("siyuanShare.message.autoUpdateLoopError"), {
+          detail: String(err?.message || err || ""),
+        });
+      }
+      this.autoUpdateLastResult = null;
+      return null;
+    } finally {
+      this.autoUpdating = false;
+      this.refreshAutoUpdateStatusTextInDock();
+      this.scheduleAutoUpdateRetryWakeup();
+    }
+  }
+
   getBackgroundSyncDelayMs() {
     const hidden = document?.hidden;
     const min = hidden ? this.backgroundSyncHiddenMinDelayMs : this.backgroundSyncMinDelayMs;
@@ -9987,13 +13024,21 @@ class SiYuanSharePlugin extends Plugin {
   }
 
   startBackgroundSync({immediate = false} = {}) {
-    if (this.backgroundSyncTimer) return;
+    if (this.backgroundSyncLoopRunner) {
+      if (immediate && this.backgroundSyncTimer) {
+        clearTimeout(this.backgroundSyncTimer);
+        this.backgroundSyncTimer = setTimeout(this.backgroundSyncLoopRunner, 0);
+      }
+      return;
+    }
     const loop = async () => {
+      if (this.backgroundSyncLoopRunner !== loop) return;
       if (this.backgroundSyncTimer) {
         clearTimeout(this.backgroundSyncTimer);
         this.backgroundSyncTimer = null;
       }
       const scheduleNext = () => {
+        if (this.backgroundSyncLoopRunner !== loop) return;
         const delay = this.getBackgroundSyncDelayMs();
         this.backgroundSyncTimer = setTimeout(loop, delay);
       };
@@ -10009,8 +13054,10 @@ class SiYuanSharePlugin extends Plugin {
       if (result) {
         this.updateBackgroundSyncDelay(result);
       }
+      if (this.backgroundSyncLoopRunner !== loop) return;
       scheduleNext();
     };
+    this.backgroundSyncLoopRunner = loop;
     this.backgroundSyncTimer = setTimeout(loop, immediate ? 0 : this.getBackgroundSyncDelayMs());
   }
 
@@ -10019,12 +13066,14 @@ class SiYuanSharePlugin extends Plugin {
       clearTimeout(this.backgroundSyncTimer);
       this.backgroundSyncTimer = null;
     }
+    this.backgroundSyncLoopRunner = null;
     this.backgroundSyncing = false;
   }
 
   async runBackgroundSyncOnce() {
     if (!this.settings.siteUrl || !this.settings.apiKey) return null;
     if (this.backgroundSyncing) return null;
+    if (this.autoUpdating || this.autoUpdateCurrentController) return null;
     if (typeof navigator !== "undefined" && navigator.onLine === false) return null;
     this.backgroundSyncing = true;
     let success = false;
@@ -10060,3 +13109,4 @@ function escapeAttr(str) {
 
 module.exports = SiYuanSharePlugin;
 module.exports.default = SiYuanSharePlugin;
+
