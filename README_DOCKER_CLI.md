@@ -23,6 +23,9 @@ mkdir -p ~/siyuan-share/php-site/storage ~/siyuan-share/php-site/uploads
 cd ~/siyuan-share
 ```
 
+> ⚠️ 除特别说明外，后续命令默认都在部署目录执行（示例：`~/siyuan-share`）。
+> 如果你把路径改成了其他目录，请先 `cd` 到对应目录再执行命令。
+
 ### 2. 配置文件说明（可选）
 
 `config.php` 不是必需文件。  
@@ -39,6 +42,7 @@ docker pull b8l8u8e8/siyuan-share-web:latest
 ### 4. 启动容器
 
 ```bash
+# 请先进入部署目录（示例：cd ~/siyuan-share）
 docker run -d \
   --name siyuan-share-web \
   --restart unless-stopped \
@@ -82,6 +86,7 @@ docker logs -f siyuan-share-web
 如果你需要使用自定义配置，推荐直接从镜像里的 `config.example.php` 复制，避免手敲：
 
 ```bash
+# 请先进入部署目录（示例：cd ~/siyuan-share）
 docker create --name sps-config-tmp b8l8u8e8/siyuan-share-web:latest
 docker cp sps-config-tmp:/var/www/html/config.example.php ./php-site/config.php
 docker rm sps-config-tmp
@@ -90,6 +95,7 @@ docker rm sps-config-tmp
 然后重建容器并添加挂载：
 
 ```bash
+# 请先进入部署目录（示例：cd ~/siyuan-share）
 docker rm -f siyuan-share-web
 docker run -d \
   --name siyuan-share-web \
@@ -142,6 +148,7 @@ docker rm -f siyuan-share-web
 ## 🔄 更新应用
 
 ```bash
+# 请先进入部署目录（示例：cd ~/siyuan-share）
 docker pull b8l8u8e8/siyuan-share-web:latest
 docker rm -f siyuan-share-web
 docker run -d \
