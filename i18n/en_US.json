@@ -171,6 +171,7 @@
   "siyuanShare.message.autoUpdateSyncing": "Auto update started",
   "siyuanShare.message.autoUpdateSuccess": "Auto update succeeded",
   "siyuanShare.message.autoUpdateFailed": "Auto update failed",
+  "siyuanShare.message.autoUpdateSkippedNotebookClosed": "Auto update skipped: {name} notebook is closed.",
   "siyuanShare.message.autoUpdateRetryAt": "Retry #{attempt} at {time}",
   "siyuanShare.message.autoUpdateLoopError": "Auto update loop error",
   "siyuanShare.message.autoUpdateQueueEmpty": "No queued tasks.",

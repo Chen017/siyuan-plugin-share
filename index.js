@@ -49,6 +49,8 @@ const AUTO_UPDATE_HISTORY_LIMIT = 2000;
 const AUTO_UPDATE_HISTORY_RENDER_LIMIT = 200;
 const AUTO_UPDATE_HISTORY_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 const AUTO_UPDATE_QUIET_DEDUP_WINDOW_MS = 1200;
+const AUTO_UPDATE_NOTEBOOK_CACHE_TTL_MS = 5 * 1000;
+const AUTO_UPDATE_NOTEBOOK_CLOSE_MONITOR_MS = 1500;
 
 const REMOTE_API = {
   verify: "/api/v1/auth/verify",
@@ -1949,6 +1951,8 @@ class SiYuanSharePlugin extends Plugin {
     this.remoteUser = null;
     this.remoteVerifiedAt = 0;
     this.notebooks = [];
+    this.notebooksFetchedAt = 0;
+    this.notebookRefreshPromise = null;
     this.docIconCache = new Map();
     this.docTreeContainer = null;
     this.docTreeObserver = null;
@@ -1985,6 +1989,8 @@ class SiYuanSharePlugin extends Plugin {
     this.autoUpdateShareChangeSeqById = {};
     this.autoUpdateAbortByQuietSet = new Set();
     this.autoUpdateAbortByManualSet = new Set();
+    this.autoUpdateAbortByNotebookClosedSet = new Set();
+    this.autoUpdateShareNotebookHintById = {};
     this.autoUpdateManualSkipDetectSet = new Set();
     this.autoUpdateManualSkipRealtimeOnceSet = new Set();
     this.autoUpdateQuietDeadlineByShare = {};
@@ -6089,9 +6095,11 @@ class SiYuanSharePlugin extends Plugin {
     this.autoUpdateHistory = history;
     this.autoUpdateCurrentShareId = "";
     this.autoUpdateCurrentController = null;
+    this.autoUpdateShareNotebookHintById = {};
     this.autoUpdateRerunSet.clear();
     this.autoUpdateAbortByQuietSet.clear();
     this.autoUpdateAbortByManualSet.clear();
+    this.autoUpdateAbortByNotebookClosedSet.clear();
     this.autoUpdateManualSkipDetectSet.clear();
     this.autoUpdateManualSkipRealtimeOnceSet.clear();
     if (this.autoUpdateQuietPendingSet.size > 0) {
@@ -8939,6 +8947,15 @@ class SiYuanSharePlugin extends Plugin {
       throwIfAborted(controller, t("siyuanShare.message.cancelled"));
       let subtreeDocs = [];
       const existingShare = this.getShareByDocId(docId);
+      if (background && isValidNotebookId(notebookId)) {
+        const isClosed = await this.isNotebookClosedForAutoUpdate(notebookId, {forceRefresh: true});
+        if (isClosed) {
+          if (existingShare?.id) {
+            this.autoUpdateAbortByNotebookClosedSet.add(String(existingShare.id));
+          }
+          throw createAbortError(this.buildAutoUpdateNotebookClosedSkipMessage(existingShare?.id || ""));
+        }
+      }
       let useIncremental = !!(existingShare?.id && this.supportsIncrementalShare());
       let remoteSnapshot = null;
       let shareMissingRemotely = false;
@@ -9321,6 +9338,7 @@ class SiYuanSharePlugin extends Plugin {
         if (syncError) throw syncError;
         throw new Error(t("siyuanShare.error.shareCreateFailed"));
       }
+      this.setAutoUpdateShareNotebookHint(share.id, notebookId);
       this.setShareOptionValue(share.id, {
         includeChildren: !!includeChildren,
         excludedDocIds: selectedExcludedDocIds,
@@ -9379,6 +9397,16 @@ class SiYuanSharePlugin extends Plugin {
         await this.refreshNotebookOptions({silent: true});
       }
       const notebook = this.notebooks.find((n) => n.id === notebookId);
+      if (background) {
+        const isClosed = await this.isNotebookClosedForAutoUpdate(notebookId, {forceRefresh: true});
+        if (isClosed) {
+          const closedShare = this.getShareByNotebookId(notebookId);
+          if (closedShare?.id) {
+            this.autoUpdateAbortByNotebookClosedSet.add(String(closedShare.id));
+          }
+          throw createAbortError(this.buildAutoUpdateNotebookClosedSkipMessage(closedShare?.id || ""));
+        }
+      }
       const tree = await this.listDocsInNotebook(notebookId);
       const docs = Array.isArray(tree?.docs) ? tree.docs : Array.isArray(tree) ? tree : [];
       const title = notebook?.name || tree?.title || notebookId;
@@ -9720,6 +9748,7 @@ class SiYuanSharePlugin extends Plugin {
         if (syncError) throw syncError;
         throw new Error(t("siyuanShare.error.shareCreateFailed"));
       }
+      this.setAutoUpdateShareNotebookHint(share.id, notebookId);
       this.setShareOptionValue(share.id, {
         includeChildren: true,
         excludedDocIds: selectedExcludedDocIds,
@@ -10343,6 +10372,9 @@ class SiYuanSharePlugin extends Plugin {
       this.autoUpdateAbortByManualSet.delete(key);
     }
     if (key) {
+      this.autoUpdateAbortByNotebookClosedSet.delete(key);
+    }
+    if (key) {
       this.autoUpdateManualSkipDetectSet.delete(key);
       this.autoUpdateManualSkipRealtimeOnceSet.delete(key);
     }
@@ -10794,6 +10826,12 @@ class SiYuanSharePlugin extends Plugin {
     const withPasswords = this.applySharePasswords(rawShares, passwordMap);
     const shares = this.applyShareOptions(withPasswords);
     this.shares = shares;
+    (Array.isArray(shares) ? shares : []).forEach((share) => {
+      const shareId = String(share?.id || "").trim();
+      const notebookId = String(share?.notebookId || "").trim();
+      if (!shareId || !isValidNotebookId(notebookId)) return;
+      this.setAutoUpdateShareNotebookHint(shareId, notebookId);
+    });
     this.pruneAutoUpdateShareStates();
     if (activeSiteId) {
       this.siteShares[activeSiteId] = shares;
@@ -10853,10 +10891,81 @@ class SiYuanSharePlugin extends Plugin {
     return resp?.data?.notebooks || [];
   }
 
+  getNotebookRowId(notebookRow) {
+    const id = String(notebookRow?.id || notebookRow?.box || notebookRow?.notebookId || "").trim();
+    return isValidNotebookId(id) ? id : "";
+  }
+
+  isNotebookClosedRow(notebookRow) {
+    if (!notebookRow || typeof notebookRow !== "object") return false;
+    if (notebookRow.closed === true || notebookRow.isClosed === true) return true;
+    if (typeof notebookRow.opened === "boolean") return notebookRow.opened === false;
+    return false;
+  }
+
+  isNotebookClosedForAutoUpdateFromRows(notebookId, notebooks) {
+    const id = String(notebookId || "").trim();
+    if (!isValidNotebookId(id)) return false;
+    const row = (Array.isArray(notebooks) ? notebooks : []).find((item) => this.getNotebookRowId(item) === id);
+    if (!row) return false;
+    return this.isNotebookClosedRow(row);
+  }
+
+  async getAutoUpdateShareNotebookId(share, {controller = null} = {}) {
+    if (!share || typeof share !== "object") return "";
+    const shareId = String(share?.id || "").trim();
+    const direct = String(share?.notebookId || "").trim();
+    if (isValidNotebookId(direct)) {
+      if (shareId) this.setAutoUpdateShareNotebookHint(shareId, direct);
+      return direct;
+    }
+    const hinted = this.getAutoUpdateShareNotebookHint(shareId);
+    if (isValidNotebookId(hinted)) return hinted;
+    const docId = String(share?.docId || "").trim();
+    if (!isValidDocId(docId)) return "";
+    throwIfAborted(controller, this.t("siyuanShare.message.cancelled"));
+    const row = await this.fetchBlockRow(docId);
+    const rowNotebookId = String(row?.box || row?.notebookId || "").trim();
+    if (isValidNotebookId(rowNotebookId)) {
+      if (shareId) this.setAutoUpdateShareNotebookHint(shareId, rowNotebookId);
+      return rowNotebookId;
+    }
+    return "";
+  }
+
+  async refreshNotebookStateForAutoUpdate({force = false} = {}) {
+    const cached = Array.isArray(this.notebooks) ? this.notebooks : [];
+    const now = nowTs();
+    const isFresh = this.notebooksFetchedAt > 0 && now - this.notebooksFetchedAt <= AUTO_UPDATE_NOTEBOOK_CACHE_TTL_MS;
+    if (!force && isFresh) return cached;
+    if (this.notebookRefreshPromise) return this.notebookRefreshPromise;
+    this.notebookRefreshPromise = (async () => {
+      try {
+        const notebooks = await this.fetchNotebooks();
+        this.notebooks = Array.isArray(notebooks) ? notebooks : [];
+        this.notebooksFetchedAt = nowTs();
+      } catch (err) {
+        console.warn("refresh notebook state for auto-update failed", err);
+      } finally {
+        this.notebookRefreshPromise = null;
+      }
+      return Array.isArray(this.notebooks) ? this.notebooks : [];
+    })();
+    return this.notebookRefreshPromise;
+  }
+
+  async isNotebookClosedForAutoUpdate(notebookId, {forceRefresh = false} = {}) {
+    const id = String(notebookId || "").trim();
+    if (!isValidNotebookId(id)) return false;
+    const notebooks = await this.refreshNotebookStateForAutoUpdate({force: forceRefresh});
+    return this.isNotebookClosedForAutoUpdateFromRows(id, notebooks);
+  }
+
   async refreshNotebookOptions({silent = false} = {}) {
     const t = this.t.bind(this);
     try {
       this.notebooks = await this.fetchNotebooks();
+      this.notebooksFetchedAt = nowTs();
       if (!silent) this.notify(t("siyuanShare.message.notebookListRefreshed"));
     } catch (err) {
       if (!silent) this.showErr(err);
@@ -11499,6 +11608,9 @@ class SiYuanSharePlugin extends Plugin {
     if (this.autoUpdateAbortByQuietSet.delete(id)) {
       changed = true;
     }
+    if (this.autoUpdateAbortByNotebookClosedSet.delete(id)) {
+      changed = true;
+    }
     if (clearRetry && Object.prototype.hasOwnProperty.call(this.autoUpdateRetryStateByShare || {}, id)) {
       delete this.autoUpdateRetryStateByShare[id];
       changed = true;
@@ -11636,6 +11748,31 @@ class SiYuanSharePlugin extends Plugin {
     if (hasWsBacklog) {
       this.autoUpdateManualSkipRealtimeOnceSet.add(id);
     }
+  }
+
+  buildAutoUpdateNotebookClosedSkipMessage(shareId) {
+    return this.t("siyuanShare.message.autoUpdateSkippedNotebookClosed", {
+      name: this.getAutoUpdateShareLabel(shareId),
+    });
+  }
+
+  markAutoUpdateShareSkippedNotebookClosed(shareId, {clearQuiet = true} = {}) {
+    const id = String(shareId || "").trim();
+    if (!id) return;
+    if (this.autoUpdateQueuedSet.has(id)) {
+      this.autoUpdateQueue = this.autoUpdateQueue.filter((queuedId) => String(queuedId || "").trim() !== id);
+      this.autoUpdateQueuedSet.delete(id);
+    }
+    this.autoUpdateRerunSet.delete(id);
+    if (clearQuiet) {
+      this.autoUpdateQuietPendingSet.delete(id);
+      delete this.autoUpdateQuietDeadlineByShare[id];
+      delete this.autoUpdateQuietFirstEnteredByShare[id];
+    }
+    this.autoUpdateAbortByNotebookClosedSet.delete(id);
+    this.clearAutoUpdateRetryState(id);
+    this.setAutoUpdateShareState(id, "");
+    this.pushAutoUpdateHistory("info", this.buildAutoUpdateNotebookClosedSkipMessage(id), {shareId: id});
   }
 
   getAutoUpdateRetryDelayMs(attempt = 1) {
@@ -12212,6 +12349,8 @@ class SiYuanSharePlugin extends Plugin {
     this.autoUpdateRerunSet.clear();
     this.autoUpdateAbortByQuietSet.clear();
     this.autoUpdateAbortByManualSet.clear();
+    this.autoUpdateAbortByNotebookClosedSet.clear();
+    this.autoUpdateShareNotebookHintById = {};
     this.autoUpdateManualSkipDetectSet.clear();
     this.autoUpdateManualSkipRealtimeOnceSet.clear();
     if (this.autoUpdateQuietFlushTimer) {
@@ -12379,6 +12518,16 @@ class SiYuanSharePlugin extends Plugin {
       nextManualAbortSet.add(id);
     });
     this.autoUpdateAbortByManualSet = nextManualAbortSet;
+    const nextNotebookClosedAbortSet = new Set();
+    this.autoUpdateAbortByNotebookClosedSet.forEach((shareId) => {
+      const id = String(shareId || "").trim();
+      if (!id || !shareIdSet.has(id)) {
+        changed = true;
+        return;
+      }
+      nextNotebookClosedAbortSet.add(id);
+    });
+    this.autoUpdateAbortByNotebookClosedSet = nextNotebookClosedAbortSet;
     if (this.autoUpdateCurrentShareId && !shareIdSet.has(this.autoUpdateCurrentShareId)) {
       if (this.autoUpdateCurrentController && !this.autoUpdateCurrentController.signal?.aborted) {
         try {
@@ -12418,6 +12567,11 @@ class SiYuanSharePlugin extends Plugin {
       delete this.autoUpdateStructDigestByShare[shareId];
       changed = true;
     });
+    Object.keys(this.autoUpdateShareNotebookHintById || {}).forEach((shareId) => {
+      if (shareIdSet.has(String(shareId))) return;
+      delete this.autoUpdateShareNotebookHintById[shareId];
+      changed = true;
+    });
     if (changed) {
       this.scheduleAutoUpdateQuietFlush();
       this.refreshDocTreeMarksLater();
@@ -12430,6 +12584,25 @@ class SiYuanSharePlugin extends Plugin {
     const id = String(shareId || "").trim();
     if (!id) return null;
     return this.autoUpdateShareStates?.[id] || null;
+  }
+
+  getAutoUpdateShareNotebookHint(shareId) {
+    const id = String(shareId || "").trim();
+    if (!id) return "";
+    const notebookId = String(this.autoUpdateShareNotebookHintById?.[id] || "").trim();
+    return isValidNotebookId(notebookId) ? notebookId : "";
+  }
+
+  setAutoUpdateShareNotebookHint(shareId, notebookId) {
+    const id = String(shareId || "").trim();
+    const boxId = String(notebookId || "").trim();
+    if (!id || !isValidNotebookId(boxId)) return;
+    if (!this.autoUpdateShareNotebookHintById || typeof this.autoUpdateShareNotebookHintById !== "object") {
+      this.autoUpdateShareNotebookHintById = {};
+    }
+    if (this.autoUpdateShareNotebookHintById[id] !== boxId) {
+      this.autoUpdateShareNotebookHintById[id] = boxId;
+    }
   }
 
   getAutoUpdateShareChangeSeq(shareId) {
@@ -12550,22 +12723,29 @@ class SiYuanSharePlugin extends Plugin {
     }
     const now = nowTs();
     const dueIds = [];
-    Array.from(this.autoUpdateQuietPendingSet).forEach((shareIdRaw) => {
+    const notebooks = await this.refreshNotebookStateForAutoUpdate({force: true});
+    for (const shareIdRaw of Array.from(this.autoUpdateQuietPendingSet)) {
       const shareId = String(shareIdRaw || "").trim();
-      if (!shareId) return;
-      if (!this.getShareById(shareId)) {
+      if (!shareId) continue;
+      const share = this.getShareById(shareId);
+      if (!share) {
         this.autoUpdateQuietPendingSet.delete(shareId);
         delete this.autoUpdateQuietDeadlineByShare[shareId];
         delete this.autoUpdateQuietFirstEnteredByShare[shareId];
-        return;
+        continue;
+      }
+      const notebookId = await this.getAutoUpdateShareNotebookId(share);
+      if (isValidNotebookId(notebookId) && this.isNotebookClosedForAutoUpdateFromRows(notebookId, notebooks)) {
+        this.markAutoUpdateShareSkippedNotebookClosed(shareId, {clearQuiet: true});
+        continue;
       }
       const deadline = Math.max(0, Math.floor(Number(this.autoUpdateQuietDeadlineByShare?.[shareId]) || 0));
-      if (!deadline || deadline > now) return;
+      if (!deadline || deadline > now) continue;
       dueIds.push(shareId);
       this.autoUpdateQuietPendingSet.delete(shareId);
       delete this.autoUpdateQuietDeadlineByShare[shareId];
       delete this.autoUpdateQuietFirstEnteredByShare[shareId];
-    });
+    }
     let added = 0;
     if (dueIds.length > 0) {
       added = this.enqueueAutoUpdateShareIds(dueIds, {
@@ -12665,6 +12845,8 @@ class SiYuanSharePlugin extends Plugin {
       });
       candidateShareIds = Array.from(new Set([...forceShareIdSet, ...digestPassed]));
     }
+    if (!candidateShareIds.length) return 0;
+    candidateShareIds = await this.filterAutoUpdateShareIdsByNotebookClosed(candidateShareIds, {forceRefresh: true});
     if (!candidateShareIds.length) return 0;
     const added = this.enqueueAutoUpdateShareIds(candidateShareIds);
     if (added > 0 || this.autoUpdateQueue.length > 0 || this.autoUpdateQuietPendingSet.size > 0) {
@@ -12771,6 +12953,11 @@ class SiYuanSharePlugin extends Plugin {
           : false;
     const option = this.getShareOptionValue(shareId, {fallbackIncludeChildren});
     const excludedDocIds = normalizeDocIdList(option?.excludedDocIds || share?.excludedDocIds || []);
+    const notebookIdForShare = await this.getAutoUpdateShareNotebookId(share, {controller});
+    if (isValidNotebookId(notebookIdForShare)) {
+      const isClosed = await this.isNotebookClosedForAutoUpdate(notebookIdForShare, {forceRefresh: true});
+      if (isClosed) return [];
+    }
     if (share?.type === SHARE_TYPES.NOTEBOOK) {
       const notebookId = String(share?.notebookId || "").trim();
       if (!isValidNotebookId(notebookId)) return [];
@@ -12947,13 +13134,23 @@ class SiYuanSharePlugin extends Plugin {
     if (this.autoUpdateStructReconcileRunning) return;
     this.autoUpdateStructReconcileRunning = true;
     try {
-      if (this.getShareById(shareId)) {
+      const share = this.getShareById(shareId);
+      if (share) {
+        const notebookId = await this.getAutoUpdateShareNotebookId(share);
+        const isClosed =
+          isValidNotebookId(notebookId) &&
+          (await this.isNotebookClosedForAutoUpdate(notebookId, {forceRefresh: true}));
         const digest = await this.computeAutoUpdateStructureDigestForShare(shareId);
         if (digest) {
           const prevDigest = normalizeHashHex(this.autoUpdateStructDigestByShare?.[shareId]);
           if (!prevDigest) {
             this.autoUpdateStructDigestByShare[shareId] = digest;
             this.schedulePersistAutoUpdateRuntime();
+          } else if (isClosed) {
+            if (prevDigest !== digest) {
+              this.autoUpdateStructDigestByShare[shareId] = digest;
+              this.schedulePersistAutoUpdateRuntime();
+            }
           } else if (prevDigest !== digest) {
             const added = this.enqueueAutoUpdateShareIds([shareId], {suppressQuietReset: true});
             if (added > 0 || this.autoUpdateQueuedSet.has(shareId)) {
@@ -13107,23 +13304,51 @@ class SiYuanSharePlugin extends Plugin {
 
   collectAutoUpdateShareIdsByDocMeta(docMeta, rules, outSet) {
     if (!docMeta || !Array.isArray(rules) || !(outSet instanceof Set)) return;
+    const notebookId = String(docMeta?.notebookId || "").trim();
     rules.forEach((rule) => {
       if (rule.type === SHARE_TYPES.NOTEBOOK) {
         if (!rule.notebookId || docMeta.notebookId !== rule.notebookId) return;
         if (this.isDocMetaExcludedByRoots(docMeta, rule.excludedSet)) return;
         outSet.add(rule.shareId);
+        this.setAutoUpdateShareNotebookHint(rule.shareId, rule.notebookId || notebookId);
         return;
       }
       if (rule.type !== SHARE_TYPES.DOC || !rule.docId) return;
       if (docMeta.docId === rule.docId) {
         outSet.add(rule.shareId);
+        this.setAutoUpdateShareNotebookHint(rule.shareId, notebookId);
         return;
       }
       if (!rule.includeChildren) return;
       if (!docMeta.pathIds?.has?.(rule.docId)) return;
       if (this.isDocMetaExcludedByRoots(docMeta, rule.excludedSet)) return;
       outSet.add(rule.shareId);
+      this.setAutoUpdateShareNotebookHint(rule.shareId, notebookId);
     });
+  }
+
+  async filterAutoUpdateShareIdsByNotebookClosed(shareIds, {forceRefresh = true} = {}) {
+    const normalizedShareIds = Array.from(
+      new Set(
+        (Array.isArray(shareIds) ? shareIds : [])
+          .map((id) => String(id || "").trim())
+          .filter((id) => id),
+      ),
+    );
+    if (!normalizedShareIds.length) return [];
+    const notebooks = await this.refreshNotebookStateForAutoUpdate({force: forceRefresh});
+    const openShareIds = [];
+    for (const shareId of normalizedShareIds) {
+      const share = this.getShareById(shareId);
+      if (!share) continue;
+      const notebookId = await this.getAutoUpdateShareNotebookId(share);
+      if (isValidNotebookId(notebookId) && this.isNotebookClosedForAutoUpdateFromRows(notebookId, notebooks)) {
+        this.markAutoUpdateShareSkippedNotebookClosed(shareId, {clearQuiet: true});
+        continue;
+      }
+      openShareIds.push(shareId);
+    }
+    return openShareIds;
   }
 
   async detectAutoUpdateShareCandidates({siteId = "", controller = null} = {}) {
@@ -13386,14 +13611,54 @@ class SiYuanSharePlugin extends Plugin {
         this.clearAutoUpdateRetryState(shareId);
         continue;
       }
+      this.autoUpdateAbortByNotebookClosedSet.delete(shareId);
+      const shareNotebookId = await this.getAutoUpdateShareNotebookId(share);
+      if (isValidNotebookId(shareNotebookId)) {
+        const isClosed = await this.isNotebookClosedForAutoUpdate(shareNotebookId, {forceRefresh: true});
+        if (isClosed) {
+          this.markAutoUpdateShareSkippedNotebookClosed(shareId, {clearQuiet: true});
+          continue;
+        }
+      }
       const controller = new AbortController();
       this.autoUpdateCurrentShareId = shareId;
       this.autoUpdateCurrentController = controller;
       const expectedChangeSeq = this.getAutoUpdateShareChangeSeq(shareId);
+      let notebookCloseMonitorTimer = null;
+      let notebookCloseMonitorRunning = false;
+      const stopNotebookCloseMonitor = () => {
+        if (!notebookCloseMonitorTimer) return;
+        clearInterval(notebookCloseMonitorTimer);
+        notebookCloseMonitorTimer = null;
+      };
+      const scheduleNotebookCloseMonitor = () => {
+        if (!isValidNotebookId(shareNotebookId)) return;
+        notebookCloseMonitorTimer = setInterval(() => {
+          if (notebookCloseMonitorRunning) return;
+          notebookCloseMonitorRunning = true;
+          void this.isNotebookClosedForAutoUpdate(shareNotebookId, {forceRefresh: true})
+            .then((isClosed) => {
+              if (!isClosed) return;
+              this.autoUpdateAbortByNotebookClosedSet.add(shareId);
+              if (controller && !controller.signal?.aborted) {
+                try {
+                  controller.abort();
+                } catch {
+                  // ignore
+                }
+              }
+            })
+            .finally(() => {
+              notebookCloseMonitorRunning = false;
+            });
+        }, AUTO_UPDATE_NOTEBOOK_CLOSE_MONITOR_MS);
+      };
       this.setAutoUpdateShareState(shareId, "syncing");
       this.pushAutoUpdateHistory("info", this.t("siyuanShare.message.autoUpdateSyncing"), {shareId});
+      scheduleNotebookCloseMonitor();
       try {
         await this.updateShare(shareId, {background: true, controller, autoUpdateExpectedChangeSeq: expectedChangeSeq});
+        this.autoUpdateAbortByNotebookClosedSet.delete(shareId);
         this.clearAutoUpdateRetryState(shareId);
         if (this.autoUpdateRerunSet.has(shareId)) {
           this.autoUpdateRerunSet.delete(shareId);
@@ -13414,6 +13679,11 @@ class SiYuanSharePlugin extends Plugin {
         this.pushAutoUpdateHistory("success", this.t("siyuanShare.message.autoUpdateSuccess"), {shareId});
       } catch (err) {
         if (isAbortError(err)) {
+          if (this.autoUpdateAbortByNotebookClosedSet.has(shareId)) {
+            this.autoUpdateAbortByNotebookClosedSet.delete(shareId);
+            this.markAutoUpdateShareSkippedNotebookClosed(shareId, {clearQuiet: true});
+            continue;
+          }
           if (this.autoUpdateAbortByQuietSet.has(shareId)) {
             this.autoUpdateAbortByQuietSet.delete(shareId);
             if (this.autoUpdateQueuedSet.has(shareId)) {
@@ -13455,10 +13725,18 @@ class SiYuanSharePlugin extends Plugin {
           }
           break;
         }
+        if (isValidNotebookId(shareNotebookId)) {
+          const isClosed = await this.isNotebookClosedForAutoUpdate(shareNotebookId, {forceRefresh: true});
+          if (isClosed) {
+            this.markAutoUpdateShareSkippedNotebookClosed(shareId, {clearQuiet: true});
+            continue;
+          }
+        }
         this.autoUpdateRerunSet.delete(shareId);
         hadFailure = true;
         this.markAutoUpdateShareFailure(shareId, err);
       } finally {
+        stopNotebookCloseMonitor();
         this.autoUpdateCurrentShareId = "";
         this.autoUpdateCurrentController = null;
       }
@@ -13483,12 +13761,20 @@ class SiYuanSharePlugin extends Plugin {
       await this.flushAutoUpdateQuietPending();
       const result = await this.detectAutoUpdateShareCandidates({siteId});
       const shareIds = Array.isArray(result?.shareIds) ? result.shareIds : [];
-      if (shareIds.length > 0) {
-        this.enqueueAutoUpdateShareIds(shareIds, {suppressQuietReset: true, manualSkipTag: "detect"});
+      const openShareIds =
+        shareIds.length > 0
+          ? await this.filterAutoUpdateShareIdsByNotebookClosed(shareIds, {forceRefresh: true})
+          : [];
+      if (openShareIds.length > 0) {
+        this.enqueueAutoUpdateShareIds(openShareIds, {suppressQuietReset: true, manualSkipTag: "detect"});
       }
       const retryShareIds = this.getDueAutoUpdateRetryShareIds();
-      if (retryShareIds.length > 0) {
-        this.enqueueAutoUpdateShareIds(retryShareIds, {
+      const openRetryShareIds =
+        retryShareIds.length > 0
+          ? await this.filterAutoUpdateShareIdsByNotebookClosed(retryShareIds, {forceRefresh: true})
+          : [];
+      if (openRetryShareIds.length > 0) {
+        this.enqueueAutoUpdateShareIds(openRetryShareIds, {
           ignoreRetryBlock: true,
           markChange: false,
           applyQuietWindow: false,
@@ -13497,13 +13783,13 @@ class SiYuanSharePlugin extends Plugin {
       const queueResult = await this.processAutoUpdateQueue({siteId});
       if (String(this.getActiveSiteId() || "") !== siteId) {
         this.autoUpdateLastResult = {
-          changed: shareIds.length > 0,
-          retried: retryShareIds.length,
+          changed: openShareIds.length > 0,
+          retried: openRetryShareIds.length,
           failed: !!queueResult?.hadFailure,
           interrupted: true,
         };
         return {
-          changed: shareIds.length > 0,
+          changed: openShareIds.length > 0,
           failed: !!queueResult?.hadFailure,
           interrupted: true,
         };
@@ -13515,8 +13801,8 @@ class SiYuanSharePlugin extends Plugin {
         }
       }
       const finalResult = {
-        changed: shareIds.length > 0,
-        retried: retryShareIds.length,
+        changed: openShareIds.length > 0,
+        retried: openRetryShareIds.length,
         failed: !!queueResult?.hadFailure,
         interrupted: !!queueResult?.interrupted,
       };
