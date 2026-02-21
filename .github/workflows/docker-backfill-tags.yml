@@ -1,0 +1,126 @@
+name: Docker Backfill Tags
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_pattern:
+        description: "要补齐的 Git Tag 匹配模式（例如 v*）"
+        required: false
+        default: "v*"
+      dry_run:
+        description: "仅预览（true/false）"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set image name
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${{ vars.DOCKERHUB_IMAGE_NAME }}" ]; then
+            IMAGE="${{ vars.DOCKERHUB_IMAGE_NAME }}"
+          else
+            IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/siyuan-share-web"
+          fi
+          if [ -z "$IMAGE" ] || [ "$IMAGE" = "/siyuan-share-web" ]; then
+            echo "Image name is empty."
+            echo "Set repository variable DOCKERHUB_IMAGE_NAME, or set secret DOCKERHUB_USERNAME."
+            exit 1
+          fi
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "Using image: $IMAGE"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Backfill missing tags
+        shell: bash
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+          TAG_PATTERN: ${{ inputs.tag_pattern }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          git fetch --tags --force
+
+          mapfile -t TAGS < <(git tag -l "${TAG_PATTERN}" --sort=version:refname)
+          if [ "${#TAGS[@]}" -eq 0 ]; then
+            echo "No tags matched pattern: ${TAG_PATTERN}"
+            exit 0
+          fi
+
+          echo "Matched tags (${#TAGS[@]}): ${TAGS[*]}"
+
+          skipped=0
+          pushed=0
+          failed=0
+
+          for tag in "${TAGS[@]}"; do
+            echo "----------------------------------------"
+            echo "Checking ${IMAGE}:${tag}"
+
+            if docker buildx imagetools inspect "${IMAGE}:${tag}" >/dev/null 2>&1; then
+              echo "Exists, skip: ${IMAGE}:${tag}"
+              skipped=$((skipped + 1))
+              continue
+            fi
+
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "[dry-run] Missing tag, would push: ${IMAGE}:${tag}"
+              continue
+            fi
+
+            echo "Missing tag, build & push from git tag: ${tag}"
+            git checkout --force "${tag}"
+
+            if docker buildx build \
+              --platform linux/amd64,linux/arm/v7,linux/arm64/v8 \
+              --file php-site/Dockerfile \
+              --tag "${IMAGE}:${tag}" \
+              --push \
+              .; then
+              echo "Pushed: ${IMAGE}:${tag}"
+              pushed=$((pushed + 1))
+            else
+              echo "Failed: ${IMAGE}:${tag}"
+              failed=$((failed + 1))
+            fi
+          done
+
+          # 切回触发工作流时的提交
+          git checkout --force "${GITHUB_SHA}"
+
+          echo "----------------------------------------"
+          echo "Done."
+          echo "Skipped(existing): ${skipped}"
+          echo "Pushed(new):       ${pushed}"
+          echo "Failed:            ${failed}"
+
+          if [ "${failed}" -gt 0 ]; then
+            exit 1
+          fi
+
