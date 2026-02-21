@@ -5,6 +5,7 @@ services:
     build:
       context: .
       dockerfile: php-site/Dockerfile
+    image: siyuan-share-web:latest
     container_name: siyuan-share-web
     ports:
       - "8080:80"
