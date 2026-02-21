@@ -192,12 +192,23 @@ docker-compose -f docker-compose.nas.yml logs -f
 
 ### 如果还是有权限问题
 
-尝试方案 2 - 修改 entrypoint 脚本,使其在容器内部创建 storage:
+先按下面步骤排查：
 
 ```bash
-# 修改 docker-entrypoint.sh
-# 如果 /var/www/html/storage 不可写,则使用容器内部目录
+# 1) 查看容器日志
+docker-compose -f docker-compose.nas.yml logs --tail=200 web
+
+# 2) 进入容器检查目录是否可写
+docker-compose -f docker-compose.nas.yml exec web sh -lc "id && ls -ld /var/www/html/storage /var/www/html/uploads"
+docker-compose -f docker-compose.nas.yml exec web sh -lc "touch /var/www/html/storage/.rw && rm /var/www/html/storage/.rw && echo storage-ok"
+docker-compose -f docker-compose.nas.yml exec web sh -lc "touch /var/www/html/uploads/.rw && rm /var/www/html/uploads/.rw && echo uploads-ok"
+
+# 3) 确认 volume 挂载状态
+docker volume inspect siyuan-plugin-share_storage-data
+docker volume inspect siyuan-plugin-share_uploads-data
 ```
+
+如果仍有问题，建议先备份后重建 volume 再恢复数据。
 
 ### 检查 Docker 版本
 
