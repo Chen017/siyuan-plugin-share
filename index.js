@@ -1974,7 +1974,7 @@ class SiYuanSharePlugin extends Plugin {
     this.autoUpdateHiddenDelayMs = 60 * 1000;
     this.autoUpdateRetryBaseDelayMs = 30 * 1000;
     this.autoUpdateRetryMaxDelayMs = 30 * 60 * 1000;
-    this.autoUpdateQuietWindowMs = 10 * 1000;
+    this.autoUpdateQuietWindowMs = 60 * 1000;
     this.autoUpdateQueue = [];
     this.autoUpdateQueuedSet = new Set();
     this.autoUpdateRerunSet = new Set();
@@ -2016,6 +2016,7 @@ class SiYuanSharePlugin extends Plugin {
       siteNameInput: null,
       autoUpdateInput: null,
       autoUpdateRow: null,
+      quietWindowInput: null,
       connectActions: null,
       currentWrap: null,
       sharesWrap: null,
@@ -2143,6 +2144,9 @@ class SiYuanSharePlugin extends Plugin {
     }
     if (this.settingEls.autoUpdateInput) {
       this.settingEls.autoUpdateInput.removeEventListener("change", this.onSettingAutoUpdateToggleChange);
+    }
+    if (this.settingEls.quietWindowInput) {
+      this.settingEls.quietWindowInput.removeEventListener("change", this.onSettingQuietWindowChange);
     }
     if (this.settingEls.autoUpdateRow) {
       this.settingEls.autoUpdateRow.removeEventListener("click", this.onSettingActionsClick);
@@ -2741,6 +2745,7 @@ class SiYuanSharePlugin extends Plugin {
     };
     if (hasTreeRoot) {
       applyMarks(this.docTreeContainer, false);
+      applyMarks(document, true);
       return;
     }
     applyMarks(document, true);
@@ -4448,10 +4453,17 @@ class SiYuanSharePlugin extends Plugin {
   }
 
   applySettingWideLayout() {
-    const {currentWrap, sharesWrap} = this.settingEls || {};
+    const {currentWrap, sharesWrap, siteInput, apiKeyInput} = this.settingEls || {};
     this.makeSettingRowFullWidth(currentWrap);
     this.makeSettingRowFullWidth(sharesWrap);
     this.alignSettingSiteSelectWidth();
+    const anyEl = siteInput || apiKeyInput || currentWrap || sharesWrap;
+    if (anyEl?.isConnected) {
+      const dialogBody = anyEl.closest(".b3-dialog__body");
+      if (dialogBody && !dialogBody.classList.contains("sps-settings-body")) {
+        dialogBody.classList.add("sps-settings-body");
+      }
+    }
   }
 
   alignSettingSiteSelectWidth() {
@@ -5454,6 +5466,7 @@ class SiYuanSharePlugin extends Plugin {
         siteUrl: String(settings.siteUrl || "").trim(),
         apiKey: String(settings.apiKey || "").trim(),
         autoUpdateEnabled: false,
+        quietWindowSeconds: 60,
       };
       sites.push(fallback);
       activeSiteId = fallback.id;
@@ -5568,6 +5581,14 @@ class SiYuanSharePlugin extends Plugin {
     );
     autoUpdateRow.addEventListener("click", this.onSettingActionsClick);
 
+    const quietWindowInput = document.createElement("input");
+    quietWindowInput.className = "b3-text-field";
+    quietWindowInput.type = "number";
+    quietWindowInput.min = "30";
+    quietWindowInput.style.width = "80px";
+    quietWindowInput.value = "60";
+    quietWindowInput.addEventListener("change", this.onSettingQuietWindowChange);
+
     const currentWrap = document.createElement("div");
     currentWrap.className = "siyuan-plugin-share";
     currentWrap.addEventListener("click", this.onSettingCurrentClick);
@@ -5586,6 +5607,7 @@ class SiYuanSharePlugin extends Plugin {
       siteNameInput,
       autoUpdateInput,
       autoUpdateRow,
+      quietWindowInput,
       connectActions: null,
       currentWrap,
       sharesWrap,
@@ -5630,6 +5652,12 @@ class SiYuanSharePlugin extends Plugin {
       title: t("siyuanShare.label.autoUpdate"),
       description: t("siyuanShare.hint.autoUpdate"),
       createActionElement: () => autoUpdateRow,
+    });
+
+    this.setting.addItem({
+      title: t("siyuanShare.label.quietWindow"),
+      description: t("siyuanShare.hint.quietWindow"),
+      createActionElement: () => quietWindowInput,
     });
 
     const connectActions = document.createElement("div");
@@ -5760,7 +5788,8 @@ class SiYuanSharePlugin extends Plugin {
       const remoteVerifiedAt = this.normalizeRemoteVerifiedAt(raw.remoteVerifiedAt);
       const remoteFeatures = this.normalizeRemoteFeatures(raw.remoteFeatures);
       const autoUpdateEnabled = !!raw.autoUpdateEnabled;
-      sites.push({id, name, siteUrl, apiKey, remoteUser, remoteVerifiedAt, remoteFeatures, autoUpdateEnabled});
+      const quietWindowSeconds = Math.max(30, Math.floor(Number(raw.quietWindowSeconds) || 60));
+      sites.push({id, name, siteUrl, apiKey, remoteUser, remoteVerifiedAt, remoteFeatures, autoUpdateEnabled, quietWindowSeconds});
       seen.add(id);
     });
     return sites;
@@ -6932,7 +6961,7 @@ class SiYuanSharePlugin extends Plugin {
   }
 
   syncSettingInputs() {
-    const {siteInput, apiKeyInput, envHint, siteSelect, siteNameInput, autoUpdateInput} = this.settingEls || {};
+    const {siteInput, apiKeyInput, envHint, siteSelect, siteNameInput, autoUpdateInput, quietWindowInput} = this.settingEls || {};
     if (siteInput) siteInput.value = this.settings.siteUrl || "";
     if (apiKeyInput) apiKeyInput.value = this.settings.apiKey || "";
     if (siteSelect) {
@@ -6956,6 +6985,11 @@ class SiYuanSharePlugin extends Plugin {
     if (autoUpdateInput) {
       const active = this.getActiveSite();
       autoUpdateInput.checked = !!active?.autoUpdateEnabled;
+    }
+    if (quietWindowInput) {
+      const active = this.getActiveSite();
+      const seconds = Number(active?.quietWindowSeconds);
+      quietWindowInput.value = String(Math.max(30, Number.isFinite(seconds) && seconds > 0 ? seconds : 60));
     }
     if (envHint) {
       const t = this.t.bind(this);
@@ -6981,11 +7015,13 @@ class SiYuanSharePlugin extends Plugin {
   }
 
   persistCurrentSiteInputs() {
-    const {siteInput, apiKeyInput, siteNameInput, autoUpdateInput} = this.settingEls || {};
+    const {siteInput, apiKeyInput, siteNameInput, autoUpdateInput, quietWindowInput} = this.settingEls || {};
     const siteUrl = (siteInput?.value || "").trim();
     const apiKey = (apiKeyInput?.value || "").trim();
     const siteName = (siteNameInput?.value || "").trim();
     const autoUpdateEnabled = !!autoUpdateInput?.checked;
+    const quietWindowRaw = Number(quietWindowInput?.value);
+    const quietWindowSeconds = Math.max(30, Number.isFinite(quietWindowRaw) && quietWindowRaw > 0 ? Math.floor(quietWindowRaw) : 60);
     let sites = this.normalizeSiteList(this.settings.sites);
     let activeSiteId = String(this.settings.activeSiteId || "");
     let activeSite = sites.find((site) => String(site.id) === activeSiteId);
@@ -6999,6 +7035,7 @@ class SiYuanSharePlugin extends Plugin {
         siteUrl,
         apiKey,
         autoUpdateEnabled,
+        quietWindowSeconds,
         remoteUser: null,
         remoteVerifiedAt: 0,
         remoteFeatures: null,
@@ -7008,6 +7045,7 @@ class SiYuanSharePlugin extends Plugin {
       activeSite.siteUrl = siteUrl;
       activeSite.apiKey = apiKey;
       activeSite.autoUpdateEnabled = autoUpdateEnabled;
+      activeSite.quietWindowSeconds = quietWindowSeconds;
       activeSite.name = this.resolveSiteName(siteName || activeSite.name, siteUrl, sites.indexOf(activeSite));
       if (prevSiteUrl !== siteUrl || prevApiKey !== apiKey) {
         activeSite.remoteUser = null;
@@ -7104,6 +7142,17 @@ class SiYuanSharePlugin extends Plugin {
     })();
   };
 
+  onSettingQuietWindowChange = () => {
+    void (async () => {
+      try {
+        this.persistCurrentSiteInputs();
+        await this.saveData(STORAGE_SETTINGS, this.settings);
+      } catch (err) {
+        this.showErr(err);
+      }
+    })();
+  };
+
   onDockChange = (event) => {
     const target = event.target;
     if (!target || target.id !== "sps-site-select") return;
@@ -7126,6 +7175,7 @@ class SiYuanSharePlugin extends Plugin {
             siteUrl,
             apiKey,
             autoUpdateEnabled: false,
+            quietWindowSeconds: 60,
             remoteUser: null,
             remoteVerifiedAt: 0,
             remoteFeatures: null,
@@ -7179,6 +7229,7 @@ class SiYuanSharePlugin extends Plugin {
             siteUrl: "",
             apiKey: "",
             autoUpdateEnabled: false,
+            quietWindowSeconds: 60,
             remoteUser: null,
             remoteVerifiedAt: 0,
             remoteFeatures: null,
@@ -7516,6 +7567,7 @@ class SiYuanSharePlugin extends Plugin {
         siteUrl,
         apiKey,
         autoUpdateEnabled: false,
+        quietWindowSeconds: 60,
         remoteUser: null,
         remoteVerifiedAt: 0,
         remoteFeatures: null,
@@ -11953,7 +12005,10 @@ class SiYuanSharePlugin extends Plugin {
   }
 
   getAutoUpdateQuietWindowMs() {
-    return Math.max(0, Math.floor(Number(this.autoUpdateQuietWindowMs) || 0));
+    const active = this.getActiveSite();
+    const seconds = Number(active?.quietWindowSeconds);
+    const val = Math.max(30, Number.isFinite(seconds) && seconds > 0 ? seconds : 60);
+    return val * 1000;
   }
 
   hasAutoUpdateQuietPending(shareId) {

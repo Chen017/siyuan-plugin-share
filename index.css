@@ -260,6 +260,27 @@
   .sps-share-doc-options .sps-share-exclude .sps-share-exclude__actions {
     justify-content: flex-start;
   }
+
+  .sps-settings-body .b3-label {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+
+  .sps-settings-body .b3-label > .fn__space {
+    display: none !important;
+  }
+
+  .sps-settings-body .b3-label > .fn__flex-1 {
+    flex: none !important;
+  }
+
+  .sps-settings-body .sps-auto-update-row {
+    justify-content: flex-start;
+  }
+
+  .sps-settings-body .sps-setting-actions-inline {
+    justify-content: flex-start;
+  }
 }
 
 .sps-site-select--setting {

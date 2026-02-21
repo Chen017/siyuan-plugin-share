@@ -192,6 +192,8 @@
   "siyuanShare.hint.autoUpdate": "默认关闭。检测文档变更并在后台自动更新相关分享。",
   "siyuanShare.label.autoUpdate": "自动更新分享",
   "siyuanShare.label.autoUpdateEnabled": "开启后台自动更新",
+  "siyuanShare.label.quietWindow": "静默时间（秒）",
+  "siyuanShare.hint.quietWindow": "文档更新或分享更新后，需等待指定秒数才再次自动更新。若等待期间文档再次更新，倒计时会重置。默认 60 秒，最少 30 秒。",
   "siyuanShare.label.autoUpdateState": "运行状态",
   "siyuanShare.label.autoUpdateCurrent": "当前任务",
   "siyuanShare.label.autoUpdateQueue": "排队任务",
