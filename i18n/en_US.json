@@ -90,6 +90,8 @@
   "siyuanShare.label.connectionSync": "Connection & sync",
   "siyuanShare.label.autoUpdate": "Auto update shares",
   "siyuanShare.label.autoUpdateEnabled": "Enable auto update in background",
+  "siyuanShare.label.quietWindow": "Quiet time (seconds)",
+  "siyuanShare.hint.quietWindow": "After document or share update, wait the specified seconds before auto-updating again. If the document updates during the quiet period, the countdown resets. Default 60 seconds, minimum 30 seconds.",
   "siyuanShare.label.autoUpdateState": "Runtime state",
   "siyuanShare.label.autoUpdateCurrent": "Current task",
   "siyuanShare.label.autoUpdateQueue": "Queued tasks",
