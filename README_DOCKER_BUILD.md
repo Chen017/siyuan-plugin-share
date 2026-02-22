@@ -82,7 +82,6 @@ siyuan-plugin-share/
 ├── .dockerignore              # Docker 忽略文件
 └── php-site/
     ├── Dockerfile             # PHP 应用容器配置
-    ├── .htaccess             # Apache 重写规则
     ├── config.php            # 应用配置 (需手动创建)
     ├── config.example.php    # 配置示例
     ├── storage/              # SQLite 数据库 (自动创建)
@@ -111,7 +110,7 @@ docker-compose down
 docker-compose build --no-cache
 
 # 进入容器内部
-docker-compose exec web bash
+docker-compose exec web sh
 ```
 
 ## 🔄 更新应用
@@ -192,8 +191,7 @@ ports:
 ```yaml
 environment:
   - TZ=Asia/Shanghai
-  - PHP_MEMORY_LIMIT=512M
-  - PHP_UPLOAD_MAX_FILESIZE=200M
+  # 若需调整 PHP 上传和内存限制，请直接修改 Dockerfile 中 uploads.ini 的值并重建镜像
 ```
 
 ## 🐛 故障排查
@@ -250,10 +248,10 @@ services:
 
 ### 启用 OPcache
 
-在 Dockerfile 中添加:
+在当前 Dockerfile 中，将现有扩展安装行改为:
 
 ```dockerfile
-RUN docker-php-ext-install opcache
+RUN docker-php-ext-install -j"$(nproc)" gd pdo pdo_sqlite zip opcache
 ```
 
 ## 📝 注意事项

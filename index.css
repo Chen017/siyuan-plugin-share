@@ -730,6 +730,36 @@
   font-weight: 600;
 }
 
+.sps-auto-status__head {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.sps-auto-status__head-link {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  min-height: auto;
+  height: auto;
+  font-size: 12px;
+  line-height: 1.2;
+  color: var(--b3-theme-primary);
+  cursor: pointer;
+}
+
+.sps-auto-status__head-link:hover:not([disabled]) {
+  text-decoration: underline;
+}
+
+.sps-auto-status__head-link[disabled] {
+  color: var(--b3-theme-on-surface-light);
+  cursor: default;
+  text-decoration: none;
+}
+
 .sps-auto-status__grid {
   display: grid;
   grid-template-columns: minmax(120px, 180px) 1fr;
