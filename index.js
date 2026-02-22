@@ -2033,6 +2033,7 @@ class SiYuanSharePlugin extends Plugin {
       envHint: null,
     };
     this.settingLayoutObserver = null;
+    this.isUnloading = false;
   }
 
   t(key, vars) {
@@ -2052,6 +2053,7 @@ class SiYuanSharePlugin extends Plugin {
   }
 
   onload() {
+    this.isUnloading = false;
     setGlobalI18nProvider(this.t.bind(this));
     const bootstrap = async () => {
       await this.clearExportRetryCacheOnStartup();
@@ -2098,6 +2100,7 @@ class SiYuanSharePlugin extends Plugin {
   }
 
   onunload() {
+    this.isUnloading = true;
     setGlobalI18nProvider(null);
     this.closeAutoUpdateStatusDialog();
     this.stopAutoUpdateStructureReconcile();
@@ -2374,7 +2377,13 @@ class SiYuanSharePlugin extends Plugin {
 
   bindDocTreeLater() {
     if (this.docTreeBindTimer) clearInterval(this.docTreeBindTimer);
+    if (this.isUnloading) return;
     this.docTreeBindTimer = setInterval(() => {
+      if (this.isUnloading) {
+        clearInterval(this.docTreeBindTimer);
+        this.docTreeBindTimer = null;
+        return;
+      }
       const attached = this.attachDocTree();
       const alreadyBound = !!(this.docTreeContainer && this.docTreeContainer.isConnected);
       if (attached || alreadyBound) {
@@ -2386,6 +2395,7 @@ class SiYuanSharePlugin extends Plugin {
   }
 
   attachDocTree({skipRefresh = false} = {}) {
+    if (this.isUnloading) return false;
     const container = pickDocTreeContainer();
     if (!container) return false;
     if (container === this.docTreeContainer && this.docTreeContainer?.isConnected) return false;
@@ -2394,6 +2404,7 @@ class SiYuanSharePlugin extends Plugin {
     this.docTreeContainer.setAttribute("data-sps-share-tree", "1");
     this.docTreeContainer.addEventListener("click", this.onDocTreeClick, true);
     this.docTreeObserver = new MutationObserver((mutations) => {
+      if (this.isUnloading) return;
       const isOurMutation = (m) => {
         if (m.type !== "childList") {
           const targetEl = m.target instanceof Element ? m.target : m.target?.parentElement;
@@ -2515,6 +2526,7 @@ class SiYuanSharePlugin extends Plugin {
   }
 
   scheduleDocTreeStructureDetect() {
+    if (this.isUnloading) return;
     if (this.docTreeStructDetectRunning) {
       this.docTreeStructDetectPending = true;
       return;
@@ -2522,11 +2534,13 @@ class SiYuanSharePlugin extends Plugin {
     if (this.docTreeStructDetectTimer) return;
     this.docTreeStructDetectTimer = setTimeout(() => {
       this.docTreeStructDetectTimer = null;
+      if (this.isUnloading) return;
       void this.flushDocTreeStructureDetect();
     }, 240);
   }
 
   async flushDocTreeStructureDetect() {
+    if (this.isUnloading) return;
     if (this.docTreeStructDetectRunning) {
       this.docTreeStructDetectPending = true;
       return;
@@ -2597,6 +2611,7 @@ class SiYuanSharePlugin extends Plugin {
   }
 
   scheduleDocTreeRefresh(delayMs = 80, {force = false} = {}) {
+    if (this.isUnloading) return;
     const delay = Math.max(0, Math.floor(Number(delayMs) || 0));
     if (this.docTreeRefreshTimer) {
       if (!force) return;
@@ -2605,11 +2620,13 @@ class SiYuanSharePlugin extends Plugin {
     }
     this.docTreeRefreshTimer = setTimeout(() => {
       this.docTreeRefreshTimer = null;
+      if (this.isUnloading) return;
       this.refreshDocTreeMarks();
     }, delay);
   }
 
   refreshDocTreeMarksLater() {
+    if (this.isUnloading) return;
     this.attachDocTree({skipRefresh: true});
     this.refreshDocTreeMarks();
     this.scheduleDocTreeRefresh();
@@ -2690,6 +2707,7 @@ class SiYuanSharePlugin extends Plugin {
   }
 
   refreshDocTreeMarks() {
+    if (this.isUnloading) return;
     if (this.docTreeContainer && !this.docTreeContainer.isConnected) {
       this.detachDocTree();
       this.bindDocTreeLater();
@@ -5967,7 +5985,13 @@ class SiYuanSharePlugin extends Plugin {
     const id = String(siteId || this.getActiveSiteId()).trim();
     if (!id) return;
     const store = this.normalizeAutoUpdateRuntimeBySite(this.autoUpdateRuntimeBySite || {});
-    const queue = this.normalizeAutoUpdateQueue(this.autoUpdateQueue || []);
+    // Persist the in-flight share as resumable queue item.
+    // This avoids losing the currently syncing task if app/plugin exits
+    // before the unload-time flush fully lands on disk.
+    const inFlightShareId = String(this.autoUpdateCurrentShareId || "").trim();
+    const queue = this.normalizeAutoUpdateQueue(
+      inFlightShareId ? [inFlightShareId, ...(this.autoUpdateQueue || [])] : this.autoUpdateQueue || [],
+    );
     const retryStateByShare = this.normalizeAutoUpdateRetryStateByShare(this.autoUpdateRetryStateByShare || {});
     const history = this.normalizeAutoUpdateHistoryList(this.autoUpdateHistory || []);
     const structDigestByShare = this.normalizeAutoUpdateStructDigestByShare(this.autoUpdateStructDigestByShare || {});
@@ -8981,6 +9005,15 @@ class SiYuanSharePlugin extends Plugin {
         progress.update(t("siyuanShare.progress.fetchingNotebookList"));
         subtreeDocs = await this.listDocSubtree(docId);
         if (!Array.isArray(subtreeDocs) || subtreeDocs.length === 0) {
+          if (background && isValidNotebookId(notebookId)) {
+            const isClosed = await this.isNotebookClosedForAutoUpdate(notebookId, {forceRefresh: true});
+            if (isClosed) {
+              if (existingShare?.id) {
+                this.autoUpdateAbortByNotebookClosedSet.add(String(existingShare.id));
+              }
+              throw createAbortError(this.buildAutoUpdateNotebookClosedSkipMessage(existingShare?.id || ""));
+            }
+          }
           throw new Error("Doc tree fetch failed: listDocsByPath returned empty.");
         }
         await this.fillDocIcons(subtreeDocs);
@@ -11736,6 +11769,18 @@ class SiYuanSharePlugin extends Plugin {
     return entries.length;
   }
 
+  clearAutoUpdateHistory() {
+    const rows = Array.isArray(this.autoUpdateHistory) ? this.autoUpdateHistory : [];
+    const count = rows.length;
+    if (!count) {
+      this.autoUpdateHistory = [];
+      return 0;
+    }
+    this.autoUpdateHistory = [];
+    this.schedulePersistAutoUpdateRuntime();
+    return count;
+  }
+
   markAutoUpdateManualSuccess(shareId) {
     const id = String(shareId || "").trim();
     if (!id) return;
@@ -12139,6 +12184,12 @@ class SiYuanSharePlugin extends Plugin {
       : `<pre class="sps-auto-status__log" data-log="history">${escapeHtml(
           t("siyuanShare.message.autoUpdateHistoryEmpty"),
         )}</pre>`;
+    const historyTitleHtml = `<div class="sps-auto-status__head">
+  <div class="sps-auto-status__title">${escapeHtml(t("siyuanShare.title.autoUpdateHistory"))}</div>
+  <button class="sps-auto-status__head-link" data-action="auto-update-clear-history"${
+    historyRowsAll.length ? "" : " disabled"
+  }>${escapeHtml(t("siyuanShare.action.autoUpdateClearRetry"))}</button>
+</div>`;
     root.innerHTML = `<div class="sps-auto-status__section">
   <div class="sps-auto-status__title">${escapeHtml(t("siyuanShare.title.autoUpdateSummary"))}</div>
   <div class="sps-auto-status__grid">${summaryHtml}</div>
@@ -12156,7 +12207,7 @@ class SiYuanSharePlugin extends Plugin {
   ${retryContentHtml}
 </div>
 <div class="sps-auto-status__section">
-  <div class="sps-auto-status__title">${escapeHtml(t("siyuanShare.title.autoUpdateHistory"))}</div>
+  ${historyTitleHtml}
   ${historyContentHtml}
 </div>`;
     Object.entries(scrollState).forEach(([key, pos]) => {
@@ -12201,6 +12252,11 @@ class SiYuanSharePlugin extends Plugin {
       }
       if (action === "auto-update-clear-retry") {
         this.clearAllAutoUpdateRetryStates();
+        this.renderAutoUpdateStatusDialog();
+        return;
+      }
+      if (action === "auto-update-clear-history") {
+        this.clearAutoUpdateHistory();
         this.renderAutoUpdateStatusDialog();
       }
     };
@@ -12446,6 +12502,7 @@ class SiYuanSharePlugin extends Plugin {
   }
 
   setAutoUpdateShareState(shareId, state, {message = ""} = {}) {
+    if (this.isUnloading) return;
     const id = String(shareId || "").trim();
     if (!id) return;
     const normalizedState = String(state || "").trim();
@@ -13655,6 +13712,11 @@ class SiYuanSharePlugin extends Plugin {
       };
       this.setAutoUpdateShareState(shareId, "syncing");
       this.pushAutoUpdateHistory("info", this.t("siyuanShare.message.autoUpdateSyncing"), {shareId});
+      try {
+        await this.persistAutoUpdateRuntimeNow();
+      } catch {
+        // ignore
+      }
       scheduleNotebookCloseMonitor();
       try {
         await this.updateShare(shareId, {background: true, controller, autoUpdateExpectedChangeSeq: expectedChangeSeq});
@@ -13730,6 +13792,22 @@ class SiYuanSharePlugin extends Plugin {
           if (isClosed) {
             this.markAutoUpdateShareSkippedNotebookClosed(shareId, {clearQuiet: true});
             continue;
+          }
+        }
+        const isDocTreeFetchEmptyError = String(err?.message || "")
+          .includes("Doc tree fetch failed: listDocsByPath returned empty.");
+        if (!isValidNotebookId(shareNotebookId) && isDocTreeFetchEmptyError) {
+          try {
+            const fallbackNotebookId = await this.getAutoUpdateShareNotebookId(share);
+            if (isValidNotebookId(fallbackNotebookId)) {
+              const isClosed = await this.isNotebookClosedForAutoUpdate(fallbackNotebookId, {forceRefresh: true});
+              if (isClosed) {
+                this.markAutoUpdateShareSkippedNotebookClosed(shareId, {clearQuiet: true});
+                continue;
+              }
+            }
+          } catch {
+            // ignore fallback notebook resolution errors
           }
         }
         this.autoUpdateRerunSet.delete(shareId);
