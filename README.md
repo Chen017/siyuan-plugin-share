@@ -6,6 +6,10 @@ It supports **access passwords, expiration time, and visitor limits**, and provi
 🌍 Documentation Languages:  
 [中文 README](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/README_zh_CN.md) ｜ [English README](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/README.md)
 
+📝 Documentation:
+
+[Beginner-Friendly Tutorial Guide](https://share.b0x.top/s/8c34c022)
+
 ---
 
 ## 🚀 Plugin Advantages
