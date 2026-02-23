@@ -25,6 +25,7 @@ const STORAGE_SHARES = "shares";
 const STORAGE_SITE_SHARES = "sharesBySite";
 const STORAGE_SHARE_OPTIONS = "shareOptions";
 const STORAGE_INCREMENTAL_CURSOR = "incrementalCursorBySite";
+const STORAGE_DOC_BLOCK_COUNTS = "docBlockCountBySite";
 const STORAGE_EXPORT_RETRY_CACHE_INDEX = "exportRetryCacheIndexBySite";
 const STORAGE_AUTO_UPDATE_RUNTIME = "autoUpdateRuntimeBySite";
 const DOCK_TYPE = "siyuan-plugin-share-dock";
@@ -1942,8 +1943,10 @@ class SiYuanSharePlugin extends Plugin {
     this.siteShares = {};
     this.shareOptions = {};
     this.incrementalCursorBySite = {};
+    this.docBlockCountBySite = {};
     this.exportRetryCacheIndexBySite = {};
     this.refQuerySchema = null;
+    this.blocksRootCol = null;
     this.dockElement = null;
     this.workspaceDir = "";
     this.hasNodeFs = !!(fs && path);
@@ -2192,6 +2195,7 @@ class SiYuanSharePlugin extends Plugin {
     await this.removeData(STORAGE_SITE_SHARES);
     await this.removeData(STORAGE_AUTO_UPDATE_RUNTIME);
     await this.removeData(STORAGE_INCREMENTAL_CURSOR);
+    await this.removeData(STORAGE_DOC_BLOCK_COUNTS);
     await this.removeData(STORAGE_EXPORT_RETRY_CACHE_INDEX);
     await this.clearExportRetryCacheFiles();
   }
@@ -4807,6 +4811,19 @@ class SiYuanSharePlugin extends Plugin {
     return null;
   }
 
+  async resolveBlocksRootColumn() {
+    if (this.blocksRootCol !== null) return this.blocksRootCol;
+    const rows = await this.querySqlRows("PRAGMA table_info(blocks)");
+    if (!Array.isArray(rows) || rows.length === 0) {
+      this.blocksRootCol = "";
+      return this.blocksRootCol;
+    }
+    const names = rows.map((row) => String(row?.name || "").trim());
+    const rootCol = ["root_id", "rootId"].find((name) => names.includes(name)) || "";
+    this.blocksRootCol = rootCol;
+    return this.blocksRootCol;
+  }
+
   resolveIncrementalSinceStamp(existingShare) {
     const shareId = String(existingShare?.id || "").trim();
     const cursor = shareId ? this.getIncrementalCursor(shareId) : "";
@@ -4820,15 +4837,26 @@ class SiYuanSharePlugin extends Plugin {
       new Set((Array.isArray(docIds) ? docIds : []).map((id) => String(id || "").trim()).filter((id) => isValidDocId(id))),
     );
     if (!scope.length || !normalizedSince) return [];
+    const rootCol = await this.resolveBlocksRootColumn();
     const updated = new Set();
     let failed = false;
     for (const part of chunkArray(scope, 200)) {
       const quoted = part.map((id) => `'${escapeSqlString(id)}'`).join(",");
-      const rows = await this.querySqlRows(
-        `SELECT id FROM blocks WHERE type='d' AND id IN (${quoted}) AND updated >= '${escapeSqlString(
-          normalizedSince,
-        )}'`,
-      );
+      let rows = null;
+      if (rootCol) {
+        rows = await this.querySqlRows(
+          `SELECT DISTINCT ${rootCol} AS id FROM blocks WHERE ${rootCol} IN (${quoted}) AND updated >= '${escapeSqlString(
+            normalizedSince,
+          )}'`,
+        );
+      }
+      if (!Array.isArray(rows)) {
+        rows = await this.querySqlRows(
+          `SELECT id FROM blocks WHERE type='d' AND id IN (${quoted}) AND updated >= '${escapeSqlString(
+            normalizedSince,
+          )}'`,
+        );
+      }
       if (!Array.isArray(rows)) {
         failed = true;
         continue;
@@ -4868,6 +4896,42 @@ class SiYuanSharePlugin extends Plugin {
     scope.forEach((docId) => {
       if (!map.has(docId)) {
         map.set(docId, "");
+      }
+    });
+    return map;
+  }
+
+  async queryDocBlockCountMap(docIds, {controller = null} = {}) {
+    const t = this.t.bind(this);
+    const scope = Array.from(
+      new Set((Array.isArray(docIds) ? docIds : []).map((id) => String(id || "").trim()).filter((id) => isValidDocId(id))),
+    );
+    if (!scope.length) return new Map();
+    const rootCol = await this.resolveBlocksRootColumn();
+    if (!rootCol) return null;
+    const map = new Map();
+    let failed = false;
+    for (const part of chunkArray(scope, 200)) {
+      throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+      const quoted = part.map((id) => `'${escapeSqlString(id)}'`).join(",");
+      const rows = await this.querySqlRows(
+        `SELECT ${rootCol} AS docId, COUNT(*) AS count FROM blocks WHERE ${rootCol} IN (${quoted}) GROUP BY ${rootCol}`,
+      );
+      if (!Array.isArray(rows)) {
+        failed = true;
+        continue;
+      }
+      rows.forEach((row) => {
+        const docId = String(row?.docId || "").trim();
+        if (!isValidDocId(docId)) return;
+        const count = Math.max(0, Math.floor(Number(row?.count) || 0));
+        map.set(docId, count);
+      });
+    }
+    if (failed) return null;
+    scope.forEach((docId) => {
+      if (!map.has(docId)) {
+        map.set(docId, 0);
       }
     });
     return map;
@@ -4952,7 +5016,16 @@ class SiYuanSharePlugin extends Plugin {
     impactedDocIds.forEach((id) => {
       if (scopeSet.has(id)) candidate.add(id);
     });
-    const candidateDocIds = Array.from(candidate);
+    let candidateDocIds = Array.from(candidate);
+    if (candidateDocIds.length === 0) {
+      const countChanged = await this.collectDocCountChangedDocIds(scopeIds, existingShare, {
+        controller,
+        progress,
+      });
+      if (countChanged.length) {
+        candidateDocIds = countChanged;
+      }
+    }
     progress?.update?.({
       text: t("siyuanShare.progress.analyzingIncrement"),
       detail: t("siyuanShare.progress.analyzingDocs", {
@@ -4966,6 +5039,49 @@ class SiYuanSharePlugin extends Plugin {
       impactedDocIds,
       candidateDocIds,
     };
+  }
+
+  async collectDocCountChangedDocIds(scopeDocIds, existingShare, {controller = null, progress = null} = {}) {
+    const t = this.t.bind(this);
+    const shareId = String(existingShare?.id || "").trim();
+    if (!shareId) return [];
+    const cached = this.getDocBlockCountCache(shareId);
+    if (!cached || typeof cached !== "object" || Object.keys(cached).length === 0) return [];
+    const map = await this.queryDocBlockCountMap(scopeDocIds, {controller});
+    if (!map) return [];
+    const changed = [];
+    map.forEach((count, docId) => {
+      const prev = Number(cached?.[docId]);
+      if (!Number.isFinite(prev) || prev !== count) {
+        changed.push(docId);
+      }
+    });
+    if (changed.length) {
+      progress?.update?.({
+        text: t("siyuanShare.progress.analyzingIncrement"),
+        detail: t("siyuanShare.progress.analyzingDocs", {
+          index: changed.length,
+          total: Math.max(1, scopeDocIds.length),
+        }),
+      });
+    }
+    return changed;
+  }
+
+  async refreshDocBlockCountCacheForShare(shareId, scopeDocs, {controller = null} = {}) {
+    const shareKey = String(shareId || "").trim();
+    if (!shareKey) return;
+    const scopeIds = Array.from(
+      new Set((Array.isArray(scopeDocs) ? scopeDocs : []).map((doc) => String(doc?.docId || "").trim()).filter((id) => isValidDocId(id))),
+    );
+    if (!scopeIds.length) return;
+    const map = await this.queryDocBlockCountMap(scopeIds, {controller});
+    if (!map) return;
+    const docMap = {};
+    map.forEach((count, docId) => {
+      docMap[docId] = Math.max(0, Math.floor(Number(count) || 0));
+    });
+    await this.setDocBlockCountCache(shareKey, docMap);
   }
 
   collectStructChangedDocIds(scopeDocs, remoteSnapshot) {
@@ -5476,6 +5592,7 @@ class SiYuanSharePlugin extends Plugin {
     const siteSharesRaw = (await this.loadData(STORAGE_SITE_SHARES)) || {};
     const shareOptionsRaw = (await this.loadData(STORAGE_SHARE_OPTIONS)) || {};
     const incrementalCursorRaw = (await this.loadData(STORAGE_INCREMENTAL_CURSOR)) || {};
+    const docBlockCountRaw = (await this.loadData(STORAGE_DOC_BLOCK_COUNTS)) || {};
     const exportRetryCacheIndexRaw = (await this.loadData(STORAGE_EXPORT_RETRY_CACHE_INDEX)) || {};
     const autoUpdateRuntimeRaw = (await this.loadData(STORAGE_AUTO_UPDATE_RUNTIME)) || {};
     const autoUpdateScanStampBySite = this.normalizeAutoUpdateScanStampBySite(settings.autoUpdateScanStampBySite);
@@ -5483,6 +5600,7 @@ class SiYuanSharePlugin extends Plugin {
       siteSharesRaw && typeof siteSharesRaw === "object" && !Array.isArray(siteSharesRaw) ? siteSharesRaw : {};
     const shareOptions = this.normalizeShareOptionsMap(shareOptionsRaw);
     const incrementalCursorBySite = this.normalizeIncrementalCursorBySite(incrementalCursorRaw);
+    const docBlockCountBySite = this.normalizeDocBlockCountBySite(docBlockCountRaw);
     const exportRetryCacheIndexBySite = this.normalizeExportRetryCacheIndexBySite(exportRetryCacheIndexRaw);
     let sites = this.normalizeSiteList(settings.sites);
     let activeSiteId = String(settings.activeSiteId || "");
@@ -5517,6 +5635,7 @@ class SiYuanSharePlugin extends Plugin {
     this.siteShares = siteShares;
     this.shareOptions = shareOptions;
     this.incrementalCursorBySite = incrementalCursorBySite;
+    this.docBlockCountBySite = docBlockCountBySite;
     this.exportRetryCacheIndexBySite = exportRetryCacheIndexBySite;
     this.autoUpdateRuntimeBySite = this.normalizeAutoUpdateRuntimeBySite(autoUpdateRuntimeRaw);
     this.settings = {
@@ -6203,6 +6322,36 @@ class SiYuanSharePlugin extends Plugin {
     return out;
   }
 
+  normalizeDocBlockCountBySite(raw) {
+    const out = {};
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+    Object.entries(raw).forEach(([siteIdRaw, shareMapRaw]) => {
+      const siteId = String(siteIdRaw || "").trim();
+      if (!siteId) return;
+      if (!shareMapRaw || typeof shareMapRaw !== "object" || Array.isArray(shareMapRaw)) return;
+      const shareMap = {};
+      Object.entries(shareMapRaw).forEach(([shareIdRaw, docMapRaw]) => {
+        const shareId = String(shareIdRaw || "").trim();
+        if (!shareId) return;
+        if (!docMapRaw || typeof docMapRaw !== "object" || Array.isArray(docMapRaw)) return;
+        const docMap = {};
+        Object.entries(docMapRaw).forEach(([docIdRaw, countRaw]) => {
+          const docId = String(docIdRaw || "").trim();
+          if (!isValidDocId(docId)) return;
+          const count = Math.max(0, Math.floor(Number(countRaw) || 0));
+          docMap[docId] = count;
+        });
+        if (Object.keys(docMap).length) {
+          shareMap[shareId] = docMap;
+        }
+      });
+      if (Object.keys(shareMap).length) {
+        out[siteId] = shareMap;
+      }
+    });
+    return out;
+  }
+
   getActiveSiteId() {
     return String(this.settings?.activeSiteId || "").trim();
   }
@@ -6270,6 +6419,88 @@ class SiYuanSharePlugin extends Plugin {
     }
     this.incrementalCursorBySite = store;
     await this.saveData(STORAGE_INCREMENTAL_CURSOR, store);
+  }
+
+  getDocBlockCountCache(shareId) {
+    const siteId = this.getActiveSiteId();
+    const shareKey = String(shareId || "").trim();
+    if (!siteId || !shareKey) return {};
+    const siteMap = this.docBlockCountBySite?.[siteId];
+    if (!siteMap || typeof siteMap !== "object") return {};
+    const docMap = siteMap[shareKey];
+    if (!docMap || typeof docMap !== "object") return {};
+    return docMap;
+  }
+
+  async setDocBlockCountCache(shareId, docMapRaw) {
+    const siteId = this.getActiveSiteId();
+    const shareKey = String(shareId || "").trim();
+    if (!siteId || !shareKey) return;
+    const docMap = {};
+    if (docMapRaw && typeof docMapRaw === "object" && !Array.isArray(docMapRaw)) {
+      Object.entries(docMapRaw).forEach(([docIdRaw, countRaw]) => {
+        const docId = String(docIdRaw || "").trim();
+        if (!isValidDocId(docId)) return;
+        const count = Math.max(0, Math.floor(Number(countRaw) || 0));
+        docMap[docId] = count;
+      });
+    }
+    const store = this.normalizeDocBlockCountBySite(this.docBlockCountBySite || {});
+    const siteMap = {...(store[siteId] || {})};
+    if (Object.keys(docMap).length) {
+      siteMap[shareKey] = docMap;
+    } else {
+      delete siteMap[shareKey];
+    }
+    if (Object.keys(siteMap).length) {
+      store[siteId] = siteMap;
+    } else {
+      delete store[siteId];
+    }
+    this.docBlockCountBySite = store;
+    await this.saveData(STORAGE_DOC_BLOCK_COUNTS, store);
+  }
+
+  async clearDocBlockCountCache(shareId) {
+    const siteId = this.getActiveSiteId();
+    const shareKey = String(shareId || "").trim();
+    if (!siteId || !shareKey) return;
+    const store = this.normalizeDocBlockCountBySite(this.docBlockCountBySite || {});
+    const siteMap = {...(store[siteId] || {})};
+    if (!Object.prototype.hasOwnProperty.call(siteMap, shareKey)) return;
+    delete siteMap[shareKey];
+    if (Object.keys(siteMap).length) {
+      store[siteId] = siteMap;
+    } else {
+      delete store[siteId];
+    }
+    this.docBlockCountBySite = store;
+    await this.saveData(STORAGE_DOC_BLOCK_COUNTS, store);
+  }
+
+  async pruneDocBlockCountCache(shareIds = []) {
+    const siteId = this.getActiveSiteId();
+    if (!siteId) return;
+    const keep = new Set((Array.isArray(shareIds) ? shareIds : []).map((id) => String(id || "").trim()).filter(Boolean));
+    const store = this.normalizeDocBlockCountBySite(this.docBlockCountBySite || {});
+    const siteMapRaw = store[siteId];
+    if (!siteMapRaw || typeof siteMapRaw !== "object") return;
+    let changed = false;
+    const siteMap = {...siteMapRaw};
+    Object.keys(siteMap).forEach((key) => {
+      if (!keep.has(String(key))) {
+        delete siteMap[key];
+        changed = true;
+      }
+    });
+    if (!changed) return;
+    if (Object.keys(siteMap).length) {
+      store[siteId] = siteMap;
+    } else {
+      delete store[siteId];
+    }
+    this.docBlockCountBySite = store;
+    await this.saveData(STORAGE_DOC_BLOCK_COUNTS, store);
   }
 
   normalizeExportRetryCacheIndexBySite(raw) {
@@ -8992,6 +9223,7 @@ class SiYuanSharePlugin extends Plugin {
             useIncremental = false;
             shareMissingRemotely = true;
             await this.clearIncrementalCursor(existingShare.id);
+            await this.clearDocBlockCountCache(existingShare.id);
             console.warn("Remote share missing, fallback to create-new flow.", {shareId: existingShare.id});
           } else {
             throw err;
@@ -9063,9 +9295,15 @@ class SiYuanSharePlugin extends Plugin {
       const candidateSet = new Set(
         candidateDocIds.map((id) => String(id || "").trim()).filter((id) => isValidDocId(id)),
       );
-      const docsToExport = useIncremental
+      let docsToExport = useIncremental
         ? scopeDocs.filter((doc) => candidateSet.has(String(doc?.docId || "").trim()))
         : scopeDocs.slice();
+      if (useIncremental && docsToExport.length === 0) {
+        const cached = this.getDocBlockCountCache(existingShare?.id);
+        if (!cached || Object.keys(cached).length === 0) {
+          docsToExport = scopeDocs.slice();
+        }
+      }
 
       let resourceFailures = 0;
       let docPayloads = [];
@@ -9253,6 +9491,9 @@ class SiYuanSharePlugin extends Plugin {
       if (background && this.isIncrementalPlanNoop(plan)) {
         if (existingShare?.id) {
           await this.setIncrementalCursor(existingShare.id, incrementalCursorStamp);
+          if (!useIncremental || docsToExport.length > 0) {
+            await this.refreshDocBlockCountCacheForShare(existingShare.id, scopeDocs, {controller});
+          }
           await this.syncAutoUpdateStructDigestAfterShareSuccess(existingShare.id, {
             expectedChangeSeq: autoUpdateExpectedChangeSeq,
           });
@@ -9379,6 +9620,9 @@ class SiYuanSharePlugin extends Plugin {
       await this.saveData(STORAGE_SHARE_OPTIONS, this.shareOptions);
       await this.updateSharePasswordCache(share.id, {password, clearPassword});
       await this.setIncrementalCursor(share.id, incrementalCursorStamp);
+      if (!useIncremental || docsToExport.length > 0) {
+        await this.refreshDocBlockCountCacheForShare(share.id, scopeDocs, {controller});
+      }
       await this.syncAutoUpdateStructDigestAfterShareSuccess(share.id, {
         expectedChangeSeq: autoUpdateExpectedChangeSeq,
       });
@@ -9473,6 +9717,7 @@ class SiYuanSharePlugin extends Plugin {
             useIncremental = false;
             shareMissingRemotely = true;
             await this.clearIncrementalCursor(existingShare.id);
+            await this.clearDocBlockCountCache(existingShare.id);
             console.warn("Remote share missing, fallback to create-new flow.", {shareId: existingShare.id});
           } else {
             throw err;
@@ -9495,9 +9740,15 @@ class SiYuanSharePlugin extends Plugin {
       const candidateSet = new Set(
         candidateDocIds.map((id) => String(id || "").trim()).filter((id) => isValidDocId(id)),
       );
-      const docsToExport = useIncremental
+      let docsToExport = useIncremental
         ? scopeDocs.filter((doc) => candidateSet.has(String(doc?.docId || "").trim()))
         : scopeDocs.slice();
+      if (useIncremental && docsToExport.length === 0) {
+        const cached = this.getDocBlockCountCache(existingShare?.id);
+        if (!cached || Object.keys(cached).length === 0) {
+          docsToExport = scopeDocs.slice();
+        }
+      }
 
       let docPayloads = [];
       let assetEntries = [];
@@ -9668,6 +9919,9 @@ class SiYuanSharePlugin extends Plugin {
       if (background && this.isIncrementalPlanNoop(plan)) {
         if (existingShare?.id) {
           await this.setIncrementalCursor(existingShare.id, incrementalCursorStamp);
+          if (!useIncremental || docsToExport.length > 0) {
+            await this.refreshDocBlockCountCacheForShare(existingShare.id, scopeDocs, {controller});
+          }
           await this.syncAutoUpdateStructDigestAfterShareSuccess(existingShare.id, {
             expectedChangeSeq: autoUpdateExpectedChangeSeq,
           });
@@ -9789,6 +10043,9 @@ class SiYuanSharePlugin extends Plugin {
       await this.saveData(STORAGE_SHARE_OPTIONS, this.shareOptions);
       await this.updateSharePasswordCache(share.id, {password, clearPassword});
       await this.setIncrementalCursor(share.id, incrementalCursorStamp);
+      if (!useIncremental || docsToExport.length > 0) {
+        await this.refreshDocBlockCountCacheForShare(share.id, scopeDocs, {controller});
+      }
       await this.syncAutoUpdateStructDigestAfterShareSuccess(share.id, {
         expectedChangeSeq: autoUpdateExpectedChangeSeq,
       });
@@ -10413,6 +10670,7 @@ class SiYuanSharePlugin extends Plugin {
     }
     if (key) {
       await this.clearIncrementalCursor(key);
+      await this.clearDocBlockCountCache(key);
       this.setAutoUpdateShareState(key, "");
     }
     if (existing?.type === SHARE_TYPES.DOC && isValidDocId(existing?.docId)) {
@@ -10870,6 +11128,7 @@ class SiYuanSharePlugin extends Plugin {
       this.siteShares[activeSiteId] = shares;
       await this.saveData(STORAGE_SITE_SHARES, this.siteShares);
       await this.pruneIncrementalCursor(shares.map((share) => share?.id));
+      await this.pruneDocBlockCountCache(shares.map((share) => share?.id));
     }
     if (this.shareOptions) {
       await this.saveData(STORAGE_SHARE_OPTIONS, this.shareOptions);
