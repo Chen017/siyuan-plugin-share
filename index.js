@@ -50,8 +50,9 @@ const AUTO_UPDATE_HISTORY_LIMIT = 2000;
 const AUTO_UPDATE_HISTORY_RENDER_LIMIT = 200;
 const AUTO_UPDATE_HISTORY_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 const AUTO_UPDATE_QUIET_DEDUP_WINDOW_MS = 1200;
-const AUTO_UPDATE_NOTEBOOK_CACHE_TTL_MS = 5 * 1000;
-const AUTO_UPDATE_NOTEBOOK_CLOSE_MONITOR_MS = 1500;
+const AUTO_UPDATE_NOTEBOOK_CACHE_TTL_MS = 10 * 1000;
+const AUTO_UPDATE_NOTEBOOK_FORCE_MIN_INTERVAL_MS = 1200;
+const AUTO_UPDATE_NOTEBOOK_CLOSE_MONITOR_MS = 2500;
 
 const REMOTE_API = {
   verify: "/api/v1/auth/verify",
@@ -1979,6 +1980,11 @@ class SiYuanSharePlugin extends Plugin {
     this.autoUpdating = false;
     this.autoUpdateDelayMs = 15 * 1000;
     this.autoUpdateHiddenDelayMs = 60 * 1000;
+    this.autoUpdateAdaptiveDelayMs = this.autoUpdateDelayMs;
+    this.autoUpdateBackoffFactor = 1.8;
+    this.autoUpdateMaxDelayMs = 5 * 60 * 1000;
+    this.autoUpdateHiddenMaxDelayMs = 15 * 60 * 1000;
+    this.autoUpdateDelayJitterRatio = 0.15;
     this.autoUpdateRetryBaseDelayMs = 30 * 1000;
     this.autoUpdateRetryMaxDelayMs = 30 * 60 * 1000;
     this.autoUpdateQuietWindowMs = 60 * 1000;
@@ -2019,7 +2025,9 @@ class SiYuanSharePlugin extends Plugin {
     this.autoUpdateStructReconcileRunning = false;
     this.autoUpdateStructReconcileSiteId = "";
     this.autoUpdatePersistTimer = null;
-    this.autoUpdatePersistDelayMs = 50;
+    this.autoUpdatePersistDelayMs = 800;
+    this.autoUpdatePersistFingerprint = "";
+    this.autoUpdatePersistInitialized = false;
     this.progressDialog = null;
     this.settingVisible = false;
     this.settingEls = {
@@ -5638,6 +5646,8 @@ class SiYuanSharePlugin extends Plugin {
     this.docBlockCountBySite = docBlockCountBySite;
     this.exportRetryCacheIndexBySite = exportRetryCacheIndexBySite;
     this.autoUpdateRuntimeBySite = this.normalizeAutoUpdateRuntimeBySite(autoUpdateRuntimeRaw);
+    this.autoUpdatePersistFingerprint = stableStringify(this.autoUpdateRuntimeBySite);
+    this.autoUpdatePersistInitialized = true;
     this.settings = {
       siteUrl: activeSite?.siteUrl || "",
       apiKey: activeSite?.apiKey || "",
@@ -6275,7 +6285,13 @@ class SiYuanSharePlugin extends Plugin {
     }
     const store = this.normalizeAutoUpdateRuntimeBySite(this.autoUpdateRuntimeBySite || {});
     this.autoUpdateRuntimeBySite = store;
+    const fingerprint = stableStringify(store);
+    if (this.autoUpdatePersistInitialized && fingerprint === this.autoUpdatePersistFingerprint) {
+      return;
+    }
     await this.saveData(STORAGE_AUTO_UPDATE_RUNTIME, store);
+    this.autoUpdatePersistFingerprint = fingerprint;
+    this.autoUpdatePersistInitialized = true;
   }
 
   async flushAutoUpdateRuntimePersist() {
@@ -6297,7 +6313,13 @@ class SiYuanSharePlugin extends Plugin {
     if (!Object.prototype.hasOwnProperty.call(store, id)) return;
     delete store[id];
     this.autoUpdateRuntimeBySite = store;
+    const fingerprint = stableStringify(store);
+    if (this.autoUpdatePersistInitialized && fingerprint === this.autoUpdatePersistFingerprint) {
+      return;
+    }
     await this.saveData(STORAGE_AUTO_UPDATE_RUNTIME, store);
+    this.autoUpdatePersistFingerprint = fingerprint;
+    this.autoUpdatePersistInitialized = true;
   }
 
   normalizeIncrementalCursorBySite(raw) {
@@ -11230,6 +11252,13 @@ class SiYuanSharePlugin extends Plugin {
     const now = nowTs();
     const isFresh = this.notebooksFetchedAt > 0 && now - this.notebooksFetchedAt <= AUTO_UPDATE_NOTEBOOK_CACHE_TTL_MS;
     if (!force && isFresh) return cached;
+    if (
+      force &&
+      this.notebooksFetchedAt > 0 &&
+      now - this.notebooksFetchedAt <= AUTO_UPDATE_NOTEBOOK_FORCE_MIN_INTERVAL_MS
+    ) {
+      return cached;
+    }
     if (this.notebookRefreshPromise) return this.notebookRefreshPromise;
     this.notebookRefreshPromise = (async () => {
       try {
@@ -12559,6 +12588,35 @@ class SiYuanSharePlugin extends Plugin {
     return document?.hidden ? this.autoUpdateHiddenDelayMs : this.autoUpdateDelayMs;
   }
 
+  getAutoUpdateMaxDelayMs() {
+    const minDelay = this.getAutoUpdateDelayMs();
+    const configured = document?.hidden ? this.autoUpdateHiddenMaxDelayMs : this.autoUpdateMaxDelayMs;
+    const maxDelay = Math.max(minDelay, Math.floor(Number(configured) || minDelay));
+    return maxDelay;
+  }
+
+  getAutoUpdateLoopDelayMs(result = null) {
+    const minDelay = this.getAutoUpdateDelayMs();
+    const maxDelay = this.getAutoUpdateMaxDelayMs();
+    let adaptive = Math.max(minDelay, Math.floor(Number(this.autoUpdateAdaptiveDelayMs) || minDelay));
+    const hasActiveWork =
+      this.autoUpdateQueue.length > 0 ||
+      this.autoUpdateRerunSet.size > 0 ||
+      !!String(this.autoUpdateCurrentShareId || "").trim();
+    const shouldReset =
+      hasActiveWork || !!result?.changed || !!result?.failed || !!result?.interrupted;
+    if (shouldReset) {
+      adaptive = minDelay;
+    } else {
+      const factor = Math.max(1.2, Number(this.autoUpdateBackoffFactor) || 1.8);
+      adaptive = Math.min(maxDelay, Math.max(minDelay, Math.ceil(adaptive * factor)));
+    }
+    this.autoUpdateAdaptiveDelayMs = adaptive;
+    const jitterRatio = Math.max(0, Math.min(0.4, Number(this.autoUpdateDelayJitterRatio) || 0));
+    const jitter = jitterRatio > 0 ? Math.floor(Math.random() * Math.max(1, Math.floor(adaptive * jitterRatio))) : 0;
+    return Math.min(maxDelay, adaptive + jitter);
+  }
+
   scheduleAutoUpdateNow(delayMs = 0) {
     if (!this.autoUpdateLoopRunner) return;
     if (!this.isAutoUpdateEnabledForActiveSite()) return;
@@ -12569,6 +12627,10 @@ class SiYuanSharePlugin extends Plugin {
       this.autoUpdateTimer = null;
     }
     const delay = Math.max(0, Math.floor(Number(delayMs) || 0));
+    const minDelay = this.getAutoUpdateDelayMs();
+    if (delay <= minDelay + 1000) {
+      this.autoUpdateAdaptiveDelayMs = minDelay;
+    }
     this.autoUpdateNextRunAt = nowTs() + delay;
     this.refreshAutoUpdateStatusTextInDock();
     this.autoUpdateTimer = setTimeout(this.autoUpdateLoopRunner, delay);
@@ -12597,15 +12659,16 @@ class SiYuanSharePlugin extends Plugin {
       if (immediate) this.scheduleAutoUpdateNow(0);
       return;
     }
+    this.autoUpdateAdaptiveDelayMs = this.getAutoUpdateDelayMs();
     const loop = async () => {
       if (this.autoUpdateLoopRunner !== loop) return;
       if (this.autoUpdateTimer) {
         clearTimeout(this.autoUpdateTimer);
         this.autoUpdateTimer = null;
       }
-      const delay = this.getAutoUpdateDelayMs();
-      const scheduleNext = () => {
+      const scheduleNext = (result) => {
         if (this.autoUpdateLoopRunner !== loop) return;
+        const delay = this.getAutoUpdateLoopDelayMs(result);
         this.autoUpdateNextRunAt = nowTs() + delay;
         this.refreshAutoUpdateStatusTextInDock();
         this.autoUpdateTimer = setTimeout(loop, delay);
@@ -12614,14 +12677,15 @@ class SiYuanSharePlugin extends Plugin {
         this.stopAutoUpdate({clearState: true});
         return;
       }
-      await this.runAutoUpdateOnce();
+      const result = await this.runAutoUpdateOnce();
       if (this.autoUpdateLoopRunner !== loop) return;
-      scheduleNext();
+      scheduleNext(result);
     };
     this.autoUpdateLoopRunner = loop;
-    this.autoUpdateNextRunAt = nowTs() + (immediate ? 0 : this.getAutoUpdateDelayMs());
+    const startDelay = immediate ? 0 : this.getAutoUpdateDelayMs();
+    this.autoUpdateNextRunAt = nowTs() + startDelay;
     this.refreshAutoUpdateStatusTextInDock();
-    this.autoUpdateTimer = setTimeout(loop, immediate ? 0 : this.getAutoUpdateDelayMs());
+    this.autoUpdateTimer = setTimeout(loop, startDelay);
   }
 
   stopAutoUpdate({clearState = false, refreshTreeOnClear = true, preservePendingOnPause = false} = {}) {
@@ -12659,6 +12723,7 @@ class SiYuanSharePlugin extends Plugin {
     this.autoUpdateCurrentController = null;
     this.autoUpdateCurrentShareId = "";
     this.autoUpdating = false;
+    this.autoUpdateAdaptiveDelayMs = this.getAutoUpdateDelayMs();
     this.autoUpdateQueue = [];
     this.autoUpdateQueuedSet.clear();
     this.autoUpdateRerunSet.clear();
@@ -14252,6 +14317,26 @@ class SiYuanSharePlugin extends Plugin {
     }
     return {success, changed};
   }
+}
+
+function stableStringify(value) {
+  const seen = new WeakSet();
+  const normalize = (input) => {
+    if (input === null || typeof input !== "object") return input;
+    if (seen.has(input)) return null;
+    seen.add(input);
+    if (Array.isArray(input)) {
+      return input.map((item) => normalize(item));
+    }
+    const out = {};
+    Object.keys(input)
+      .sort()
+      .forEach((key) => {
+        out[key] = normalize(input[key]);
+      });
+    return out;
+  };
+  return JSON.stringify(normalize(value));
 }
 
 function escapeHtml(str) {
