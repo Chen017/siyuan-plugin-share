@@ -26,6 +26,8 @@
   "siyuanShare.action.verifySync": "Verify & sync",
   "siyuanShare.confirm.deleteShareMessage": "This will delete share \"{name}\". This action cannot be undone.",
   "siyuanShare.confirm.deleteShareTitle": "Delete share?",
+  "siyuanShare.confirm.enableAutoUpdateTitle": "Enable auto update",
+  "siyuanShare.confirm.enableAutoUpdateMessage": "After enabling auto update, document changes will be detected in the background. With many documents, SiYuan resource usage may increase. Continue?",
   "siyuanShare.error.apiKeyRequired": "Set API key first.",
   "siyuanShare.error.exportMarkdownFailed": "Failed to export Markdown.",
   "siyuanShare.error.invalidApiKey": "API key invalid or unauthorized.",

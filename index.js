@@ -7531,9 +7531,62 @@ class SiYuanSharePlugin extends Plugin {
     })();
   };
 
+  confirmEnableAutoUpdate = async () => {
+    const t = this.t.bind(this);
+    return new Promise((resolve) => {
+      let settled = false;
+      let dialog = null;
+      const settle = (value) => {
+        if (settled) return;
+        settled = true;
+        resolve(!!value);
+      };
+      const content = `<div class="b3-dialog__content sps-auto-update-confirm-dialog">${escapeHtml(
+        t("siyuanShare.confirm.enableAutoUpdateMessage"),
+      )}</div>
+<div class="b3-dialog__action">
+  <button class="b3-button b3-button--text" data-action="confirm">${escapeHtml(t("siyuanShare.action.confirm"))}</button>
+</div>`;
+      const onClick = (event) => {
+        const btn = event.target?.closest?.("[data-action='confirm']");
+        if (!btn) return;
+        settle(true);
+        try {
+          dialog?.destroy();
+        } catch {
+          // ignore
+        }
+      };
+      dialog = new Dialog({
+        title: t("siyuanShare.confirm.enableAutoUpdateTitle"),
+        content,
+        width: "min(520px, 92vw)",
+        destroyCallback: () => {
+          dialog?.element?.removeEventListener?.("click", onClick);
+          if (!settled) {
+            settle(false);
+          }
+        },
+      });
+      dialog?.element?.addEventListener?.("click", onClick);
+    });
+  };
+
   onSettingAutoUpdateToggleChange = () => {
     void (async () => {
       try {
+        const active = this.getActiveSite();
+        const prevEnabled = !!active?.autoUpdateEnabled;
+        const nextEnabled = !!this.settingEls?.autoUpdateInput?.checked;
+        if (nextEnabled && !prevEnabled) {
+          const confirmed = await this.confirmEnableAutoUpdate();
+          if (!confirmed) {
+            if (this.settingEls?.autoUpdateInput) {
+              this.settingEls.autoUpdateInput.checked = prevEnabled;
+            }
+            return;
+          }
+        }
         this.persistCurrentSiteInputs();
         await this.saveData(STORAGE_SETTINGS, this.settings);
         this.refreshAutoUpdateLoop({immediate: true});
