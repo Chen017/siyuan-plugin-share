@@ -8814,11 +8814,6 @@ if ($path === '/email-code' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         flash('error', '请先完成注册信息');
         redirect('/register');
     }
-    $captchaInput = (string)($_POST['captcha'] ?? '');
-    if (captcha_enabled() && !check_captcha($captchaInput)) {
-        flash('error', '验证码错误');
-        redirect('/register?step=verify');
-    }
     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
         flash('error', '邮箱格式不正确');
         redirect('/register?step=verify');
@@ -9018,6 +9013,8 @@ if ($path === '/login') {
     if ($loginEmailStep === 'verify' && $prefillLoginEmail === '') {
         $loginEmailStep = 'start';
     }
+    // Keep session step aligned with the derived view step to avoid stale bypass paths.
+    $_SESSION['login_email_step'] = $loginEmailStep;
     $loginTab = email_verification_available()
         ? (($_SESSION['login_tab'] ?? '') ?: ($loginEmailStep === 'verify' ? 'email' : 'password'))
         : 'password';
@@ -9041,7 +9038,7 @@ if ($path === '/login') {
     if (email_verification_available()) {
         $content .= '<div class="auth-tabs" data-login-tabs data-login-default="' . $loginTab . '">';
         $content .= '<button class="auth-tab" type="button" data-login-tab="password">密码登录</button>';
-        $content .= '<button class="auth-tab" type="button" data-login-tab="email">邮箱验证码</button>';
+        $content .= '<button class="auth-tab" type="button" data-login-tab="email">验证码登录</button>';
         $content .= '</div>';
     }
     $content .= '<form method="post" class="auth-form" data-login-panel="password"' . ($loginTab === 'password' ? '' : ' hidden') . '>';
@@ -9451,6 +9448,16 @@ if ($path === '/account/email-code' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         flash('error', '新邮箱不能与当前邮箱相同');
         redirect('/account');
     }
+    $pdo = db();
+    $check = $pdo->prepare('SELECT id FROM users WHERE email = :email AND id != :id LIMIT 1');
+    $check->execute([
+        ':email' => $email,
+        ':id' => (int)$user['id'],
+    ]);
+    if ($check->fetchColumn()) {
+        flash('error', '该邮箱已被其他账号使用');
+        redirect('/account');
+    }
     $lastSent = (int)($_SESSION['account_email_code_at'] ?? 0);
     if ($lastSent && (time() - $lastSent) < 60) {
         flash('error', '请稍后再发送验证码');
@@ -9481,11 +9488,20 @@ if ($path === '/account/email-change' && $_SERVER['REQUEST_METHOD'] === 'POST') 
         flash('error', '请先获取该邮箱验证码');
         redirect('/account');
     }
+    $pdo = db();
+    $check = $pdo->prepare('SELECT id FROM users WHERE email = :email AND id != :id LIMIT 1');
+    $check->execute([
+        ':email' => $email,
+        ':id' => (int)$user['id'],
+    ]);
+    if ($check->fetchColumn()) {
+        flash('error', '该邮箱已被其他账号使用');
+        redirect('/account');
+    }
     if (!verify_email_code($email, $code)) {
         flash('error', '邮箱验证码错误');
         redirect('/account');
     }
-    $pdo = db();
     $stmt = $pdo->prepare('UPDATE users SET email = :email, email_verified = 1, updated_at = :updated_at WHERE id = :id');
     $stmt->execute([
         ':email' => $email,
