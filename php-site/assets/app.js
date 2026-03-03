@@ -1071,6 +1071,77 @@
       "meta",
       "link",
     ]);
+    const katexSvgAllowedTags = new Set(["svg", "path", "line", "g"]);
+    const katexSvgAllowedAttrs = {
+      svg: new Set([
+        "class",
+        "style",
+        "xmlns",
+        "xmlns:xlink",
+        "width",
+        "height",
+        "viewbox",
+        "preserveaspectratio",
+        "role",
+        "aria-hidden",
+        "focusable",
+      ]),
+      path: new Set([
+        "class",
+        "style",
+        "d",
+        "fill",
+        "fill-rule",
+        "fill-opacity",
+        "stroke",
+        "stroke-width",
+        "stroke-linecap",
+        "stroke-linejoin",
+        "stroke-miterlimit",
+        "stroke-dasharray",
+        "stroke-dashoffset",
+        "stroke-opacity",
+        "transform",
+        "opacity",
+      ]),
+      line: new Set([
+        "class",
+        "style",
+        "x1",
+        "y1",
+        "x2",
+        "y2",
+        "fill",
+        "fill-opacity",
+        "stroke",
+        "stroke-width",
+        "stroke-linecap",
+        "stroke-linejoin",
+        "stroke-miterlimit",
+        "stroke-dasharray",
+        "stroke-dashoffset",
+        "stroke-opacity",
+        "transform",
+        "opacity",
+      ]),
+      g: new Set([
+        "class",
+        "style",
+        "transform",
+        "fill",
+        "fill-rule",
+        "fill-opacity",
+        "stroke",
+        "stroke-width",
+        "stroke-linecap",
+        "stroke-linejoin",
+        "stroke-miterlimit",
+        "stroke-dasharray",
+        "stroke-dashoffset",
+        "stroke-opacity",
+        "opacity",
+      ]),
+    };
     const urlAttrs = new Set(["href", "src", "xlink:href", "formaction", "action", "poster"]);
     const iframeAllowedAttrs = new Set([
       "src",
@@ -1089,11 +1160,20 @@
     nodes.forEach((node) => {
       if (!(node instanceof Element)) return;
       const tag = node.tagName.toLowerCase();
+      const insideSvg = tag === "svg" || !!node.closest("svg");
+      const insideKatex = !!node.closest(".katex");
+      const isKatexSvgNode = insideSvg && insideKatex && katexSvgAllowedTags.has(tag);
       if (blockedTags.has(tag)) {
+        if (!(tag === "svg" && isKatexSvgNode)) {
+          node.remove();
+          return;
+        }
+      } else if (insideSvg && !isKatexSvgNode) {
         node.remove();
         return;
       }
 
+      const allowedSvgAttrs = isKatexSvgNode ? katexSvgAllowedAttrs[tag] : null;
       Array.from(node.attributes).forEach((attribute) => {
         const name = String(attribute.name || "").toLowerCase();
         const value = String(attribute.value || "");
@@ -1102,6 +1182,10 @@
           return;
         }
         if (name === "srcdoc") {
+          node.removeAttribute(attribute.name);
+          return;
+        }
+        if (allowedSvgAttrs && !allowedSvgAttrs.has(name)) {
           node.removeAttribute(attribute.name);
           return;
         }
