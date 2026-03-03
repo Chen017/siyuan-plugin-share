@@ -7429,6 +7429,13 @@ function sanitize_share_html(string $html): string {
     }
 
     $blockedTags = ['script', 'object', 'embed', 'svg', 'math', 'base', 'meta', 'link'];
+    $katexSvgAllowedTags = ['svg', 'path', 'line', 'g'];
+    $katexSvgAllowedAttrs = [
+        'svg' => ['class', 'style', 'xmlns', 'xmlns:xlink', 'width', 'height', 'viewbox', 'preserveaspectratio', 'role', 'aria-hidden', 'focusable'],
+        'path' => ['class', 'style', 'd', 'fill', 'fill-rule', 'fill-opacity', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'stroke-miterlimit', 'stroke-dasharray', 'stroke-dashoffset', 'stroke-opacity', 'transform', 'opacity'],
+        'line' => ['class', 'style', 'x1', 'y1', 'x2', 'y2', 'fill', 'fill-opacity', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'stroke-miterlimit', 'stroke-dasharray', 'stroke-dashoffset', 'stroke-opacity', 'transform', 'opacity'],
+        'g' => ['class', 'style', 'transform', 'fill', 'fill-rule', 'fill-opacity', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'stroke-miterlimit', 'stroke-dasharray', 'stroke-dashoffset', 'stroke-opacity', 'opacity'],
+    ];
     $urlAttrs = ['href', 'src', 'xlink:href', 'formaction', 'action', 'poster'];
     $iframeAllowedAttrs = [
         'src',
@@ -7454,7 +7461,28 @@ function sanitize_share_html(string $html): string {
         }
 
         $tag = strtolower($element->tagName);
+        $insideSvg = false;
+        $insideKatex = false;
+        $cursor = $element;
+        while ($cursor instanceof DOMElement) {
+            if (strtolower($cursor->tagName) === 'svg') {
+                $insideSvg = true;
+            }
+            if (preg_match('/(?:^|\s)katex(?:\s|$)/i', (string)$cursor->getAttribute('class'))) {
+                $insideKatex = true;
+            }
+            $parent = $cursor->parentNode;
+            $cursor = $parent instanceof DOMElement ? $parent : null;
+        }
+        $isKatexSvgNode = $insideSvg && $insideKatex && in_array($tag, $katexSvgAllowedTags, true);
         if (in_array($tag, $blockedTags, true)) {
+            if (!($tag === 'svg' && $isKatexSvgNode)) {
+                if ($element->parentNode) {
+                    $element->parentNode->removeChild($element);
+                }
+                continue;
+            }
+        } elseif ($insideSvg && !$isKatexSvgNode) {
             if ($element->parentNode) {
                 $element->parentNode->removeChild($element);
             }
@@ -7467,6 +7495,7 @@ function sanitize_share_html(string $html): string {
                 $attrNames[] = $attribute->name;
             }
         }
+        $allowedSvgAttrs = $isKatexSvgNode ? ($katexSvgAllowedAttrs[$tag] ?? []) : [];
 
         foreach ($attrNames as $attrNameRaw) {
             $attrName = strtolower($attrNameRaw);
@@ -7480,8 +7509,15 @@ function sanitize_share_html(string $html): string {
                 $element->removeAttribute($attrNameRaw);
                 continue;
             }
+            if ($isKatexSvgNode && !in_array($attrName, $allowedSvgAttrs, true)) {
+                $element->removeAttribute($attrNameRaw);
+                continue;
+            }
             if ($attrName === 'style' && share_style_is_dangerous($attrValue)) {
                 $element->removeAttribute($attrNameRaw);
+                continue;
+            }
+            if ($isKatexSvgNode) {
                 continue;
             }
             if ($tag === 'iframe' && !in_array($attrName, $iframeAllowedAttrs, true)) {
