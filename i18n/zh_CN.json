@@ -20,6 +20,8 @@
   "siyuanShare.action.verifySync": "验证并同步",
   "siyuanShare.confirm.deleteShareMessage": "将删除分享“{name}”，此操作不可恢复。",
   "siyuanShare.confirm.deleteShareTitle": "确认删除分享？",
+  "siyuanShare.confirm.enableAutoUpdateTitle": "启用自动更新",
+  "siyuanShare.confirm.enableAutoUpdateMessage": "开启自动更新后，插件会在后台检测文档变更。文档较多时，思源笔记资源占用可能升高。是否继续？",
   "siyuanShare.error.apiKeyRequired": "请先设置 API Key",
   "siyuanShare.error.exportMarkdownFailed": "导出 Markdown 失败。",
   "siyuanShare.error.invalidApiKey": "API Key 无效或无权限，请检查设置。",

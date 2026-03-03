@@ -5,17 +5,34 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      version_spec:
+        description: "Tags to publish. Examples: v0.4.7 | v0.4.5,v0.4.7 | v0.3.0..v0.4.0 | v0.4.7,latest"
+        required: false
+        type: string
+      include_latest:
+        description: "Also publish latest (points to highest selected version)"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
+
+concurrency:
+  group: docker-publish
+  cancel-in-progress: false
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout (full history + tags)
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Set image name
         id: image
@@ -35,6 +52,148 @@ jobs:
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
           echo "Using image: $IMAGE"
 
+      - name: Resolve publish targets
+        id: targets
+        shell: bash
+        env:
+          INPUT_VERSION_SPEC: ${{ github.event_name == 'workflow_dispatch' && inputs.version_spec || '' }}
+          INPUT_INCLUDE_LATEST: ${{ github.event_name == 'workflow_dispatch' && inputs.include_latest || 'false' }}
+        run: |
+          set -euo pipefail
+
+          git fetch --tags --force
+
+          mapfile -t ALL_TAGS < <(git tag -l "v*" --sort=version:refname)
+          if [ "${#ALL_TAGS[@]}" -eq 0 ]; then
+            echo "No git tags matched pattern v*."
+            exit 1
+          fi
+
+          declare -A TAG_INDEX=()
+          declare -A SELECTED_MAP=()
+
+          for i in "${!ALL_TAGS[@]}"; do
+            TAG_INDEX["${ALL_TAGS[$i]}"]="${i}"
+          done
+
+          add_tag() {
+            local tag="$1"
+            if [ -z "${TAG_INDEX[$tag]+x}" ]; then
+              echo "Tag does not exist: ${tag}"
+              exit 1
+            fi
+            SELECTED_MAP["$tag"]=1
+          }
+
+          include_latest="false"
+
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            push_tag="${GITHUB_REF#refs/tags/}"
+            add_tag "${push_tag}"
+          else
+            include_latest="$(printf '%s' "${INPUT_INCLUDE_LATEST}" | tr '[:upper:]' '[:lower:]')"
+            if [ "${include_latest}" != "true" ] && [ "${include_latest}" != "false" ]; then
+              echo "Invalid include_latest value: ${INPUT_INCLUDE_LATEST}"
+              exit 1
+            fi
+
+            normalized="$(printf '%s' "${INPUT_VERSION_SPEC}" \
+              | sed -e 's/\r//g' \
+                    -e 's/[[:space:]]*\.\.[[:space:]]*/../g' \
+                    -e 's/[;[:space:]]\+/,/g' \
+                    -e 's/,+/,/g' \
+                    -e 's/^,//' \
+                    -e 's/,$//')"
+
+            if [ -n "${normalized}" ]; then
+              IFS=',' read -r -a items <<< "${normalized}"
+              for item in "${items[@]}"; do
+                token="$(printf '%s' "${item}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+                if [ -z "${token}" ]; then
+                  continue
+                fi
+
+                token_lower="$(printf '%s' "${token}" | tr '[:upper:]' '[:lower:]')"
+                if [ "${token_lower}" = "latest" ]; then
+                  include_latest="true"
+                  continue
+                fi
+
+                if [[ "${token}" == *".."* ]]; then
+                  start="${token%%..*}"
+                  end="${token#*..}"
+
+                  if [ "${start}" = "${token}" ] || [ -z "${start}" ] || [ -z "${end}" ] || [[ "${end}" == *".."* ]]; then
+                    echo "Invalid range format: ${token}. Use start..end, e.g. v0.3.0..v0.4.0"
+                    exit 1
+                  fi
+
+                  if [ -z "${TAG_INDEX[$start]+x}" ] || [ -z "${TAG_INDEX[$end]+x}" ]; then
+                    echo "Range boundary tag does not exist: ${token}"
+                    exit 1
+                  fi
+
+                  start_index="${TAG_INDEX[$start]}"
+                  end_index="${TAG_INDEX[$end]}"
+                  if [ "${start_index}" -le "${end_index}" ]; then
+                    range_from="${start_index}"
+                    range_to="${end_index}"
+                  else
+                    range_from="${end_index}"
+                    range_to="${start_index}"
+                  fi
+
+                  for ((idx=range_from; idx<=range_to; idx++)); do
+                    SELECTED_MAP["${ALL_TAGS[$idx]}"]=1
+                  done
+                else
+                  add_tag "${token}"
+                fi
+              done
+            fi
+
+            if [ "${#SELECTED_MAP[@]}" -eq 0 ]; then
+              if [ "${include_latest}" = "true" ]; then
+                last_index=$(( ${#ALL_TAGS[@]} - 1 ))
+                SELECTED_MAP["${ALL_TAGS[$last_index]}"]=1
+                echo "No version_spec provided. Defaulting to latest git tag: ${ALL_TAGS[$last_index]}"
+              else
+                echo "version_spec cannot be empty unless include_latest=true."
+                exit 1
+              fi
+            fi
+          fi
+
+          SELECTED_TAGS=()
+          for tag in "${ALL_TAGS[@]}"; do
+            if [ -n "${SELECTED_MAP[$tag]+x}" ]; then
+              SELECTED_TAGS+=("${tag}")
+            fi
+          done
+
+          if [ "${#SELECTED_TAGS[@]}" -eq 0 ]; then
+            echo "No publishable tags resolved."
+            exit 1
+          fi
+
+          latest_source=""
+          if [ "${include_latest}" = "true" ]; then
+            latest_source="${SELECTED_TAGS[$(( ${#SELECTED_TAGS[@]} - 1 ))]}"
+          fi
+
+          echo "Resolved tags (${#SELECTED_TAGS[@]}): ${SELECTED_TAGS[*]}"
+          if [ -n "${latest_source}" ]; then
+            echo "latest will point to: ${latest_source}"
+          fi
+
+          {
+            echo "publish_latest=${include_latest}"
+            echo "latest_source=${latest_source}"
+            echo "tags<<EOF"
+            printf '%s\n' "${SELECTED_TAGS[@]}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -47,23 +206,62 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ steps.image.outputs.image }}
-          tags: |
-            type=raw,value=latest,enable=${{ github.event_name == 'workflow_dispatch' }}
-            type=ref,event=tag,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+      - name: Build and push selected tags
+        shell: bash
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+          TAGS: ${{ steps.targets.outputs.tags }}
+        run: |
+          set -euo pipefail
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: php-site/Dockerfile
-          push: true
-          platforms: linux/amd64,linux/arm/v7,linux/arm64/v8
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          if [ -z "${TAGS}" ]; then
+            echo "Resolved tags output is empty."
+            exit 1
+          fi
+
+          while IFS= read -r tag; do
+            if [ -z "${tag}" ]; then
+              continue
+            fi
+
+            echo "Publishing ${IMAGE}:${tag} from git tag ${tag}"
+            expected_sha="$(git rev-list -n 1 "${tag}")"
+            git checkout --force "${tag}"
+            git clean -ffdx
+            current_sha="$(git rev-parse HEAD)"
+
+            if [ "${expected_sha}" != "${current_sha}" ]; then
+              echo "Resolved commit mismatch for ${tag}: expected ${expected_sha}, got ${current_sha}"
+              exit 1
+            fi
+
+            docker buildx build \
+              --platform linux/amd64,linux/arm/v7,linux/arm64/v8 \
+              --file php-site/Dockerfile \
+              --tag "${IMAGE}:${tag}" \
+              --push \
+              --cache-from type=gha \
+              --cache-to type=gha,mode=max \
+              .
+          done <<< "${TAGS}"
+
+          git checkout --force "${GITHUB_SHA}"
+          git clean -ffdx
+
+      - name: Publish latest tag
+        if: steps.targets.outputs.publish_latest == 'true'
+        shell: bash
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+          LATEST_SOURCE: ${{ steps.targets.outputs.latest_source }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${LATEST_SOURCE}" ]; then
+            echo "latest_source is empty."
+            exit 1
+          fi
+
+          echo "Publishing ${IMAGE}:latest from ${IMAGE}:${LATEST_SOURCE}"
+          docker buildx imagetools inspect "${IMAGE}:${LATEST_SOURCE}" >/dev/null
+          docker buildx imagetools create --tag "${IMAGE}:latest" "${IMAGE}:${LATEST_SOURCE}"

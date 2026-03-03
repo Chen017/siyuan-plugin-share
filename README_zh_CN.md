@@ -6,6 +6,10 @@
 🌍 文档语言：  
 [中文 README](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/README_zh_CN.md) ｜ [English README](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/README.md)
 
+📝 使用文档：
+
+[保姆级教程使用文档](https://share.b0x.top/s/8c34c022)
+
 ---
 
 ## 🚀 插件优势
