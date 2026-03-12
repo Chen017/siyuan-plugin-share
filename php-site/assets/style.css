@@ -1,5 +1,10 @@
 @import url("https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@400;600&display=swap");
 
+@font-face {
+  font-family: 'misansvf';
+  src: url('../../MiSansVF.ttf') format('truetype');
+}
+
 :root {
   --bg: #f4f6fb;
   --bg-strong: #6f9dff;
@@ -20,9 +25,9 @@
   --radius-lg: 18px;
   --radius-md: 12px;
   --radius-sm: 8px;
-  --font-display: "Outfit", "Noto Sans SC", "Microsoft YaHei", sans-serif;
-  --font-body: "Noto Sans SC", "Outfit", "Microsoft YaHei", sans-serif;
-  --font-markdown: "Noto Serif SC", "Noto Sans SC", "Microsoft YaHei", serif;
+  --font-display: "misansvf", "Outfit", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  --font-body: "misansvf", "Noto Sans SC", "Outfit", "Microsoft YaHei", sans-serif;
+  --font-markdown: "misansvf", "Noto Serif SC", "Noto Sans SC", "Microsoft YaHei", serif;
   --mermaid-font-family: var(--font-body);
 }
 
