@@ -1,5 +1,3 @@
-@import url("https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@400;600&display=swap");
-
 @font-face {
   font-family: 'misansvf';
   src: url('../../MiSansVF.ttf') format('truetype');
@@ -25,9 +23,11 @@
   --radius-lg: 18px;
   --radius-md: 12px;
   --radius-sm: 8px;
-  --font-display: "misansvf", "Outfit", "Noto Sans SC", "Microsoft YaHei", sans-serif;
-  --font-body: "misansvf", "Noto Sans SC", "Outfit", "Microsoft YaHei", sans-serif;
-  --font-markdown: "misansvf", "Noto Serif SC", "Noto Sans SC", "Microsoft YaHei", serif;
+  
+  /* 已清理 Google 字体，强制首选 misansvf，并保留微软雅黑作为系统后备 */
+  --font-display: "misansvf", "Microsoft YaHei", sans-serif;
+  --font-body: "misansvf", "Microsoft YaHei", sans-serif;
+  --font-markdown: "misansvf", "Microsoft YaHei", sans-serif;
   --mermaid-font-family: var(--font-body);
 }
 
