@@ -2951,7 +2951,7 @@ body.sps-footnote-dragging {
   border-radius: 12px;
   border: 1px solid var(--border);
   background: #f8faff;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-family: var(--font-body);
   font-size: 14px;
   line-height: 1.7;
   color: #1f2430;
@@ -3571,7 +3571,7 @@ body.layout-share .comment-content img {
   user-select: none;
   overflow: hidden;
   min-width: 20px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-family: var(--font-body);
   font-size: 12px;
   line-height: 1.6;
 }
@@ -3593,7 +3593,7 @@ body.layout-share .comment-content img {
   border-radius: 0;
   min-width: 0;
   overflow: visible;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-family: var(--font-body);
   font-size: 12px;
   line-height: 1.6;
 }
