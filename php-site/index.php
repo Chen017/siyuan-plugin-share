@@ -7430,7 +7430,7 @@ function sanitize_share_html(string $html): string {
         return htmlspecialchars($source, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
-    $blockedTags = ['script', 'object', 'embed', 'svg', 'math', 'base', 'meta', 'link'];
+    $blockedTags = ['script', 'style', 'object', 'embed', 'svg', 'math', 'base', 'meta', 'link'];
     $katexSvgAllowedTags = ['svg', 'path', 'line', 'g'];
     $katexSvgAllowedAttrs = [
         'svg' => ['class', 'style', 'xmlns', 'xmlns:xlink', 'width', 'height', 'viewbox', 'preserveaspectratio', 'role', 'aria-hidden', 'focusable'],
