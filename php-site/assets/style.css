@@ -1,6 +1,6 @@
 @font-face {
   font-family: 'misansvf';
-  src: url('../../MiSansVF.ttf') format('truetype');
+  src: url('../MiSansVF.ttf') format('truetype');
 }
 
 :root {
@@ -24,10 +24,9 @@
   --radius-md: 12px;
   --radius-sm: 8px;
   
-  /* 已清理 Google 字体，强制首选 misansvf，并保留微软雅黑作为系统后备 */
-  --font-display: "misansvf", "Microsoft YaHei", sans-serif;
-  --font-body: "misansvf", "Microsoft YaHei", sans-serif;
-  --font-markdown: "misansvf", "Microsoft YaHei", sans-serif;
+  --font-display: "misansvf", sans-serif;
+  --font-body: "misansvf", sans-serif;
+  --font-markdown: "misansvf", sans-serif;
   --mermaid-font-family: var(--font-body);
 }
 
