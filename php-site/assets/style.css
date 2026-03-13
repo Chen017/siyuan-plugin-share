@@ -2997,9 +2997,9 @@ body.sps-footnote-dragging {
 }
 
 body.layout-share .markdown-body :where(
-  p, li, a, span, strong, em, del, mark,
+  p, li, a, strong, em, del, mark,
   h1, h2, h3, h4, h5, h6,
-  blockquote, td, th, div
+  blockquote, td, th
 ) {
   font-family: var(--font-markdown) !important;
 }
