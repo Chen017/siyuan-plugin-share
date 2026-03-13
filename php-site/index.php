@@ -1194,7 +1194,7 @@ function render_page(string $title, string $content, ?array $user = null, string
         echo $siteHeadHtml;
     }
     if ($layout === 'share') {
-        echo "<style id='sps-share-font-force'>body.layout-share .markdown-body,body.layout-share .markdown-body :where(p,li,a,strong,em,del,mark,h1,h2,h3,h4,h5,h6,blockquote,td,th){font-family:'misansvf',sans-serif !important;}</style>";
+        echo "<style id='sps-share-font-force'>body.layout-share .markdown-body,body.layout-share .markdown-body :where(p,li,a,strong,em,del,mark,h1,h2,h3,h4,h5,h6,blockquote,td,th){font-family:'misans regular',sans-serif !important;}</style>";
     }
     echo "</head>";
     echo "<body class='{$layoutClass}'>";

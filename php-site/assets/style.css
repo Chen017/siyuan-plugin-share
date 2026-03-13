@@ -1,6 +1,6 @@
 @font-face {
-  font-family: 'misansvf';
-  src: url('./MiSansVF.ttf') format('truetype');
+  font-family: 'misans regular';
+  src: url('./MiSans-Regular.ttf') format('truetype');
 }
 
 :root {
@@ -24,9 +24,9 @@
   --radius-md: 12px;
   --radius-sm: 8px;
   
-  --font-display: "misansvf", sans-serif;
-  --font-body: "misansvf", sans-serif;
-  --font-markdown: "misansvf", sans-serif;
+  --font-display: "misans regular", sans-serif;
+  --font-body: "misans regular", sans-serif;
+  --font-markdown: "misans regular", sans-serif;
   --mermaid-font-family: var(--font-body);
 }
 
