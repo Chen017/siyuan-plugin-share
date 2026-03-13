@@ -1,6 +1,6 @@
 @font-face {
   font-family: 'misansvf';
-  src: url('../MiSansVF.ttf') format('truetype');
+  src: url('./MiSansVF.ttf') format('truetype');
 }
 
 :root {
@@ -5397,6 +5397,7 @@ body.image-viewer-open {
   }
 
   body.layout-share .markdown-body {
+    font-family: var(--font-markdown) !important;
     color: var(--text);
   }
 
