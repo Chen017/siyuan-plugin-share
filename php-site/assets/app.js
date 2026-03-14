@@ -3925,6 +3925,12 @@ const initImageViewer = () => {
         const img = document.createElement("img");
         img.src = getImageSrc(item);
         img.alt = item.alt || "";
+        const markThumbLoaded = () => btn.classList.add("is-loaded");
+        if (img.complete) {
+          markThumbLoaded();
+        } else {
+          img.addEventListener("load", markThumbLoaded, {once: true});
+        }
         btn.appendChild(img);
         btn.addEventListener("click", (event) => {
           event.preventDefault();
@@ -3949,6 +3955,7 @@ const initImageViewer = () => {
       if (!image || !items.length) return;
       const item = items[index];
       const src = getImageSrc(item);
+      image.classList.remove("is-loaded");
       image.src = src;
       image.alt = item.alt || "";
       if (download) download.href = src;
@@ -3956,8 +3963,12 @@ const initImageViewer = () => {
       updateNav();
       updateThumbs();
       image.onload = () => {
+        image.classList.add("is-loaded");
         resetZoom();
       };
+      if (image.complete) {
+        image.classList.add("is-loaded");
+      }
       resetZoom();
     };
 

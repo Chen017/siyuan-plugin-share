@@ -3769,6 +3769,11 @@ body.image-viewer-open {
   transform-origin: center;
 }
 
+.image-viewer-img.is-loaded {
+  background-image: conic-gradient(#d0d0d0 25%, #fff 25% 50%, #d0d0d0 50% 75%, #fff 75%);
+  background-size: 16px 16px;
+}
+
 .image-viewer-stage.is-dragging,
 .image-viewer-stage.is-dragging .image-viewer-img {
   cursor: grabbing;
@@ -3841,12 +3846,17 @@ body.image-viewer-open {
   border: 2px solid transparent;
   border-radius: 8px;
   padding: 0;
-  background: transparent;
+  background: rgba(255, 255, 255, 0.08);
   cursor: pointer;
   flex: 0 0 auto;
   width: 56px;
   height: 40px;
   overflow: hidden;
+}
+
+.image-viewer-thumb.is-loaded {
+  background-image: conic-gradient(#d0d0d0 25%, #fff 25% 50%, #d0d0d0 50% 75%, #fff 75%);
+  background-size: 8px 8px;
 }
 
 .image-viewer-thumb img {
