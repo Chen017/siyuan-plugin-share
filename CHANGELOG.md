@@ -1,8 +1,12 @@
 # 更新日志
 
+## 0.5.2 2026/3/14
+
+- [x] 透明图片分享页预览显示棋盘格背景 [Issues 54](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/54)
+
 ## 0.5.1 2026/3/12
 
-- [x] 调整分享页列表样式，统一有序列表为 Markdown 默认风格
+- [x] 调整分享页列表样式，统一有序列表为 Markdown 默认风格 [Issues 51](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/51)
 
 ## 0.5.0 2026/3/3
 
