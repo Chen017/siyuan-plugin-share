@@ -157,6 +157,37 @@ textarea {
   border-radius: 8px;
 }
 
+.code-input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  min-height: 160px;
+  resize: vertical;
+  tab-size: 2;
+}
+
+.custom-help-body {
+  display: block;
+  line-height: 1.65;
+}
+
+.custom-help-body p {
+  margin: 0 0 8px;
+}
+
+.help-code {
+  margin: 6px 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f7f8fb;
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 label {
   font-weight: 600;
   font-size: 0.9rem;

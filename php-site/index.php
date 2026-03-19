@@ -475,6 +475,10 @@ function seed_default_settings(PDO $pdo): void {
     ensure_setting($pdo, 'site_contact_email', '');
     ensure_setting($pdo, 'site_base_url', '');
     ensure_setting($pdo, 'site_head_html', '');
+    ensure_setting($pdo, 'site_custom_css_enabled', '1');
+    ensure_setting($pdo, 'site_custom_css', '');
+    ensure_setting($pdo, 'site_custom_js_enabled', '0');
+    ensure_setting($pdo, 'site_custom_js', '');
     ensure_setting($pdo, 'access_stats_default_enabled', '1');
     ensure_setting($pdo, 'access_stats_default_retention_days', '7');
 }
@@ -560,6 +564,14 @@ function set_setting(string $key, string $value): void {
 function get_bool_setting(string $key, bool $default = false): bool {
     $value = get_setting($key, $default ? '1' : '0');
     return (int)$value === 1;
+}
+
+function escape_inline_style_content(string $css): string {
+    return str_ireplace('</style', '<\/style', $css);
+}
+
+function escape_inline_script_content(string $js): string {
+    return str_ireplace('</script', '<\/script', $js);
 }
 
 function get_user_setting(int $userId, string $key, ?string $default = null): ?string {
@@ -1188,6 +1200,12 @@ function render_page(string $title, string $content, ?array $user = null, string
         echo "<link rel='stylesheet' href='{$base}/assets/vendor/highlight.min.css'>";
     }
     echo "<link rel='stylesheet' href='{$base}/assets/style.css'>";
+    $siteCustomCssEnabled = get_bool_setting('site_custom_css_enabled', true);
+    $siteCustomCss = (string)get_setting('site_custom_css', '');
+    if ($siteCustomCssEnabled && trim($siteCustomCss) !== '') {
+        $safeCustomCss = escape_inline_style_content($siteCustomCss);
+        echo "<style id='site-custom-css'>\n{$safeCustomCss}\n</style>";
+    }
     $siteHeadHtml = (string)get_setting('site_head_html', '');
     if ($siteHeadHtml !== '') {
         echo $siteHeadHtml;
@@ -1314,6 +1332,12 @@ function render_page(string $title, string $content, ?array $user = null, string
         echo "<script defer src='{$base}/assets/vendor/flowchart.min.js'></script>";
         echo "<script defer src='{$base}/assets/vendor/viz.js'></script>";
         echo "<script defer src='{$base}/assets/vendor/full.render.js' onload=\"window.dispatchEvent(new Event('sps:markdown-ready'))\"></script>";
+    }
+    $siteCustomJsEnabled = get_bool_setting('site_custom_js_enabled', false);
+    $siteCustomJs = (string)get_setting('site_custom_js', '');
+    if ($siteCustomJsEnabled && trim($siteCustomJs) !== '') {
+        $safeCustomJs = escape_inline_script_content($siteCustomJs);
+        echo "<script id='site-custom-js'>\nwindow.addEventListener('DOMContentLoaded', function () {\n{$safeCustomJs}\n});\n</script>";
     }
     echo "</body>";
     echo "</html>";
@@ -10660,6 +10684,10 @@ if ($path === '/admin') {
     $siteContactEmail = get_setting('site_contact_email', '');
     $siteBaseUrl = get_setting('site_base_url', '');
     $siteHeadHtml = get_setting('site_head_html', '');
+    $siteCustomCssEnabled = get_bool_setting('site_custom_css_enabled', true);
+    $siteCustomCss = get_setting('site_custom_css', '');
+    $siteCustomJsEnabled = get_bool_setting('site_custom_js_enabled', false);
+    $siteCustomJs = get_setting('site_custom_js', '');
     $bannedWordsRaw = get_banned_words_raw();
     $scanKeep = ((string)($_GET['scan_keep'] ?? '')) === '1';
     if (!$scanKeep) {
@@ -10855,11 +10883,23 @@ if ($path === '/admin') {
     $content .= '<textarea class="input" name="site_head_html" rows="4" placeholder="例如：&lt;script src=&quot;https://example.com/xxx.js&quot;&gt;&lt;/script&gt;">' . htmlspecialchars((string)$siteHeadHtml) . '</textarea>';
     $content .= '<div class="muted">会插入到页面 &lt;head&gt; 中，可用于统计脚本。</div>';
     $content .= '</div>';
+    $content .= '<div style="margin-top:12px">';
+    $content .= '<label>自定义 CSS<button class="link-button" type="button" data-report-open data-report-target="site-custom-css-help">示例</button></label>';
+    $content .= '<textarea class="input code-input" name="site_custom_css" rows="8" placeholder="/* 示例 1：正文更宽，阅读更舒服 */&#10;body.layout-share .markdown-body {&#10;  max-width: 980px;&#10;  margin: 0 auto;&#10;}&#10;&#10;/* ---------- 示例 2：隐藏评论区 ---------- */&#10;body.layout-share .share-comments {&#10;  display: none !important;&#10;}">' . htmlspecialchars((string)$siteCustomCss) . '</textarea>';
+    $content .= '<div class="muted">建议加上 <code>body.layout-share</code> 或 <code>body.layout-app</code> 前缀，减少误伤。</div>';
+    $content .= '</div>';
+    $content .= '<div style="margin-top:12px">';
+    $content .= '<label>自定义 JS<button class="link-button" type="button" data-report-open data-report-target="site-custom-js-help">示例</button></label>';
+    $content .= '<textarea class="input code-input" name="site_custom_js" rows="8" placeholder="// 示例 1：进入页面自动展开目录树&#10;const expandBtn = document.querySelector(&quot;[data-tree-expand]&quot;);&#10;if (expandBtn) expandBtn.click();&#10;&#10;// ---------- 示例 2：页面加载后聚焦搜索框 ----------&#10;const search = document.querySelector(&quot;.kb-search-input&quot;);&#10;if (search) {&#10;  search.focus();&#10;  search.select();&#10;}">' . htmlspecialchars((string)$siteCustomJs) . '</textarea>';
+    $content .= '<div class="muted">默认关闭。</div>';
+    $content .= '</div>';
     $content .= '<div class="grid" style="margin-top:12px">';
     $content .= '<label><input type="checkbox" name="allow_registration" value="1"' . ($allowRegistration ? ' checked' : '') . '> 允许注册</label>';
     $content .= '<label><input type="checkbox" name="captcha_enabled" value="1"' . ($captchaEnabled ? ' checked' : '') . '> 启用验证码</label>';
     $content .= '<label><input type="checkbox" name="email_verification_enabled" value="1"' . ($emailVerifyEnabled ? ' checked' : '') . '> 启用邮箱验证码</label>';
     $content .= '<label><input type="checkbox" name="smtp_enabled" value="1"' . ($smtpEnabled ? ' checked' : '') . '> 启用 SMTP</label>';
+    $content .= '<label><input type="checkbox" name="site_custom_css_enabled" value="1"' . ($siteCustomCssEnabled ? ' checked' : '') . '> 启用自定义 CSS</label>';
+    $content .= '<label><input type="checkbox" name="site_custom_js_enabled" value="1"' . ($siteCustomJsEnabled ? ' checked' : '') . '> 启用自定义 JS</label>';
     $content .= '</div>';
     $content .= '<div class="grid" style="margin-top:12px">';
     $content .= '<div><label>SMTP 主机</label><input class="input" name="smtp_host" value="' . htmlspecialchars((string)$smtpHost) . '"></div>';
@@ -10883,6 +10923,46 @@ if ($path === '/admin') {
     $content .= '<p><strong>填写：</strong>分享链接统一使用该前缀，适合反代/HTTPS 终止/端口丢失等场景。</p>';
     $content .= '<p><strong>示例：</strong><code>https://share.example.com</code> 或 <code>https://IP:端口</code></p>';
     $content .= '<p><strong>说明：</strong>仅影响分享链接前缀，不会限制其他访问方式。</p>';
+    $content .= '</div>';
+    $content .= '<div class="modal-actions"><button class="button" type="button" data-modal-close>关闭</button></div>';
+    $content .= '</div>';
+    $content .= '</div>';
+    $content .= '<div class="modal" id="site-custom-css-help" data-report-modal hidden>';
+    $content .= '<div class="modal-backdrop" data-modal-close></div>';
+    $content .= '<div class="modal-card">';
+    $content .= '<div class="modal-header">自定义 CSS 示例</div>';
+    $content .= '<div class="modal-body custom-help-body">';
+    $content .= '<p><strong>快速教程</strong></p>';
+    $content .= '<p>1. 打开目标页面，按 <code>F12</code>。</p>';
+    $content .= '<p>2. 点左上角元素选择器，选中目标元素，记录 class / id。</p>';
+    $content .= '<p>3. 把“页面 + 选择器 + 目标效果”发给 AI 生成 CSS，再粘贴回这里。</p>';
+    $content .= '<p><strong>提问示例：</strong><code>在分享页，把 .share-comments 隐藏，并保持其他区域不变</code></p>';
+    $content .= '<p><strong>实用示例 1：隐藏评论区</strong></p>';
+    $content .= '<pre class="help-code">body.layout-share .share-comments {&#10;  display: none !important;&#10;}</pre>';
+    $content .= '<p><strong>实用示例 2：正文更宽（阅读更舒服）</strong></p>';
+    $content .= '<pre class="help-code">body.layout-share .markdown-body {&#10;  max-width: 980px;&#10;  margin: 0 auto;&#10;}</pre>';
+    $content .= '<p><strong>实用示例 3：正文段落更疏朗</strong></p>';
+    $content .= '<pre class="help-code">body.layout-share .markdown-body p {&#10;  line-height: 1.9;&#10;}</pre>';
+    $content .= '<p><strong>实用示例 4：一级标题更醒目</strong></p>';
+    $content .= '<pre class="help-code">body.layout-share .markdown-body h1 {&#10;  font-size: 2rem;&#10;  margin-bottom: 0.75em;&#10;}</pre>';
+    $content .= '</div>';
+    $content .= '<div class="modal-actions"><button class="button" type="button" data-modal-close>关闭</button></div>';
+    $content .= '</div>';
+    $content .= '</div>';
+    $content .= '<div class="modal" id="site-custom-js-help" data-report-modal hidden>';
+    $content .= '<div class="modal-backdrop" data-modal-close></div>';
+    $content .= '<div class="modal-card">';
+    $content .= '<div class="modal-header">自定义 JS 示例</div>';
+    $content .= '<div class="modal-body custom-help-body">';
+    $content .= '<p><strong>使用说明：</strong>只写 JS 语句，不要包 <code>&lt;script&gt;</code> 标签。脚本会在页面加载后执行。</p>';
+    $content .= '<p><strong>实用示例 1：进入页面自动展开目录树</strong></p>';
+    $content .= '<pre class="help-code">const expandBtn = document.querySelector(&quot;[data-tree-expand]&quot;);&#10;if (expandBtn) expandBtn.click();</pre>';
+    $content .= '<p><strong>实用示例 2：移动端自动打开侧边栏</strong></p>';
+    $content .= '<pre class="help-code">if (window.innerWidth &lt; 900) {&#10;  const openBtn = document.querySelector(&quot;[data-share-drawer-open]&quot;);&#10;  if (openBtn) openBtn.click();&#10;}</pre>';
+    $content .= '<p><strong>实用示例 3：页面加载后聚焦搜索框</strong></p>';
+    $content .= '<pre class="help-code">const search = document.querySelector(&quot;.kb-search-input&quot;);&#10;if (search) {&#10;  search.focus();&#10;  search.select();&#10;}</pre>';
+    $content .= '<p><strong>实用示例 4：用 JS 隐藏评论和举报入口</strong></p>';
+    $content .= '<pre class="help-code">document.querySelectorAll(&quot;.share-comments, #report, .report-trigger&quot;).forEach((el) =&gt; {&#10;  el.remove();&#10;});</pre>';
     $content .= '</div>';
     $content .= '<div class="modal-actions"><button class="button" type="button" data-modal-close>关闭</button></div>';
     $content .= '</div>';
@@ -11571,6 +11651,10 @@ if ($path === '/admin/settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $siteContactEmail = trim((string)($_POST['site_contact_email'] ?? ''));
     $siteBaseUrl = trim((string)($_POST['site_base_url'] ?? ''));
     $siteHeadHtml = trim((string)($_POST['site_head_html'] ?? ''));
+    $siteCustomCssEnabled = isset($_POST['site_custom_css_enabled']) ? '1' : '0';
+    $siteCustomJsEnabled = isset($_POST['site_custom_js_enabled']) ? '1' : '0';
+    $siteCustomCss = str_replace(["\r\n", "\r"], "\n", (string)($_POST['site_custom_css'] ?? ''));
+    $siteCustomJs = str_replace(["\r\n", "\r"], "\n", (string)($_POST['site_custom_js'] ?? ''));
     $smtpHost = trim((string)($_POST['smtp_host'] ?? ''));
     $smtpPort = trim((string)($_POST['smtp_port'] ?? ''));
     $smtpSecure = trim((string)($_POST['smtp_secure'] ?? ''));
@@ -11579,6 +11663,11 @@ if ($path === '/admin/settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $bannedWords = trim((string)($_POST['banned_words'] ?? ''));
     if ($bannedWords !== '') {
         $bannedWords = str_replace(["\r\n", "\n", "\r"], '|', $bannedWords);
+    }
+    $customCodeMaxBytes = 200000;
+    if (strlen($siteCustomCss) > $customCodeMaxBytes || strlen($siteCustomJs) > $customCodeMaxBytes) {
+        flash('error', '自定义 CSS / JS 过长，单项最多 200KB。');
+        redirect('/admin#settings');
     }
     set_setting('allow_registration', $allowRegistration);
     set_setting('captcha_enabled', $captchaEnabled);
@@ -11593,6 +11682,10 @@ if ($path === '/admin/settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     set_setting('site_contact_email', $siteContactEmail);
     set_setting('site_base_url', $siteBaseUrl);
     set_setting('site_head_html', $siteHeadHtml);
+    set_setting('site_custom_css_enabled', $siteCustomCssEnabled);
+    set_setting('site_custom_css', $siteCustomCss);
+    set_setting('site_custom_js_enabled', $siteCustomJsEnabled);
+    set_setting('site_custom_js', $siteCustomJs);
     set_setting('smtp_host', $smtpHost);
     set_setting('smtp_port', $smtpPort !== '' ? $smtpPort : '587');
     set_setting('smtp_secure', $smtpSecure !== '' ? $smtpSecure : 'tls');
