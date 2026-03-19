@@ -1,5 +1,9 @@
 # 更新日志
 
+## 0.5.3 2026/3/19
+
+- [x] 服务端后台新增自定义 CSS 和 JS 功能，提升用户对网站界面与行为的自定义能力。  [Issues 55](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/55)
+
 ## 0.5.2 2026/3/14
 
 - [x] 透明图片分享页预览显示棋盘格背景 [Issues 54](https://github.com/b8l8u8e8/siyuan-plugin-share/issues/54)
