@@ -161,6 +161,37 @@ textarea {
   border-radius: 8px;
 }
 
+.code-input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  min-height: 160px;
+  resize: vertical;
+  tab-size: 2;
+}
+
+.custom-help-body {
+  display: block;
+  line-height: 1.65;
+}
+
+.custom-help-body p {
+  margin: 0 0 8px;
+}
+
+.help-code {
+  margin: 6px 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f7f8fb;
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 label {
   font-weight: 600;
   font-size: 0.9rem;
@@ -3008,6 +3039,21 @@ body.layout-share .markdown-body :where(
   max-width: 100%;
 }
 
+/* Keep list rendering close to common Markdown defaults. */
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 2em;
+}
+
+.markdown-body ol ol,
+.markdown-body ul ol,
+.markdown-body ol ol ol,
+.markdown-body ol ul ol,
+.markdown-body ul ol ol,
+.markdown-body ul ul ol {
+  list-style-type: decimal;
+}
+
 .share-content .markdown-body,
 .kb-main .markdown-body {
   max-width: 920px;
@@ -3767,6 +3813,11 @@ body.image-viewer-open {
   transform-origin: center;
 }
 
+.image-viewer-img.is-loaded {
+  background-image: conic-gradient(#d0d0d0 25%, #fff 25% 50%, #d0d0d0 50% 75%, #fff 75%);
+  background-size: 16px 16px;
+}
+
 .image-viewer-stage.is-dragging,
 .image-viewer-stage.is-dragging .image-viewer-img {
   cursor: grabbing;
@@ -3839,12 +3890,17 @@ body.image-viewer-open {
   border: 2px solid transparent;
   border-radius: 8px;
   padding: 0;
-  background: transparent;
+  background: rgba(255, 255, 255, 0.08);
   cursor: pointer;
   flex: 0 0 auto;
   width: 56px;
   height: 40px;
   overflow: hidden;
+}
+
+.image-viewer-thumb.is-loaded {
+  background-image: conic-gradient(#d0d0d0 25%, #fff 25% 50%, #d0d0d0 50% 75%, #fff 75%);
+  background-size: 8px 8px;
 }
 
 .image-viewer-thumb img {
