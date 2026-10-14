@@ -1,4 +1,7 @@
-@import url("https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@400;600&display=swap");
+@font-face {
+  font-family: 'misans regular';
+  src: url('./MiSans-Regular.ttf') format('truetype');
+}
 
 :root {
   --bg: #f4f6fb;
@@ -20,9 +23,10 @@
   --radius-lg: 18px;
   --radius-md: 12px;
   --radius-sm: 8px;
-  --font-display: "Outfit", "Noto Sans SC", "Microsoft YaHei", sans-serif;
-  --font-body: "Noto Sans SC", "Outfit", "Microsoft YaHei", sans-serif;
-  --font-markdown: "Noto Serif SC", "Noto Sans SC", "Microsoft YaHei", serif;
+  
+  --font-display: "misans regular", sans-serif;
+  --font-body: "misans regular", sans-serif;
+  --font-markdown: "misans regular", sans-serif;
   --mermaid-font-family: var(--font-body);
 }
 
@@ -3400,11 +3404,20 @@ body.sps-footnote-dragging {
 .markdown-body {
   line-height: 1.8;
   font-size: 16px;
+  font-family: var(--font-markdown);
   color: #2d3440;
   overflow-wrap: anywhere;
   word-break: break-word;
   max-width: 100%;
   min-width: 0;
+}
+
+body.layout-share .markdown-body :where(
+  p, li, a, strong, em, del, mark,
+  h1, h2, h3, h4, h5, h6,
+  blockquote, td, th
+) {
+  font-family: var(--font-markdown) !important;
 }
 
 .markdown-body > * {
@@ -5833,6 +5846,7 @@ body.image-viewer-open {
   }
 
   body.layout-share .markdown-body {
+    font-family: var(--font-markdown) !important;
     color: var(--text);
   }
 

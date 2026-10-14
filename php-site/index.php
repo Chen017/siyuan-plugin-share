@@ -1015,6 +1015,7 @@ function adjust_share_size(int $shareId, int $delta): void {
 }
 
 function render_share_stats(array $share, string $extraHtml = ''): string {
+    return '';
     $count = (int)($share['access_count'] ?? 0);
     $created = format_share_datetime((string)($share['created_at'] ?? ''));
     $expiresAt = (int)($share['expires_at'] ?? 0);
@@ -1209,6 +1210,9 @@ function render_page(string $title, string $content, ?array $user = null, string
     $siteHeadHtml = (string)get_setting('site_head_html', '');
     if ($siteHeadHtml !== '') {
         echo $siteHeadHtml;
+    }
+    if ($layout === 'share') {
+        echo "<style id='sps-share-font-force'>body.layout-share .markdown-body,body.layout-share .markdown-body :where(p,li,a,strong,em,del,mark,h1,h2,h3,h4,h5,h6,blockquote,td,th){font-family:'misans regular',sans-serif !important;}</style>";
     }
     echo "</head>";
     echo "<body class='{$layoutClass}'>";
@@ -2875,6 +2879,7 @@ function render_comment_node(array $comment, array $share, ?array $user, string 
 }
 
 function render_share_comments(array $share, ?array $user, ?string $docId = null): string {
+    return '';
     $shareId = (int)($share['id'] ?? 0);
     $slug = (string)($share['slug'] ?? '');
     if ($shareId <= 0 || $slug === '') {
