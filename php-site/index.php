@@ -7527,9 +7527,9 @@ function sanitize_share_html(string $html): string {
         if (($tag === 'th' || $tag === 'td') && $element->firstChild instanceof DOMText) {
             $firstText = $element->firstChild;
             $match = [];
-            if (preg_match('/^[ \t]*\{:\s*style\s*=\s*(["\\'])\s*text-align\s*:\s*(left|center|right)\s*;?\s*\1\s*\}[ \t]*/i', $firstText->data, $match)) {
+            if (preg_match('/^[ \t]*\{:\s*style\s*=\s*"\s*text-align\s*:\s*(left|center|right)\s*;?\s*"\s*\}[ \t]*/i', $firstText->data, $match)) {
                 $firstText->data = substr($firstText->data, strlen($match[0]));
-                $element->setAttribute('style', 'text-align: ' . strtolower($match[2]) . ';');
+                $element->setAttribute('style', 'text-align: ' . strtolower($match[1]) . ';');
             }
         }
 
