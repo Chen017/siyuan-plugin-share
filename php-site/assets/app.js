@@ -4726,6 +4726,28 @@ const initImageViewer = () => {
     usePlugin(window.markdownitIns);
     usePlugin(window.markdownItAnchor || window.markdownitAnchor, {permalink: false});
     registerCalloutSupport();
+    // SiYuan exports table-cell alignment as a leading Kramdown-style IAL.
+    // Convert only this supported attribute into a real table-cell style.
+    md.core.ruler.after("inline", "siyuan_table_cell_alignment", (state) => {
+      const tokens = state.tokens;
+      const alignmentPrefix = /^[ \t]*\{:\s*style\s*=\s*(["'])\s*text-align\s*:\s*(left|center|right)\s*;?\s*\1\s*\}[ \t]*/i;
+      for (let i = 0; i + 1 < tokens.length; i += 1) {
+        const cell = tokens[i];
+        if (cell.type !== "th_open" && cell.type !== "td_open") continue;
+        const inline = tokens[i + 1];
+        if (inline.type !== "inline") continue;
+        const match = alignmentPrefix.exec(inline.content);
+        if (!match) continue;
+
+        cell.attrSet("style", `text-align: ${match[2].toLowerCase()};`);
+        const content = inline.content.slice(match[0].length);
+        inline.content = content;
+        const children = [];
+        state.md.inline.parse(content, state.md, state.env, children);
+        inline.children = children;
+      }
+    });
+
 
     if (typeof window.markdownitContainer === "function") {
       const containers = ["info", "success", "warning", "danger", "tip", "note"];
