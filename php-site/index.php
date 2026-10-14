@@ -7522,6 +7522,17 @@ function sanitize_share_html(string $html): string {
         }
 
         $tag = strtolower($element->tagName);
+        // Parsedown renders SiYuan's table-cell IAL as literal text.
+        // Apply the alignment to the actual cell before HTML sanitization.
+        if (($tag === 'th' || $tag === 'td') && $element->firstChild instanceof DOMText) {
+            $firstText = $element->firstChild;
+            $match = [];
+            if (preg_match('/^[ \t]*\{:\s*style\s*=\s*(["\\'])\s*text-align\s*:\s*(left|center|right)\s*;?\s*\1\s*\}[ \t]*/i', $firstText->data, $match)) {
+                $firstText->data = substr($firstText->data, strlen($match[0]));
+                $element->setAttribute('style', 'text-align: ' . strtolower($match[2]) . ';');
+            }
+        }
+
         $insideSvg = false;
         $insideKatex = false;
         $cursor = $element;
