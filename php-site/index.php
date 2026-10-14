@@ -1308,7 +1308,11 @@ function render_page(string $title, string $content, ?array $user = null, string
         }
     }
 
-    echo "<script defer src='{$base}/assets/app.js'></script>";
+    // Change the script URL when app.js changes to avoid stale browser/CDN caches.
+    $appJsPath = __DIR__ . '/assets/app.js';
+    $appJsMtime = is_file($appJsPath) ? filemtime($appJsPath) : false;
+    $appJsVersion = $appJsMtime !== false ? '?v=' . (string)$appJsMtime : '';
+    echo "<script defer src='{$base}/assets/app.js{$appJsVersion}'></script>";
     if ($includeMarkdown) {
         echo "<script defer src='{$base}/assets/vendor/markdown-it.min.js'></script>";
         echo "<script defer src='{$base}/assets/vendor/markdown-it-task-lists.min.js'></script>";
