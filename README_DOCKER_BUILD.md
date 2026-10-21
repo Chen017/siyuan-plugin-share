@@ -2,6 +2,8 @@
 
 本文档介绍如何使用 Docker Compose 快速部署思源笔记分享服务,替代宝塔等传统部署方式。
 
+源码构建使用 PHP 8.3。Beta 升级验证及安全补丁发布后的操作见 [PHP 8.3 Beta 说明](docs/PHP83_BETA.md)。
+
 ## 📋 前置要求
 
 - Docker 20.10+
@@ -57,7 +59,7 @@ return [
 
 ```bash
 # 构建 Docker 镜像
-docker-compose build
+docker-compose build --pull
 
 # 启动服务 (后台运行)
 docker-compose up -d
@@ -107,7 +109,7 @@ docker-compose stop
 docker-compose down
 
 # 重新构建镜像
-docker-compose build --no-cache
+docker-compose build --pull --no-cache
 
 # 进入容器内部
 docker-compose exec web sh
@@ -131,7 +133,7 @@ git pull
 docker-compose down
 
 # 重新构建镜像
-docker-compose build
+docker-compose build --pull
 
 # 启动服务
 docker-compose up -d

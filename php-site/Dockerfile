@@ -1,4 +1,4 @@
-FROM php:8.1-fpm-alpine
+FROM php:8.3-fpm-alpine
 
 # Install runtime packages + build deps, compile PHP extensions, then remove build deps
 RUN set -eux; \

@@ -18,6 +18,6 @@ jobs:
           script: |
             cd /root/siyuan-plugin-share
             git pull origin main
-            docker compose up -d --build
+            docker compose build --pull
+            docker compose up -d
             docker image prune -f
-            
