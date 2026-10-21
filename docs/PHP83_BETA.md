@@ -53,4 +53,5 @@ python3 tests/run.py --docker siyuan-share:php83-test
 ## 验证记录
 
 - 2026-10-21，本地官方 Windows PHP 8.3.35 NTS x64：38 项运行时检查通过；15 组功能测试中 14 组通过、1 组 Nginx 专项留给 Docker 环境验证；无 PHP warning/deprecation/fatal diagnostics。
-- Docker 完整回归由 `.github/workflows/php83-regression.yml` 执行，记录实际容器 PHP 版本和测试结果；应以 Beta 分支 Actions 运行结果为准。
+- Docker 完整回归：[GitHub Actions 成功记录](https://github.com/Chen017/siyuan-plugin-share/actions/runs/39601995576)，测试提交 `325968d922f234d19c212140ff02fedd6d871e9e`，PHP 8.3.35，38 项运行时检查和全部 15 组功能测试通过，无跳过项。Nginx/FPM 配置检查、镜像健康检查、默认停止信号及 `SIGQUIT` 停机、重启后的数据库记录保留均通过。
+- 本次通过的测试镜像 ID：`sha256:57fd4248cc222f7a05158c9d5eaf916e350f6e25b4f34ea8b8a14f629b92d556`，仅为 CI 本地构建，未推送到镜像仓库。完整容器测试架构为 Linux amd64；官方基础镜像元数据列出了项目发布所需的 amd64、arm32v7、arm64v8，其他架构未运行应用回归。
