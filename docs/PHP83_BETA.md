@@ -52,6 +52,15 @@ python3 tests/run.py --docker siyuan-share:php83-test
 
 ## 验证记录
 
+### PHP 8.3.36 安全补丁
+
+- 2026-10-22（新加坡时间），本地官方 Windows PHP 8.3.36 NTS x64：38 项运行时检查通过，14 组功能测试通过，1 组 Nginx 专项由 Docker 验证；未出现 PHP diagnostics。下载包 SHA256 与官方发布值一致：`3c9242622c7402b47c38d2ec2ed779cef3a290fd6f2bde6c35f9c482699e7900`。
+- [完整 Docker 回归成功记录](https://github.com/Chen017/siyuan-plugin-share/actions/runs/39638205451)：测试提交 `b8aeb14edcab13727467f99b92d188188a21be71`，实际 PHP 8.3.36，38 项运行时检查、全部 15 组功能测试通过，无跳过项。Nginx/FPM 配置、健康检查、默认停止信号及 `SIGQUIT` 停机、重启后 SQLite 数据保留均通过。
+- 该次应用测试镜像 ID：`sha256:0ac8bfc8d9c9ab892812f0876d429b5f622332e2d68b2e95b1613780abb955b6`；构建时官方基础镜像索引为 `sha256:d274d162d0c5e7a2f85b918c3f9494547c727a0549ed0620a25789f5461fe34a`，Linux amd64 平台清单为 `sha256:ff9183eaaa1a75abfe50f554108b95a6970bd9ff73d7ba750f69813d28c6a6ce`，其镜像配置及实际运行均确认为 PHP 8.3.36。应用镜像只在 CI 中构建，未推送到镜像仓库。
+- 完整应用回归平台为 Linux amd64。官方修复版镜像按架构逐步发布，验证时已有 amd64、arm/v6；项目还使用的 arm/v7、arm64 尚待官方完成发布。不能把标签存在或 HTTP 200 的空索引视为其他平台就绪，其他架构也未运行应用回归。
+
+### PHP 8.3.35 兼容性基线（历史）
+
 - 2026-10-21，本地官方 Windows PHP 8.3.35 NTS x64：38 项运行时检查通过；15 组功能测试中 14 组通过、1 组 Nginx 专项留给 Docker 环境验证；无 PHP warning/deprecation/fatal diagnostics。
 - Docker 完整回归：[GitHub Actions 成功记录](https://github.com/Chen017/siyuan-plugin-share/actions/runs/39601995576)，测试提交 `325968d922f234d19c212140ff02fedd6d871e9e`，PHP 8.3.35，38 项运行时检查和全部 15 组功能测试通过，无跳过项。Nginx/FPM 配置检查、镜像健康检查、默认停止信号及 `SIGQUIT` 停机、重启后的数据库记录保留均通过。
-- 本次通过的测试镜像 ID：`sha256:57fd4248cc222f7a05158c9d5eaf916e350f6e25b4f34ea8b8a14f629b92d556`，仅为 CI 本地构建，未推送到镜像仓库。完整容器测试架构为 Linux amd64；官方基础镜像元数据列出了项目发布所需的 amd64、arm32v7、arm64v8，其他架构未运行应用回归。
+- 该次历史测试镜像 ID：`sha256:57fd4248cc222f7a05158c9d5eaf916e350f6e25b4f34ea8b8a14f629b92d556`，仅为 CI 本地构建，未推送到镜像仓库。完整容器测试架构为 Linux amd64；当时官方基础镜像元数据列出了项目发布所需的 amd64、arm32v7、arm64v8，其他架构未运行应用回归。
