@@ -38,6 +38,7 @@ restart_needed=1
 # The previous FPM-based image inherited SIGQUIT but its supervisor only traps SIGTERM.
 docker stop --signal SIGTERM --time 30 "$container" >/dev/null
 docker run --rm --network none --read-only --volumes-from "$container:ro" \
+    --env "BACKUP_OWNER=$(id -u):$(id -g)" \
     --mount "type=bind,source=$backup_dir,target=/backup" \
     --mount "type=bind,source=$ops_dir,target=/ops,readonly" \
     --entrypoint /bin/sh "$old_image" -ec '
@@ -55,8 +56,9 @@ docker run --rm --network none --read-only --volumes-from "$container:ro" \
         cd /backup
         sha256sum share-data.tar.gz files.sha256 snapshot.json > SHA256SUMS
         rm -rf /backup/verify
-        chmod 600 /backup/*
         touch /backup/VERIFIED
+        chmod 600 /backup/*
+        chown -R "$BACKUP_OWNER" /backup
     '
 docker start "$container" >/dev/null
 restart_needed=0
