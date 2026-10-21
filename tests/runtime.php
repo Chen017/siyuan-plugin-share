@@ -22,7 +22,10 @@ function check(bool $condition, string $message): void {
     $checks++;
 }
 
-check(PHP_MAJOR_VERSION === 8 && PHP_MINOR_VERSION === 3, 'Expected PHP 8.3');
+check(
+    PHP_MAJOR_VERSION === 8 && PHP_MINOR_VERSION === 3 && version_compare(PHP_VERSION, '8.3.36', '>='),
+    'Expected PHP 8.3.36 or newer in the PHP 8.3 series (security fixes CVE-2026-109618 / CVE-2026-109619)'
+);
 foreach (['gd', 'mbstring', 'PDO', 'pdo_sqlite', 'zip', 'dom', 'fileinfo', 'openssl', 'zlib'] as $extension) {
     check(extension_loaded($extension), 'Missing extension: ' . $extension);
 }

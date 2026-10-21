@@ -2,23 +2,23 @@
 
 ## 范围
 
-- Docker 运行时从 `php:8.1-fpm-alpine` 升级为 `php:8.3-fpm-alpine`，保持现有 Nginx、PHP-FPM、扩展和数据目录布局。
-- 保留 `8.3` 浮动标签以接收 8.3 系列补丁。部署构建必须使用 `--pull`，否则可能继续使用本地旧基础镜像。
+- Docker 运行时从 `php:8.1-fpm-alpine` 升级为官方 `php:8.3.36-fpm-alpine`，保持现有 Nginx、PHP-FPM、扩展和数据目录布局。
+- 固定到已确认修复的 PHP 8.3.36 补丁版本，防止浮动标签尚未更新时误用旧 PHP。后续 PHP 安全更新需显式升级补丁版本并复测。部署构建必须使用 `--pull`，以获取该标签的最新镜像及系统包更新。
 - 修复容器停止信号不匹配：PHP-FPM 基础镜像默认 `SIGQUIT`，现有启动脚本原本只处理 `SIGTERM`/`SIGINT`，实测停止超时后被强杀。现在显式使用 `SIGTERM`，并兼容处理 `SIGQUIT`，转发给 Nginx/FPM 后等待退出。
 - 分支：`beta/php-8.3`。Beta 推送只运行回归测试；现有正式部署仅监听 `main`，镜像发布仅监听版本标签或手动触发。
 - 不修改业务逻辑、数据库结构和依赖版本。当前 fork 隐藏公开评论界面的行为保持不变。
 
-## 安全补丁状态（2026-10-21）
+## 安全补丁状态（2026-10-22，新加坡时间）
 
-[PHP 官方公告](https://www.php.net/)计划于 2026-10-21 14:00 UTC（新加坡/北京时间 22:00）发布严重漏洞修复。公告表示受影响版本和修复版本将在发布时公布。
+[PHP 官方安全公告](https://www.php.net/archive/2026.php#2026-10-21-5)和 [PHP 8.3.36 发布公告](https://www.php.net/archive/2026.php#2026-10-21-2)已确认 PHP 8.3.36 修复 CVE-2026-109618、CVE-2026-109619 两项严重未认证远程代码执行漏洞。受影响范围包括 PHP-FPM 等处理 Web 请求的 PHP 安装；8.3.35 是此前的兼容性基线，未修复本次漏洞。
 
-当前验证用的 PHP 8.3.35 是升级兼容性基线，**不能据此认定已修复本次漏洞**。保持 Beta，等待公告确认修复版本及 Docker 官方镜像更新，再重新构建和测试。此分支不自动部署、不发布正式版本。
+已核对 Docker 官方镜像的 Linux amd64 平台配置：`PHP_VERSION=8.3.36`。测试在原有 38 项运行时检查中强制要求 PHP 8.3 系列且至少为 8.3.36；旧镜像将验证失败。保持 Beta，此分支不自动部署、不发布正式版本。完整构建及回归结果记录在下方。
 
 ## 可重复测试
 
 需要 Python 3.11+，无第三方 Python 依赖。
 
-本地 PHP 8.3（启用 `gd`、`mbstring`、`pdo_sqlite`、`zip`、`dom`、`fileinfo`、`openssl`、`zlib`）：
+本地 PHP 8.3.36 或更高的 8.3 补丁版本（启用 `gd`、`mbstring`、`pdo_sqlite`、`zip`、`dom`、`fileinfo`、`openssl`、`zlib`）：
 
 ```sh
 python tests/run.py --php /path/to/php
