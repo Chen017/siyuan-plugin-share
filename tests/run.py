@@ -428,8 +428,14 @@ def main():
                 if exit_code != '0':
                     raise RuntimeError('Ungraceful container shutdown: ' + exit_code)
                 command(['docker', 'start', container], stdout=subprocess.DEVNULL)
+                command(['docker', 'exec', container, 'curl', '--retry', '15', '--retry-connrefused', '--retry-delay', '1', '--fail', '--silent', '--output', '/dev/null', 'http://127.0.0.1/login'])
                 if subprocess.check_output(counts) != before:
                     raise RuntimeError('Database records changed across restart')
+                # Also accept the signal inherited by older PHP-FPM base images.
+                command(['docker', 'stop', '--signal', 'SIGQUIT', '--time', '15', container], stdout=subprocess.DEVNULL)
+                exit_code = subprocess.check_output(['docker', 'inspect', '--format', '{{.State.ExitCode}}', container], text=True).strip()
+                if exit_code != '0':
+                    raise RuntimeError('Ungraceful SIGQUIT shutdown: ' + exit_code)
                 print('Docker health, graceful shutdown and database persistence passed')
         finally:
             if process:
