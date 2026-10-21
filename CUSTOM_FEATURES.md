@@ -105,18 +105,15 @@
 ## 5. CI/CD 自动化部署工作流
 
 ### 改动目的
-- 实现代码推送到 GitHub 后自动同步部署到个人服务器。
+- 在完整测试及可恢复数据备份之后安装到个人服务器，避免推送代码时越过验收和备份直接升级。
 
 ### 涉及文件与具体实现
 - **新增 SSH 自动发布工作流 (`.github/workflows/deploy.yml`)**：
-  - 监听 `main` 分支的 `push` 事件。
-  - 借助 `appleboy/ssh-action` 连接服务器，执行自动更新流水线：
-    ```bash
-    cd /root/siyuan-plugin-share
-    git pull origin main
-    docker compose up -d --build
-    docker image prune -f
-    ```
+  - 手动触发 `workflow_dispatch`，提供 `inspect`（只读检查）与 `deploy`（备份后安装）两种操作；`main` 推送只运行回归测试，不直接部署。
+  - `deploy` 仅允许当前 `main` 提交，且该提交的完整回归与备份恢复演练必须通过。
+  - 通过现有 SSH 凭据执行 `scripts/deploy-vps.sh`：冻结写入、备份数据库/附件/配置，解压验证全部文件校验值和 SQLite 完整性，恢复旧服务，再构建和安装新镜像。
+  - 切换后核对数据指纹、页面、权限、PHP 版本及容器健康；安装验证失败时尝试恢复保留的旧镜像，不自动覆盖生产数据库。
+  - 备份保存在 `/root/siyuan-share-backups/`，保留回退镜像，不自动清理旧备份或回退镜像。详见 [VPS 升级验收记录](docs/VPS_UPGRADE_20261022.md)。
 - **清理无用上游工作流**：
   - 删除了原作者用于同步到 Gitee 的工作流文件 `.github/workflows/sync-to-gitee.yml`。
 

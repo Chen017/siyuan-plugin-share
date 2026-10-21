@@ -50,7 +50,6 @@ jobs:
             printf 'Runtime and data sizes\n'
             docker exec siyuan-share-web php -v
             docker exec siyuan-share-web sh -c 'du -sh /var/www/html/storage /var/www/html/uploads; test -f /var/www/html/config.php && echo config-present || true'
-            docker exec siyuan-share-web php -r '$c = is_file("/var/www/html/config.php") ? require "/var/www/html/config.php" : []; echo json_encode(["db_path" => $c["db_path"] ?? "/var/www/html/storage/app.db", "uploads_dir" => $c["uploads_dir"] ?? "/var/www/html/uploads", "site_base_url" => $c["site_base_url"] ?? ""], JSON_UNESCAPED_SLASHES), "\n";'
             printf 'HTTP smoke test\n'
             curl -sS -o /dev/null -w 'login=%{http_code}\n' http://127.0.0.1:8081/login
 

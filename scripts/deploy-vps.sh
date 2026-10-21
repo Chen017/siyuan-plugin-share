@@ -74,8 +74,5 @@ docker exec siyuan-share-web nginx -t
 docker exec siyuan-share-web php-fpm -t
 deployment_complete=1
 printf 'DEPLOYED_COMMIT=%s\nBACKUP_DIR=%s\nINSTALLED_IMAGE=%s\n' "$expected_sha" "$backup_dir" "$new_image"
-cat "$backup_dir/after-snapshot.json"
-if command -v nginx >/dev/null 2>&1; then
-    nginx -T 2>/dev/null | awk '/server_name[[:space:]]/ {server=$0} /proxy_pass.*(127[.]0[.]0[.]1|localhost):8081/ {print "PUBLIC_SITE_CONFIG=" server}' || true
-fi
+echo 'Production data fingerprints match; detailed snapshots retained privately on the VPS.'
 echo 'Deployment verified; no backup, rollback image, or production data was deleted.'
