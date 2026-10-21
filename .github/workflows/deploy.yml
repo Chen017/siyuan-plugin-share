@@ -1,14 +1,21 @@
 name: Deploy Siyuan Plugin Share
 
 on:
-  push:
-    branches: [ "main" ]
-    
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vps-deployment
+  cancel-in-progress: false
+
 jobs:
-  deploy:
+  inspect:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Deploy via SSH
+      - name: Inspect VPS deployment without changing data
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.HOST }}
@@ -16,8 +23,24 @@ jobs:
           username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_KEY }}
           script: |
+            set -eu
             cd /root/siyuan-plugin-share
-            git pull origin main
-            docker compose build --pull
-            docker compose up -d
-            docker image prune -f
+            printf 'Repository status\n'
+            git status --short
+            git branch --show-current
+            git rev-parse HEAD
+            printf 'Storage capacity\n'
+            df -h . /root
+            printf 'Container and mounts\n'
+            docker inspect siyuan-share-web --format 'image={{.Image}} status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{end}}'
+            docker inspect siyuan-share-web --format '{{range .Mounts}}{{println .Type .Source .Destination .RW}}{{end}}'
+            docker inspect siyuan-share-web --format '{{json .NetworkSettings.Ports}}'
+            printf 'Compose services\n'
+            docker compose config --services
+            docker compose config --images
+            printf 'Runtime and data sizes\n'
+            docker exec siyuan-share-web php -v
+            docker exec siyuan-share-web sh -c 'du -sh /var/www/html/storage /var/www/html/uploads; test -f /var/www/html/config.php && echo config-present || true'
+            docker exec siyuan-share-web php -r '$c = is_file("/var/www/html/config.php") ? require "/var/www/html/config.php" : []; echo json_encode(["db_path" => $c["db_path"] ?? "/var/www/html/storage/app.db", "uploads_dir" => $c["uploads_dir"] ?? "/var/www/html/uploads", "site_base_url" => $c["site_base_url"] ?? ""], JSON_UNESCAPED_SLASHES), "\n";'
+            printf 'HTTP smoke test\n'
+            curl -sS -o /dev/null -w 'login=%{http_code}\n' http://127.0.0.1:8081/login
