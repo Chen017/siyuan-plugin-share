@@ -6,6 +6,7 @@ on:
     paths:
       - 'php-site/**'
       - 'tests/**'
+      - 'scripts/**'
       - '.dockerignore'
       - 'docker-compose*.yml'
       - '.github/workflows/php83-regression.yml'
@@ -28,3 +29,9 @@ jobs:
         run: docker build --pull --no-cache -f php-site/Dockerfile -t siyuan-share:php83-test .
       - name: Test PHP runtime, database, HTTP APIs and Nginx rules
         run: python3 tests/run.py --docker siyuan-share:php83-test
+      - name: Verify consistent backup and restoration using disposable data
+        run: |
+          bash -n scripts/backup-data.sh scripts/deploy-vps.sh tests/backup-fixture.sh
+          php_file=scripts/data-snapshot.php
+          docker run --rm --entrypoint php -v "$PWD/scripts:/ops:ro" siyuan-share:php83-test -l "/ops/$(basename "$php_file")"
+          bash tests/backup-fixture.sh siyuan-share:php83-test
