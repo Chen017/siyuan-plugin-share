@@ -1,4 +1,4 @@
-FROM php:8.1-fpm-alpine
+FROM php:8.3.36-fpm-alpine
 
 # Install runtime packages + build deps, compile PHP extensions, then remove build deps
 RUN set -eux; \
@@ -136,7 +136,7 @@ _shutdown() {
     kill -TERM "$FPM_PID" 2>/dev/null || true
     wait "$NGINX_PID" "$FPM_PID" 2>/dev/null || true
 }
-trap '_shutdown; exit 0' TERM INT
+trap '_shutdown; exit 0' TERM INT QUIT
 
 # Exit container if either process exits unexpectedly.
 while kill -0 "$NGINX_PID" 2>/dev/null && kill -0 "$FPM_PID" 2>/dev/null; do
@@ -152,6 +152,9 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -sf http://127.0.0.1/login -o /dev/null
 
 EXPOSE 80
+
+# The FPM base image defaults to SIGQUIT; our PID 1 supervises both services.
+STOPSIGNAL SIGTERM
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 
