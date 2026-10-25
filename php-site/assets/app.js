@@ -5711,7 +5711,8 @@ const initImageViewer = () => {
         if (languages.has("abc")) dependencies.push(loadDiagramScript("abcjs-basic-min.js", () => !!window.ABCJS));
         if (languages.has("graphviz") || languages.has("dot")) {
           dependencies.push(loadDiagramScript("viz.js", () => !!window.Viz)
-            .then(() => loadDiagramScript("full.render.js", () => typeof window.render === "function")));
+            .then(() => loadDiagramScript("full.render.js", () =>
+              typeof window.Viz?.render === "function" || typeof window.render === "function")));
         }
         if (languages.has("flowchart") && !codes.every(code =>
           getLanguage(code) !== "flowchart" || isMermaidFlowchart(code.textContent))) {

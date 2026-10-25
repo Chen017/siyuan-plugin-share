@@ -15,6 +15,13 @@ const core = ['markdown-it.min.js', 'markdown-it-task-lists.min.js',
   'markdown-it-anchor.min.js', 'katex.min.js', 'highlight.min.js'];
 const main = raw => `<div class="kb-main" role="main"><div class="markdown-body" data-md-id="doc"></div><textarea class="markdown-source" data-md-id="doc">${escape(raw)}</textarea></div>`;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function waitFor(condition, message) {
+  const deadline = Date.now() + 5000;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error(`Timed out: ${message}`);
+    await delay(20);
+  }
+}
 
 async function page(raw) {
   const dom = new JSDOM(`<body class="layout-share"><div class="share-shell"><aside data-share-sidebar><div data-share-tabs data-share-default="toc"><button data-share-tab="toc">目录</button></div><div data-share-panel="toc"><div data-share-toc="doc"></div></div></aside>${main(raw)}</div><a data-share-nav="doc" href="/s/test?doc=next">Next</a><script src="https://reader.test/assets/app.js?v=fixture"></script></body>`, {
@@ -56,7 +63,7 @@ async function page(raw) {
         case 'echarts.min.js': w.echarts = {init: () => ({setOption() {}, resize() {}})}; break;
         case 'abcjs-basic-min.js': w.ABCJS = {renderAbc: id => w.document.getElementById(id).appendChild(svg())}; break;
         case 'viz.js': w.Viz = function() {this.renderSVGElement = async () => svg();}; break;
-        case 'full.render.js': assert(w.Viz, 'Viz wrapper loads first'); w.render = () => {}; break;
+        case 'full.render.js': assert(w.Viz, 'Viz wrapper loads first'); w.Viz.render = () => {}; w.Viz.Module = () => {}; break;
         case 'raphael.min.js': w.Raphael = () => {}; break;
         case 'flowchart.min.js': assert(w.Raphael, 'Raphael loads first'); w.flowchart = {parse: () => ({drawSVG: id => w.document.getElementById(id).appendChild(svg())})}; break;
         default: throw new Error(`Unexpected remote script: ${file}`);
@@ -66,12 +73,14 @@ async function page(raw) {
     return result;
   };
   w.eval(app);
-  await delay(120);
+  await waitFor(() => w.document.querySelector('.markdown-body')?.dataset.spsRendered === '1', 'initial note enhancement');
   return {w, requests, errors, renders: () => renders, close: () => w.close(),
     async navigate(next) {
+      const before = renders;
       w.fetch = async () => ({ok: true, json: async () => ({code: 0, data: {html: main(next), title: 'Next note', docId: 'next'}})});
       w.document.querySelector('[data-share-nav]').click();
-      await delay(120);
+      await waitFor(() => renders > before &&
+        w.document.querySelector('.markdown-body')?.dataset.spsRendered === '1', 'navigated note enhancement');
     }};
 }
 
@@ -120,5 +129,15 @@ async function page(raw) {
       assert(fixture.w.document.querySelector('.md-diagram, .mermaid'), `${language} is enhanced`);
     } finally { fixture.close(); }
   }
-  console.log('Frontend passed: core math, Chinese TOC focus, button semantics, download control, single rendering, navigation, and 8 diagram loading cases.');
+  // Validate the real bundled Graphviz exports as well as the loader fixtures.
+  // This build attaches render/Module to Viz, not to the window object.
+  const graphvizDom = new JSDOM('<body></body>', {runScripts: 'outside-only'});
+  try {
+    const w = graphvizDom.window;
+    for (const file of ['viz.js', 'full.render.js']) w.eval(fs.readFileSync(path.join(assets, 'vendor', file), 'utf8'));
+    assert.equal(typeof w.Viz.render, 'function');
+    const svg = await new w.Viz().renderSVGElement('digraph { A -> B }');
+    assert.equal(svg.tagName.toLowerCase(), 'svg');
+  } finally { graphvizDom.window.close(); }
+  console.log('Frontend passed: core math, Chinese TOC focus, button semantics, download control, single rendering, navigation, eight diagram loading cases and real Graphviz SVG rendering.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
