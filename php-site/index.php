@@ -72,6 +72,7 @@ if (function_exists('date_default_timezone_set')) {
 }
 
 require_once __DIR__ . '/vendor/Parsedown.php';
+require_once __DIR__ . '/pdf-export.php';
 
 function base_path(): string {
     $script = $_SERVER['SCRIPT_NAME'] ?? '';
@@ -169,6 +170,8 @@ function migrate(PDO $pdo): void {
         deleted_at TEXT,
         FOREIGN KEY(user_id) REFERENCES users(id)
     );');
+
+    pdf_export_migrate($pdo);
 
     $pdo->exec('CREATE TABLE IF NOT EXISTS share_docs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -481,6 +484,7 @@ function seed_default_settings(PDO $pdo): void {
     ensure_setting($pdo, 'site_custom_js', '');
     ensure_setting($pdo, 'access_stats_default_enabled', '1');
     ensure_setting($pdo, 'access_stats_default_retention_days', '7');
+    seed_pdf_export_settings($pdo);
 }
 
 function seed_default_admin(PDO $pdo): void {
@@ -1197,6 +1201,7 @@ function render_page(string $title, string $content, ?array $user = null, string
     }
     $layoutClass = 'layout-' . preg_replace('/[^a-z0-9_-]+/i', '', $layout);
     $includeMarkdown = !empty($options['markdown']);
+    if (!empty($options['pdf_export']) && $includeMarkdown) $layoutClass .= ' pdf-export-preview';
     $navKey = (string)($options['nav'] ?? '');
     if ($user && $layout !== 'auth' && $layout !== 'share') {
         maybe_send_instance_heartbeat();
@@ -1233,6 +1238,10 @@ function render_page(string $title, string $content, ?array $user = null, string
     if ($layout === 'share') {
         echo "<style id='sps-share-font-force'>body.layout-share .markdown-body,body.layout-share .markdown-body :where(p,li,a,strong,em,del,mark,h1,h2,h3,h4,h5,h6,blockquote,td,th){font-family:var(--font-markdown) !important;}</style>";
     }
+    if ($layout === 'share') {
+        $pdfStyleUrl = htmlspecialchars(site_asset_url('pdf-export.css'), ENT_QUOTES, 'UTF-8');
+        echo "<link rel='stylesheet' href='{$pdfStyleUrl}'>";
+    }
     echo "</head>";
     echo "<body class='{$layoutClass}'>";
 
@@ -1243,6 +1252,9 @@ function render_page(string $title, string $content, ?array $user = null, string
     } elseif ($layout === 'share') {
         echo "<div class='share-page'>";
         echo render_share_icon_defs();
+        if (!empty($GLOBALS['share_pdf_context']) && empty($options['pdf_export'])) {
+            echo render_pdf_export_link($GLOBALS['share_pdf_context']);
+        }
         echo $content;
         echo "<footer class='share-footer'><span class='footer-credit'>由 <a class='footer-owner' href='https://github.com/Chen017/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Chen017</a> 维护</span><span class='footer-separator' aria-hidden='true'>·</span><span class='footer-credit'>上游：<a class='footer-upstream' href='https://github.com/b8l8u8e8/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Siyuan Share</a></span></footer>";
         echo "<button class='share-side-trigger' type='button' data-share-drawer-open aria-label='打开侧边栏'><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='currentColor' d='M4 6h16v2H4zM4 11h16v2H4zM4 16h16v2H4z'/></svg><span>导航</span></button>";
@@ -1355,6 +1367,10 @@ function render_page(string $title, string $content, ?array $user = null, string
     if ($siteCustomJsEnabled && trim($siteCustomJs) !== '') {
         $safeCustomJs = escape_inline_script_content($siteCustomJs);
         echo "<script id='site-custom-js'>\nwindow.addEventListener('DOMContentLoaded', function () {\n{$safeCustomJs}\n});\n</script>";
+    }
+    if ($layout === 'share') {
+        $pdfJsUrl = htmlspecialchars(site_asset_url('pdf-export.js'), ENT_QUOTES, 'UTF-8');
+        echo "<script defer src='{$pdfJsUrl}'></script>";
     }
     echo "</body>";
     echo "</html>";
@@ -8532,6 +8548,7 @@ function route_share(string $slug, ?string $docId = null): void {
         return;
     }
 
+    $GLOBALS['share_pdf_context'] = ['slug' => $slug, 'doc_id' => (string)($docId ?: ($share['doc_id'] ?? ''))];
     $pdo = db();
     $stmt = $pdo->prepare('SELECT id, doc_id, title, icon, hpath, parent_id, sort_index, sort_order, updated_at FROM share_docs WHERE share_id = :sid ORDER BY sort_order ASC, id ASC');
     $stmt->execute([':sid' => $shareId]);
@@ -8878,6 +8895,10 @@ if ($path === '/api/instances/stats') {
 
 if (strpos($path, '/api/v1/') === 0) {
     handle_api($path);
+}
+
+if (preg_match('#^/s/([a-zA-Z0-9_-]+)/export(?:/(verify|release))?$#', $path, $matches)) {
+    route_pdf_export($matches[1], $matches[2] ?? '');
 }
 
 if (preg_match('#^/s/([a-zA-Z0-9_-]+)/res/(.+)$#', $path, $matches)) {
@@ -11001,7 +11022,9 @@ if ($path === '/admin') {
     $content .= '<div><label>SMTP 密码</label><input class="input" type="password" name="smtp_pass" value="' . htmlspecialchars((string)$smtpPass) . '"></div>';
     $content .= '</div>';
     $content .= '<div style="margin-top:12px"><button class="button primary" type="submit">保存设置</button></div>';
-    $content .= '</form></div>';
+    $content .= '</form>';
+    $content .= render_pdf_export_settings();
+    $content .= '</div>';
     $content .= '<div class="modal" id="site-base-url-help" data-report-modal hidden>';
     $content .= '<div class="modal-backdrop" data-modal-close></div>';
     $content .= '<div class="modal-card">';
@@ -11724,6 +11747,18 @@ $content .= '<div class="modal admin-comment-modal" data-admin-comment-modal hid
     $content .= '</div>';
     $titleHtml = build_topbar_title('后台', $admin);
     render_page('后台', $content, $admin, '', ['layout' => 'app', 'nav' => 'admin-settings', 'title_html' => $titleHtml]);
+}
+
+if ($path === '/admin/pdf-export-settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_admin();
+    pdf_export_csrf();
+    try {
+        save_pdf_export_settings($_POST);
+        flash('info', 'PDF 导出设置已保存，立即生效。');
+    } catch (InvalidArgumentException $error) {
+        flash('error', $error->getMessage());
+    }
+    redirect('/admin#settings');
 }
 
 if ($path === '/admin/settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
