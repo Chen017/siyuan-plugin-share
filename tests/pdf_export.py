@@ -1,5 +1,6 @@
 """Guest export permissions, resource budgets and shared abuse limits."""
 import hashlib
+import html
 import json
 from pathlib import Path
 import re
@@ -9,6 +10,82 @@ import unittest
 
 
 class PdfExportTests:
+    def pdf_admin_form(self, admin):
+        status, _, page = admin.request('/admin#settings')
+        self.assertEqual(status, 200)
+        form = re.search(r'<form[^>]+data-pdf-settings-form>(.*?)</form>', page.decode(), re.S)
+        self.assertIsNotNone(form)
+        values = dict(re.findall(r'name="([^"]+)"[^>]*value="([^"]*)"', form[1]))
+        values = {key: html.unescape(value) for key, value in values.items()}
+        enabled = re.search(r'name="pdf_export_enabled"[^>]*checked', form[1])
+        if not enabled:
+            values.pop('pdf_export_enabled', None)
+        values['pdf_export_trusted_proxies'] = html.unescape(re.search(r'name="pdf_export_trusted_proxies"[^>]*>(.*?)</textarea>', form[1], re.S)[1])
+        values['pdf_export_ip_header'] = re.search(r'<option value="([^"]+)" selected>', form[1])[1]
+        return values
+
+    def test_pdf_admin_settings_enable_and_immediate_limits(self):
+        share, docs = self.pdf_notebook(2)
+        visitor, path, token = self.pdf_visitor(share)
+        admin = self.admin()
+        original = self.pdf_admin_form(admin)
+        general_before = self.rows("SELECT key, value FROM settings WHERE key NOT LIKE 'pdf_export_%' ORDER BY key")
+        active = self.pdf_post(visitor, path, token)[2]
+        lease = self.pdf_lease(active)
+        try:
+            disabled = {key: value for key, value in original.items() if key != 'pdf_export_enabled'}
+            self.assertEqual(admin.request('/admin/pdf-export-settings', disabled)[0], 302)
+            self.assertNotIn(b'data-pdf-export-link', visitor.request(path[:-7])[2])
+            self.assertEqual(visitor.request(path)[0], 404)
+            self.assertEqual(self.pdf_post(visitor, path, token)[0], 404)
+            self.assertEqual(visitor.request(path + '/verify', {'csrf': token, 'lease': lease})[0], 404)
+            visitor.request(path + '/release', {'csrf': token, 'lease': lease})
+            self.rows('DELETE FROM pdf_export_events')
+            changed = {**original, 'limits[max_docs]': '1', 'limits[ip_requests]': '1',
+                       'limits[max_concurrent]': '1', 'limits[max_markdown_bytes]': '0.5',
+                       'limits[max_execution_seconds]': '10', 'limits[max_memory_bytes]': '64',
+                       'pdf_export_trusted_proxies': '192.0.2.1,2001:0db8:0:0:0:0:0:1', 'pdf_export_ip_header': 'HTTP_CF_CONNECTING_IP'}
+            self.assertEqual(admin.request('/admin/pdf-export-settings', changed)[0], 302)
+            restored_form = self.pdf_admin_form(admin)
+            self.assertEqual(restored_form['limits[max_docs]'], '1')
+            self.assertEqual(restored_form['limits[max_markdown_bytes]'], '0.5')
+            self.assertEqual(restored_form['pdf_export_trusted_proxies'], '192.0.2.1\n2001:db8::1')
+            self.assertEqual(restored_form['pdf_export_ip_header'], 'HTTP_CF_CONNECTING_IP')
+            self.assertEqual(self.rows("SELECT value FROM settings WHERE key = 'pdf_export_max_markdown_bytes'")[0]['value'], '524288')
+            self.assertEqual(self.pdf_post(visitor, path, token)[0], 413)
+            self.assertEqual(self.pdf_post(visitor, path, token, scope='single', doc_id=docs[0]['docId'])[0], 429)
+            self.rows('DELETE FROM pdf_export_events')
+            self.assertEqual(self.pdf_post(visitor, path, token, scope='single', doc_id=docs[0]['docId'])[0], 200)
+            self.assertEqual(self.rows("SELECT key, value FROM settings WHERE key NOT LIKE 'pdf_export_%' ORDER BY key"), general_before)
+        finally:
+            admin.request('/admin/pdf-export-settings', original)
+            self.rows('DELETE FROM pdf_export_leases')
+            self.rows('DELETE FROM pdf_export_events')
+
+    def test_pdf_admin_settings_authorization_and_validation(self):
+        visitor = type(self.client)(self.base)
+        self.assertEqual(visitor.request('/admin/pdf-export-settings', {})[0], 302)
+        self.assertEqual(self.client.request('/admin/pdf-export-settings', {})[0], 403)
+        admin = self.admin()
+        original = self.pdf_admin_form(admin)
+        before = self.rows("SELECT key, value FROM settings WHERE key LIKE 'pdf_export_%' ORDER BY key")
+        self.assertEqual(admin.request('/admin/pdf-export-settings', {**original, 'csrf': 'wrong'})[0], 400)
+        self.assertEqual(admin.request('/admin/pdf-export-settings', {**original, 'csrf[x]': 'wrong'})[0], 400)
+        for invalid in [
+            {'limits[max_docs]': '31'}, {'limits[ip_requests]': '0'}, {'limits[window_seconds]': '1e2'},
+            {'limits[max_docs]': '2.5'}, {'limits[max_markdown_bytes]': '-1'},
+            {'limits[max_memory_bytes]': '1'}, {'limits[max_concurrent][x]': '1'},
+            {'pdf_export_enabled[x]': '1'}, {'pdf_export_trusted_proxies': '0.0.0.0/0'},
+            {'pdf_export_trusted_proxies': '*'}, {'pdf_export_trusted_proxies': 'localhost'},
+            {'pdf_export_trusted_proxies[]': '127.0.0.1'}, {'pdf_export_ip_header': 'HTTP_X_FORWARDED_FOR'},
+            {'pdf_export_ip_header[x]': 'HTTP_X_REAL_IP'},
+        ]:
+            payload = {**original, 'limits[max_docs]': '1', **invalid}
+            self.assertEqual(admin.request('/admin/pdf-export-settings', payload)[0], 302)
+            self.assertEqual(self.rows("SELECT key, value FROM settings WHERE key LIKE 'pdf_export_%' ORDER BY key"), before, invalid)
+        self.assertEqual(admin.request('/admin/pdf-export-settings', {'csrf': original['csrf']})[0], 302)
+        self.assertEqual(self.rows("SELECT key, value FROM settings WHERE key LIKE 'pdf_export_%' ORDER BY key"), before)
+
     def test_pdf_atomic_global_admission(self):
         if not self.php_executable:
             self.skipTest('Multi-process admission race uses the local PHP CLI')

@@ -484,6 +484,9 @@ function seed_default_settings(PDO $pdo): void {
     ensure_setting($pdo, 'site_custom_js', '');
     ensure_setting($pdo, 'access_stats_default_enabled', '1');
     ensure_setting($pdo, 'access_stats_default_retention_days', '7');
+    foreach (pdf_export_initial_settings() as $key => $value) {
+        ensure_setting($pdo, $key, $value);
+    }
 }
 
 function seed_default_admin(PDO $pdo): void {
@@ -11013,7 +11016,9 @@ if ($path === '/admin') {
     $content .= '<div><label>SMTP 密码</label><input class="input" type="password" name="smtp_pass" value="' . htmlspecialchars((string)$smtpPass) . '"></div>';
     $content .= '</div>';
     $content .= '<div style="margin-top:12px"><button class="button primary" type="submit">保存设置</button></div>';
-    $content .= '</form></div>';
+    $content .= '</form>';
+    $content .= render_pdf_export_settings();
+    $content .= '</div>';
     $content .= '<div class="modal" id="site-base-url-help" data-report-modal hidden>';
     $content .= '<div class="modal-backdrop" data-modal-close></div>';
     $content .= '<div class="modal-card">';
@@ -11736,6 +11741,18 @@ $content .= '<div class="modal admin-comment-modal" data-admin-comment-modal hid
     $content .= '</div>';
     $titleHtml = build_topbar_title('后台', $admin);
     render_page('后台', $content, $admin, '', ['layout' => 'app', 'nav' => 'admin-settings', 'title_html' => $titleHtml]);
+}
+
+if ($path === '/admin/pdf-export-settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_admin();
+    pdf_export_csrf();
+    try {
+        save_pdf_export_settings($_POST);
+        flash('info', 'PDF 导出设置已保存，立即生效。');
+    } catch (InvalidArgumentException $error) {
+        flash('error', $error->getMessage());
+    }
+    redirect('/admin#settings');
 }
 
 if ($path === '/admin/settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {

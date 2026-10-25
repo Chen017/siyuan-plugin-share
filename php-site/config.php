@@ -5,7 +5,8 @@ return [
     'default_storage_limit_mb' => 1024,
     // Session lifetime (days)
     'session_lifetime_days' => 30,
-    // Browser-generated PDF; server only prepares bounded, authorized print pages.
+    // Initial PDF defaults only. After first startup, manage these in Admin > Site settings.
+    // Existing database settings take precedence and are never overwritten by this file.
     'pdf_export_enabled' => true,
     'pdf_export' => [
         'window_seconds' => 600,
@@ -18,6 +19,9 @@ return [
         'max_html_bytes' => 8388608,
         'max_asset_bytes' => 52428800,
         'max_images' => 200,
+        'max_execution_seconds' => 15,
+        'max_memory_bytes' => 134217728,
+        'max_window_events' => 20000,
     ],
     // Exact proxy peer IPs only. The proxy MUST overwrite this single-IP header.
     'pdf_export_trusted_proxies' => [],

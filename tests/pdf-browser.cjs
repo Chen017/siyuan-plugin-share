@@ -34,8 +34,47 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     await preview.locator('[data-pdf-print]').click();
     await preview.waitForFunction(() => window.__pdfPrinted === true);
     await preview.pdf({ path: path.join(output, 'guest-batch.pdf'), preferCSSPageSize: true, printBackground: true, displayHeaderFooter: false });
+    // Real admin UI: save in the standalone form, observe Guest changes, restore.
+    const adminContext = await browser.newContext({ viewport: { width: 1280, height: 1000 } });
+    try {
+      const admin = await adminContext.newPage();
+      const base = new URL(shareUrl).origin;
+      await admin.goto(`${base}/login`);
+      await admin.locator('input[name=username]').fill('admin');
+      await admin.locator('input[name=password]').fill('123456');
+      await admin.locator('[data-login-panel=password] button[type=submit]').click();
+      await admin.goto(`${base}/admin#settings`);
+      let settings = admin.locator('[data-pdf-settings-form]');
+      const original = await settings.evaluate((form) => Object.fromEntries(new FormData(form)));
+      try {
+        await settings.locator('[name=pdf_export_enabled]').uncheck();
+        await settings.locator('[name="limits[max_docs]"]').fill('5');
+        await settings.locator('summary').click();
+        await settings.locator('[name=pdf_export_trusted_proxies]').fill('192.0.2.10');
+        await settings.locator('[name=pdf_export_ip_header]').selectOption('HTTP_CF_CONNECTING_IP');
+        await settings.locator('button[type=submit]').click();
+        await admin.reload();
+        settings = admin.locator('[data-pdf-settings-form]');
+        assert.equal(await settings.locator('[name=pdf_export_enabled]').isChecked(), false);
+        assert.equal(await settings.locator('[name="limits[max_docs]"]').inputValue(), '5');
+        assert.equal(await settings.locator('[name=pdf_export_trusted_proxies]').inputValue(), '192.0.2.10');
+        assert.equal(await settings.locator('[name=pdf_export_ip_header]').inputValue(), 'HTTP_CF_CONNECTING_IP');
+        await settings.locator('summary').click();
+        await admin.locator('#pdf-export-settings').screenshot({ path: path.join(output, 'pdf-admin-settings.png') });
+        await page.goto(shareUrl);
+        assert.equal(await page.locator('[data-pdf-export-link]').count(), 0);
+        assert.equal((await context.request.get(`${shareUrl}/export`)).status(), 404);
+      } finally {
+        const restored = await admin.request.post(`${base}/admin/pdf-export-settings`, { form: original, maxRedirects: 0 });
+        assert.equal(restored.status(), 302);
+      }
+      await page.goto(shareUrl);
+      assert.equal(await page.locator('[data-pdf-export-link]').count(), 1);
+    } finally {
+      await adminContext.close();
+    }
     assert.deepEqual(errors, []);
-    console.log('Browser PDF checks passed: Guest flow, math, local image, table, code, Mermaid, unique IDs and printable PDF.');
+    console.log('Browser PDF checks passed: Guest rendering, printable PDF, admin settings UI, persistence and live Guest enable/disable.');
   } finally {
     await context.close();
     await browser.close();

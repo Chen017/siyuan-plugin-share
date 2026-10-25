@@ -2,19 +2,129 @@
 declare(strict_types=1);
 
 // PDF composition is bounded here; the visitor's browser does the PDF rendering.
-function pdf_export_limits(): array {
-    global $config;
-    $defaults = [
-        'window_seconds' => 600, 'ip_requests' => 10, 'fingerprint_requests' => 6,
-        'max_concurrent' => 4, 'lease_seconds' => 180, 'max_docs' => 30,
-        'max_markdown_bytes' => 2097152, 'max_html_bytes' => 8388608,
-        'max_asset_bytes' => 52428800, 'max_images' => 200,
+function pdf_export_fields(): array {
+    return [
+        'window_seconds' => ['max' => 600, 'label' => '次数统计窗口（秒）'],
+        'ip_requests' => ['max' => 10, 'label' => '每个 IP 在窗口内的导出次数'],
+        'fingerprint_requests' => ['max' => 6, 'label' => '每个浏览器指纹在窗口内的导出次数'],
+        'max_concurrent' => ['max' => 4, 'label' => '全站同时导出数量'],
+        'lease_seconds' => ['max' => 180, 'label' => '导出预览有效期（秒）'],
+        'max_docs' => ['max' => 30, 'label' => '单次批量文档数'],
+        'max_markdown_bytes' => ['max' => 2097152, 'label' => '单批源内容上限（MiB）', 'scale' => 1048576],
+        'max_html_bytes' => ['max' => 8388608, 'label' => '单批排版内容上限（MiB）', 'scale' => 1048576],
+        'max_asset_bytes' => ['max' => 52428800, 'label' => '单批关联附件上限（MiB）', 'scale' => 1048576],
+        'max_images' => ['max' => 200, 'label' => '单批图片数量'],
+        'max_execution_seconds' => ['max' => 15, 'label' => '服务器整理时间上限（秒）'],
+        'max_memory_bytes' => ['min' => 16777216, 'max' => 134217728, 'label' => '服务器整理内存上限（MiB）', 'scale' => 1048576],
+        'max_window_events' => ['max' => 20000, 'label' => '全站在窗口内的导出次数'],
     ];
-    foreach ($defaults as $key => $value) {
-        // Clamp configuration values to hard safety ceilings.
-        $defaults[$key] = max(1, min($value, (int)($config['pdf_export'][$key] ?? $value)));
+}
+
+// Read files only during initial seeding; never call db() while migrating.
+function pdf_export_initial_settings(): array {
+    global $config;
+    $settings = [
+        'pdf_export_enabled' => ($config['pdf_export_enabled'] ?? true) === true ? '1' : '0',
+        'pdf_export_trusted_proxies' => json_encode($config['pdf_export_trusted_proxies'] ?? []),
+        'pdf_export_ip_header' => (string)($config['pdf_export_ip_header'] ?? 'HTTP_X_REAL_IP'),
+    ];
+    foreach (pdf_export_fields() as $key => $field) {
+        $settings['pdf_export_' . $key] = (string)max($field['min'] ?? 1, min($field['max'], (int)($config['pdf_export'][$key] ?? $field['max'])));
     }
-    return $defaults;
+    return $settings;
+}
+
+function pdf_export_settings(): array {
+    $stored = db()->query("SELECT key, value FROM settings WHERE key LIKE 'pdf_export_%'")->fetchAll(PDO::FETCH_KEY_PAIR);
+    $values = array_merge(pdf_export_initial_settings(), $stored);
+    $limits = [];
+    foreach (pdf_export_fields() as $key => $field) {
+        $limits[$key] = max($field['min'] ?? 1, min($field['max'], (int)$values['pdf_export_' . $key]));
+    }
+    $proxies = json_decode((string)$values['pdf_export_trusted_proxies'], true);
+    return [
+        'enabled' => $values['pdf_export_enabled'] === '1',
+        'limits' => $limits,
+        'trusted_proxies' => is_array($proxies) ? array_values(array_filter($proxies, static fn($ip) => is_string($ip) && filter_var($ip, FILTER_VALIDATE_IP))) : [],
+        'ip_header' => in_array($values['pdf_export_ip_header'], ['HTTP_X_REAL_IP', 'HTTP_CF_CONNECTING_IP'], true) ? $values['pdf_export_ip_header'] : 'HTTP_X_REAL_IP',
+    ];
+}
+
+function pdf_export_limits(): array {
+    return pdf_export_settings()['limits'];
+}
+
+function pdf_export_setting_number(float $value): string {
+    return rtrim(rtrim(sprintf('%.8F', $value), '0'), '.');
+}
+
+function render_pdf_export_settings(): string {
+    $settings = pdf_export_settings();
+    $html = '<section id="pdf-export-settings" style="margin-top:28px"><h2>访客 PDF 导出</h2>';
+    $html .= '<p class="muted">保存后立即生效，无须修改 PHP 文件或重启服务。批量文档合并为一份 PDF。每个 IP 或浏览器同时仅允许一个预览。</p>';
+    $html .= '<form method="post" action="' . base_path() . '/admin/pdf-export-settings" data-pdf-settings-form>';
+    $html .= render_hidden_inputs(['csrf' => csrf_token()]);
+    $html .= '<label><input type="checkbox" name="pdf_export_enabled" value="1"' . ($settings['enabled'] ? ' checked' : '') . '> 允许访客导出 PDF</label>';
+    $html .= '<div class="grid" style="margin-top:12px">';
+    foreach (pdf_export_fields() as $key => $field) {
+        $scale = $field['scale'] ?? 1;
+        $min = $field['min'] ?? 1;
+        $id = 'pdf-export-' . $key;
+        $html .= '<div><label for="' . $id . '">' . $field['label'] . '</label><input class="input" id="' . $id . '" name="limits[' . $key . ']" type="number" required step="' . ($scale === 1 ? '1' : 'any')
+            . '" min="' . pdf_export_setting_number($min / $scale) . '" max="' . pdf_export_setting_number($field['max'] / $scale)
+            . '" value="' . pdf_export_setting_number($settings['limits'][$key] / $scale) . '">';
+        $html .= '<div class="muted">允许范围：' . pdf_export_setting_number($min / $scale) . ' 至 ' . pdf_export_setting_number($field['max'] / $scale) . '</div></div>';
+    }
+    $html .= '</div><p class="muted">1 MiB = 1024 KiB。数值受程序安全上限约束，不能填写 0 取消限制；服务器已有更低内存限制时继续遵守。缩短次数统计窗口会提高单位时间内的可导出次数。</p>';
+    $html .= '<details style="margin-top:16px"><summary>高级：反向代理真实 IP</summary><p class="muted">仅信任这里明确填写的代理地址。代理必须覆盖写入真实 IP 请求头，不能直接转发访客传入的同名头。留空时按直连地址限流，经过同一代理的访客会共用 IP 配额。</p>';
+    $html .= '<label for="pdf-trusted-proxies">可信代理 IP（每行一个，也可用逗号分隔）</label><textarea class="input" id="pdf-trusted-proxies" name="pdf_export_trusted_proxies" rows="3" placeholder="例如：127.0.0.1&#10;::1">' . htmlspecialchars(implode("\n", $settings['trusted_proxies'])) . '</textarea>';
+    $html .= '<label for="pdf-ip-header">代理覆盖写入的真实 IP 请求头</label><select class="input" id="pdf-ip-header" name="pdf_export_ip_header">';
+    foreach (['HTTP_X_REAL_IP' => 'X-Real-IP', 'HTTP_CF_CONNECTING_IP' => 'CF-Connecting-IP'] as $key => $label) {
+        $html .= '<option value="' . $key . '"' . ($settings['ip_header'] === $key ? ' selected' : '') . '>' . $label . '</option>';
+    }
+    $html .= '</select><p class="muted">仅接受精确 IPv4 / IPv6 地址，不接受通配符、网段或域名。请填写 PHP 实际看到的代理对端 IP。</p></details>';
+    $html .= '<div style="margin-top:16px"><button class="button primary" type="submit">保存 PDF 导出设置</button></div></form></section>';
+    return $html;
+}
+
+function save_pdf_export_settings(array $input): void {
+    $limits = $input['limits'] ?? null;
+    if (!is_array($limits)) throw new InvalidArgumentException('请完整填写 PDF 导出限制。');
+    $values = [];
+    foreach (pdf_export_fields() as $key => $field) {
+        $raw = $limits[$key] ?? null;
+        $scale = $field['scale'] ?? 1;
+        $pattern = $scale === 1 ? '/^[0-9]{1,10}$/D' : '/^[0-9]{1,10}(?:\.[0-9]{1,8})?$/D';
+        if (!is_string($raw) || !preg_match($pattern, $raw) || round((float)$raw * $scale) < ($field['min'] ?? 1) || (float)$raw * $scale > $field['max']) {
+            throw new InvalidArgumentException('「' . $field['label'] . '」必须在允许范围内。');
+        }
+        $values['pdf_export_' . $key] = (string)(int)round((float)$raw * $scale);
+    }
+    $enabled = $input['pdf_export_enabled'] ?? '0';
+    if (!is_string($enabled) || !in_array($enabled, ['0', '1'], true)) throw new InvalidArgumentException('无效的导出开关。');
+    $rawProxies = $input['pdf_export_trusted_proxies'] ?? '';
+    if (!is_string($rawProxies) || strlen($rawProxies) > 4096) throw new InvalidArgumentException('可信代理地址过长或格式无效。');
+    $proxies = preg_split('/[\s,]+/', trim($rawProxies), -1, PREG_SPLIT_NO_EMPTY);
+    if (count($proxies) > 32) throw new InvalidArgumentException('可信代理最多填写 32 个 IP。');
+    foreach ($proxies as &$ip) {
+        if (!filter_var($ip, FILTER_VALIDATE_IP)) throw new InvalidArgumentException('可信代理只接受精确 IP 地址，不接受网段、通配符或域名。');
+        $ip = inet_ntop(inet_pton($ip));
+    }
+    unset($ip);
+    $header = $input['pdf_export_ip_header'] ?? '';
+    if (!is_string($header) || !in_array($header, ['HTTP_X_REAL_IP', 'HTTP_CF_CONNECTING_IP'], true)) throw new InvalidArgumentException('请选择支持的真实 IP 请求头。');
+    $values['pdf_export_enabled'] = $enabled;
+    $values['pdf_export_trusted_proxies'] = json_encode(array_values(array_unique($proxies)));
+    $values['pdf_export_ip_header'] = $header;
+    $pdo = db();
+    $pdo->beginTransaction();
+    try {
+        foreach ($values as $key => $value) set_setting($key, $value);
+        $pdo->commit();
+    } catch (Throwable $error) {
+        $pdo->rollBack();
+        throw $error;
+    }
 }
 
 function pdf_export_migrate(PDO $pdo): void {
@@ -49,8 +159,7 @@ function pdf_export_fail(int $status, string $message): never {
 }
 
 function pdf_export_share(string $slug): array {
-    global $config;
-    if (($config['pdf_export_enabled'] ?? true) !== true) {
+    if (!pdf_export_settings()['enabled']) {
         pdf_export_fail(404, 'PDF 导出未开启。');
     }
     $share = find_share_by_slug($slug);
@@ -76,14 +185,14 @@ function pdf_export_csrf(): void {
 }
 
 function pdf_export_client_ip(): string {
-    global $config;
+    $settings = pdf_export_settings();
     $peer = (string)($_SERVER['REMOTE_ADDR'] ?? '');
     // Never accept an arbitrary client's X-Forwarded-For/CF-Connecting-IP.
     // Only use one proxy-overwritten header from explicitly trusted peers.
-    $trusted = $config['pdf_export_trusted_proxies'] ?? [];
-    $header = (string)($config['pdf_export_ip_header'] ?? 'HTTP_X_REAL_IP');
-    if (is_array($trusted) && in_array($peer, $trusted, true)
-        && in_array($header, ['HTTP_X_REAL_IP', 'HTTP_CF_CONNECTING_IP'], true)) {
+    $trusted = array_map('inet_pton', $settings['trusted_proxies']);
+    $header = $settings['ip_header'];
+    $packedPeer = @inet_pton($peer);
+    if ($packedPeer !== false && in_array($packedPeer, $trusted, true)) {
         $candidate = (string)($_SERVER[$header] ?? '');
         if (filter_var($candidate, FILTER_VALIDATE_IP)) $peer = $candidate;
     }
@@ -112,7 +221,7 @@ function pdf_export_admit(int $shareId, string $fingerprint): string {
         $stmt->execute([$ip, $fp]);
         $counts = $stmt->fetch(PDO::FETCH_ASSOC);
         if ((int)$counts['ip_count'] >= $limits['ip_requests'] || (int)$counts['fp_count'] >= $limits['fingerprint_requests']
-            || (int)$counts['total'] >= 20000) {
+            || (int)$counts['total'] >= $limits['max_window_events']) {
             throw new RuntimeException('导出次数已达上限，请稍后再试。', 429);
         }
         $stmt = $pdo->prepare('SELECT COUNT(*) AS total,
@@ -213,8 +322,7 @@ function pdf_export_select_docs(int $shareId, array $input): array {
 }
 
 function render_pdf_export_link(array $context): string {
-    global $config;
-    if (($config['pdf_export_enabled'] ?? true) !== true) return '';
+    if (!pdf_export_settings()['enabled']) return '';
     $url = base_path() . '/s/' . rawurlencode($context['slug']) . '/export';
     return '<div class="pdf-share-tools"><a class="button ghost" data-pdf-export-link href="' . htmlspecialchars($url)
         . '?doc=' . rawurlencode($context['doc_id']) . '">导出 PDF / 批量导出</a></div>';
@@ -292,9 +400,9 @@ function route_pdf_export(string $slug, string $action = ''): never {
     });
     try {
         $lease = pdf_export_admit($shareId, $fingerprint);
-        set_time_limit(15);
+        set_time_limit($limits['max_execution_seconds']);
         $memory = ini_parse_quantity((string)ini_get('memory_limit'));
-        ini_set('memory_limit', (string)($memory > 0 ? min($memory, 134217728) : 134217728));
+        ini_set('memory_limit', (string)($memory > 0 ? min($memory, $limits['max_memory_bytes']) : $limits['max_memory_bytes']));
         $docs = pdf_export_select_docs($shareId, $_POST);
         $docIds = array_column($docs, 'doc_id');
         $stmt = db()->prepare('SELECT COALESCE(SUM(size_bytes), 0) FROM share_assets WHERE share_id = ? AND
