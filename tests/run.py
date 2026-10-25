@@ -5,6 +5,7 @@ docker build --pull -f php-site/Dockerfile -t siyuan-share:php83-test .
 python3 tests/run.py --docker siyuan-share:php83-test
 """
 import argparse
+from contextlib import closing
 import hashlib
 import http.cookiejar
 import json
@@ -21,6 +22,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from pdf_export import PdfExportTests
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = """<?php
@@ -79,17 +81,20 @@ class Client:
         return self.request(path, {'csrf': match[1].decode(), **fields})
 
 
-class Regression(unittest.TestCase):
+class Regression(PdfExportTests, unittest.TestCase):
     base = ''
     docker = False
     container = None
     database_path = None
+    browser = False
+    php_executable = None
+    bootstrap_path = None
 
     def rows(self, sql):
         if self.container:
             output = subprocess.check_output(['docker', 'exec', self.container, 'php', '-r', '$p = new PDO("sqlite:/var/www/html/storage/app.db"); echo json_encode($p->query($argv[1])->fetchAll(PDO::FETCH_ASSOC));', sql], text=True)
             return json.loads(output)
-        with sqlite3.connect(self.database_path) as connection:
+        with closing(sqlite3.connect(self.database_path)) as connection, connection:
             connection.row_factory = sqlite3.Row
             return [dict(row) for row in connection.execute(sql)]
 
@@ -348,6 +353,7 @@ def main():
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--php', help='PHP 8.3 CLI executable')
     mode.add_argument('--docker', help='Already built application image')
+    parser.add_argument('--browser', action='store_true', help='Also run Playwright UI/PDF tests (no application build)')
     args = parser.parse_args()
     process = container = None
     result = None
@@ -379,7 +385,11 @@ def main():
                     sock.bind(('127.0.0.1', 0))
                     port = sock.getsockname()[1]
                 router = work / 'router.php'
-                router.write_text("<?php\n$_SERVER['SCRIPT_NAME'] = '/index.php';\nrequire __DIR__ . '/app/index.php';\n", encoding='utf-8')
+                router.write_text("<?php\n$requestPath = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);\n"
+                                  "$file = realpath(__DIR__ . '/app' . $requestPath);\n"
+                                  "$assets = realpath(__DIR__ . '/app/assets') . DIRECTORY_SEPARATOR;\n"
+                                  "if ($file && str_starts_with($file, $assets) && is_file($file)) return false;\n"
+                                  "$_SERVER['SCRIPT_NAME'] = '/index.php';\nrequire __DIR__ . '/app/index.php';\n", encoding='utf-8')
                 output = (work / 'server.log').open('w', encoding='utf-8')
                 process = subprocess.Popen([*php_args, '-S', f'127.0.0.1:{port}', '-t', str(app), str(router)], stdout=output, stderr=output)
             else:
@@ -398,6 +408,9 @@ def main():
             Regression.docker = bool(args.docker)
             Regression.container = container
             Regression.database_path = str(app / 'storage/app.db')
+            Regression.browser = args.browser
+            Regression.php_executable = args.php
+            Regression.bootstrap_path = str(app / 'bootstrap.php')
             deadline = time.monotonic() + 45
             while True:
                 try:

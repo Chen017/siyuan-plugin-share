@@ -72,6 +72,7 @@ if (function_exists('date_default_timezone_set')) {
 }
 
 require_once __DIR__ . '/vendor/Parsedown.php';
+require_once __DIR__ . '/pdf-export.php';
 
 function base_path(): string {
     $script = $_SERVER['SCRIPT_NAME'] ?? '';
@@ -169,6 +170,8 @@ function migrate(PDO $pdo): void {
         deleted_at TEXT,
         FOREIGN KEY(user_id) REFERENCES users(id)
     );');
+
+    pdf_export_migrate($pdo);
 
     $pdo->exec('CREATE TABLE IF NOT EXISTS share_docs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1214,6 +1217,13 @@ function render_page(string $title, string $content, ?array $user = null, string
     if ($layout === 'share') {
         echo "<style id='sps-share-font-force'>body.layout-share .markdown-body,body.layout-share .markdown-body :where(p,li,a,strong,em,del,mark,h1,h2,h3,h4,h5,h6,blockquote,td,th){font-family:'misans regular',sans-serif !important;}</style>";
     }
+    if ($layout === 'share' && empty($options['pdf_export'])) {
+        echo "<link rel='stylesheet' href='{$base}/assets/pdf-export.css'>";
+    }
+    if (!empty($options['pdf_export'])) {
+        $pdfVersion = (string)filemtime(__DIR__ . '/assets/pdf-export.css');
+        echo "<link rel='stylesheet' href='{$base}/assets/pdf-export.css?v={$pdfVersion}'>";
+    }
     echo "</head>";
     echo "<body class='{$layoutClass}'>";
 
@@ -1224,6 +1234,9 @@ function render_page(string $title, string $content, ?array $user = null, string
     } elseif ($layout === 'share') {
         echo "<div class='share-page'>";
         echo render_share_icon_defs();
+        if (!empty($GLOBALS['share_pdf_context']) && empty($options['pdf_export'])) {
+            echo render_pdf_export_link($GLOBALS['share_pdf_context']);
+        }
         echo $content;
         echo "<footer class='share-footer'>由 <a href='https://github.com/b8l8u8e8/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>b8l8u8e8</a> 提供支持</footer>";
         echo "<button class='share-side-trigger' type='button' data-share-drawer-open aria-label='打开侧边栏'><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='currentColor' d='M4 6h16v2H4zM4 11h16v2H4zM4 16h16v2H4z'/></svg><span>导航</span></button>";
@@ -1346,6 +1359,10 @@ function render_page(string $title, string $content, ?array $user = null, string
     if ($siteCustomJsEnabled && trim($siteCustomJs) !== '') {
         $safeCustomJs = escape_inline_script_content($siteCustomJs);
         echo "<script id='site-custom-js'>\nwindow.addEventListener('DOMContentLoaded', function () {\n{$safeCustomJs}\n});\n</script>";
+    }
+    if ($layout === 'share') {
+        $pdfJsVersion = (string)filemtime(__DIR__ . '/assets/pdf-export.js');
+        echo "<script defer src='{$base}/assets/pdf-export.js?v={$pdfJsVersion}'></script>";
     }
     echo "</body>";
     echo "</html>";
@@ -8522,6 +8539,7 @@ function route_share(string $slug, ?string $docId = null): void {
         return;
     }
 
+    $GLOBALS['share_pdf_context'] = ['slug' => $slug, 'doc_id' => (string)($docId ?: ($share['doc_id'] ?? ''))];
     $pdo = db();
     $stmt = $pdo->prepare('SELECT id, doc_id, title, icon, hpath, parent_id, sort_index, sort_order, updated_at FROM share_docs WHERE share_id = :sid ORDER BY sort_order ASC, id ASC');
     $stmt->execute([':sid' => $shareId]);
@@ -8868,6 +8886,10 @@ if ($path === '/api/instances/stats') {
 
 if (strpos($path, '/api/v1/') === 0) {
     handle_api($path);
+}
+
+if (preg_match('#^/s/([a-zA-Z0-9_-]+)/export(?:/(verify|release))?$#', $path, $matches)) {
+    route_pdf_export($matches[1], $matches[2] ?? '');
 }
 
 if (preg_match('#^/s/([a-zA-Z0-9_-]+)/res/(.+)$#', $path, $matches)) {
