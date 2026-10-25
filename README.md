@@ -1,200 +1,57 @@
 # 🔗 Siyuan Share
 
-**Siyuan Share** is a **free and open-source** plugin for Siyuan Note that allows you to generate **accessible share links for notebooks, single documents, or documents with their subdocuments**.  
-It supports **access passwords, expiration time, and visitor limits**, and provides an **access statistics overview**, making it suitable for knowledge sharing, collaboration, and temporary public publishing.
+[English](README.md) · [简体中文](README_zh_CN.md)
 
-🌍 Documentation Languages:  
-[中文 README](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/README_zh_CN.md) ｜ [English README](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/README.md)
+Share a SiYuan document, a document tree or a notebook through a web link, with passwords, expiration dates, visitor limits and incremental sync.
 
-📝 Documentation:
+This is **[Chen017](https://github.com/Chen017)'s personal fork** of [b8l8u8e8/siyuan-plugin-share](https://github.com/b8l8u8e8/siyuan-plugin-share). The original sharing features come from upstream; this fork focuses on reading, rendering fixes and self-hosting.
 
-[Beginner-Friendly Tutorial Guide](https://share.b0x.top/s/8c34c022)
+## ✨ What changed here
 
----
+| Area | Personal changes |
+| --- | --- |
+| Runtime | PHP **8.3.36**, graceful Nginx/PHP-FPM shutdown, runtime and API regression checks. |
+| Fonts | Local **MiSans** for Latin letters, digits and common punctuation; system fonts for Chinese. The Latin WOFF2 is **34 KB**, down from the original 8.1 MB TTF. |
+| Reading | Neutral dark surfaces and clear blue links; reading statistics and comments hidden on share pages. Footer links lead with this fork and credit upstream. |
+| Rendering | SiYuan table-cell alignment fixes, on-demand diagram engines and one Markdown render per document. Math, footnotes and diagrams remain available. |
+| Accessibility & SEO | Clearer links, correct button states and TOC focus, main landmarks, working image-download controls, page descriptions, robots.txt and real 404 responses. |
+| Deployment | Local-only `127.0.0.1:8081`, versioned static assets, GitHub Actions deployment and isolated regression tests. Backup and restore-verification scripts are included. |
 
-## 🚀 Plugin Advantages
+Earlier changes and commit references: [Fork changes](CUSTOM_FEATURES.md) · [PHP upgrade record](docs/PHP83_BETA.md).
 
-🌐 **Ready to Use, Flexible Deployment**
+## 🚀 Self-host
 
-The tool is **completely free and open-source**. You can start instantly via `share.b0x.top` or choose self-hosting (supports **Docker / NAS / BT-Panel / other panels**).
+With Docker and Docker Compose installed:
 
-🎯 **Flexible Sharing, Precise Control**
+```sh
+git clone https://github.com/Chen017/siyuan-plugin-share.git
+cd siyuan-plugin-share
+# Review php-site/config.php for your installation.
+docker compose build --pull
+docker compose up -d
+```
 
-Share a **single page, sub-documents, or an entire notebook**. You can **exclude specific documents** with one click to ensure private content stays private.
+The service listens on **`127.0.0.1:8081`**. Point your HTTPS reverse proxy at that address. SQLite data, uploads and configuration persist outside the container.
 
-⚡ **Efficient Sync, Built-in Analytics**
+Registration and captcha are disabled in this fork's default configuration. Set up the administrator first, create an API key, then enter your own server URL and key in the SiYuan plugin.
 
-Uses an **incremental update** algorithm (faster and saves data). Features built-in analytics, allowing you to track **visitor counts, locations, and other key insights** at a glance.
+## Using the plugin
 
-**🔄 Auto-Update: Effortless & Worry-free** 
+1. Install **Siyuan Share** in SiYuan and configure your server URL and API key.
+2. Right-click a document or notebook, then create a share.
+3. Set its password, expiration or visitor limit as needed; copy the link to share it.
 
-Once enabled, it automatically detects document changes in the background and updates the shared page, eliminating the need for repeated manual updates. It also provides running status, queues, and history logs to ensure your shared content is always up to date.
+Update an existing share to keep its URL. Automatic and incremental sync are inherited from upstream. See the [upstream guide](https://github.com/b8l8u8e8/siyuan-plugin-share#readme) for the full plugin workflow.
 
----
+## Contributions merged upstream
 
-## ✨ Usage Guide
+Chen017 also contributed [dark-mode code highlighting #38](https://github.com/b8l8u8e8/siyuan-plugin-share/pull/38), [dark mode for login/admin/public pages #39](https://github.com/b8l8u8e8/siyuan-plugin-share/pull/39), [custom HTML head insertion #45](https://github.com/b8l8u8e8/siyuan-plugin-share/pull/45), and [nested-dollar KaTeX parsing #69](https://github.com/b8l8u8e8/siyuan-plugin-share/pull/69). These are already part of upstream.
 
-### 📌 Entry Point
+## Maintenance
 
-In the **Document Tree**, right-click on a **notebook or document** → open the **Plugin Menu** to access the following features:
+- **`main`**: this fork's deployable code. **`upstream`**: the retained upstream reference branch.
+- [PHP/Docker regression](.github/workflows/php83-regression.yml) and [reader regression](.github/workflows/frontend-regression.yml) use disposable test data.
+- [Backup and rollback records](docs/VPS_UPGRADE_20261022.md) · [Upstream changelog](CHANGELOG.md).
+- The deployment workflow targets the maintainer's VPS; configure your own Actions secrets before using it.
 
-- 🆕 Create Share / Manage Share  
-- 🔄 Update Share  
-- 📋 Copy Share Link  
-- 🗑️ Delete Share  
-
-### 🗂️ Share Management
-
-Go to the **Plugin Settings page** to view the **list of all created shares** and manage them centrally.
-
----
-
-## 🔐 Access Settings
-
-- **Access Password**  
-  Set a password for the share. Visitors must enter the correct password to view the content.
-
-- **Expiration Time**  
-  After the expiration time, the share will be marked as **expired** and cannot be accessed.  
-
-  > ⚠️ Cloud data will not be automatically deleted. You can manually clean it up to save storage space.
-
-- **Visitor Limit**  
-  Set the maximum number of visitors.  
-
-  - Once the limit is reached, new visitors cannot access the share  
-  - Visitors who have already accessed it can continue to visit  
-  - Multiple visits from the same browser are counted as **one visitor**
-
-- **Link Suffix**
-
-  Customize the suffix of the share link.
-
----
-
-## ⚠️ Notes
-
-- **Content Update Mechanism**  
-
-  - If you **modify the document or notebook content**, please use **"Update Share"**  
-    → This keeps the original share link unchanged while synchronizing the latest content  
-  - If you only **modify access settings (password / expiration time / visitor limit / link suffix)**, please use **"Update Access Settings"**  
-    → No need to re-upload content, saving time and bandwidth
-
-- **Link Change Rules**  
-  If you **"Delete Share" and then "Create Share" again**,  
-  👉 The system will generate a **new share link**, and the old link will immediately become invalid.
-
-  👉 If needed, you can restore the previous link format by modifying the **link suffix** in the access settings.
-
----
-
-## ⚙️ Plugin Configuration
-
-This plugin relies on a server-side website:  
-🌐 **[share.b0x.top](https://share.b0x.top)** (used for data storage and access)
-
-### 1️⃣ Setup Steps
-
-1. Register an account on the server website  
-
-2. Generate an **API Key** on the website  
-
-3. Enter the API Key into the plugin settings  
-
-4. After configuration, you can start sharing  
-
-   > Sharing essentially uploads the corresponding document or notebook to the server
-
-### 2️⃣ Server Information
-
-- **Public Service**  
-  The current `share.b0x.top` is a **public server provided by the author**,  
-  mainly intended for **feature experience and short-term use**.
-
-- **Data Cleanup Policy**  
-  Due to bandwidth and storage limitations,  
-  large documents or notebooks **may be cleaned up** periodically.
-
-- **Private Deployment Recommendation (Strongly Recommended)**  
-  If you need **long-term sharing**,  
-  please refer to 👉 **[Server Deployment Guide](https://ccnwc9xa9692.feishu.cn/wiki/MQCtwMtQaifPuak4zl3cIMCqnLx)**  
-  to deploy your own private server.
-
----
-
-## 📖 Feature Demonstration (GIFs hosted on GitHub, may require proxy access)
-
-### ① Generate API Key and Enter It into the Plugin
-
-![Generate API Key](https://github.com/user-attachments/assets/8ad5e431-8a60-4e83-a594-ff1de28af68d)
-
----
-
-### ② Share Document / Notebook
-
-Using notebook sharing as an example. Single document or document with subdocuments sharing is also supported.
-
-![Share Notebook](https://github.com/user-attachments/assets/62faf774-16e7-4b48-9dff-d738749ee4d5)
-
----
-
-### ③ Open the Share Link to View Content
-
-![Open Share Link](https://github.com/user-attachments/assets/155ee85c-1a73-49e4-b03e-69b9a31f2727)
-
----
-
-### ④ Access Statistics Overview
-
-![Access statistics](https://github.com/user-attachments/assets/b2690a03-6e97-4845-87be-1ab3e5406847)
-
----
-
-## ☕ Support the Author
-
-If you find this project helpful, feel free to support the author ❤️  
-Your support motivates me to **continuously maintain and improve** this tool.
-
-<div align="center">
-    <a href="https://github.com/b8l8u8e8/siyuan-plugin-share">
-        <img src="https://img.shields.io/github/stars/b8l8u8e8/siyuan-plugin-share?style=for-the-badge&color=ffd700&label=Give%20a%20Star" alt="Github Star">
-    </a>
-</div>
-
-<div align="center" style="margin-top: 40px;">
-    <div style="display: flex; justify-content: center; align-items: center; gap: 30px;">
-        <div style="text-align: center;">
-            <img src="https://github.com/user-attachments/assets/81d0a064-b760-4e97-9c9b-bf83f6cafc8a" 
-                 style="height: 280px; width: auto; border-radius: 10px; border: 2px solid #07c160;">
-            <br/>
-            <b style="color: #07c160; margin-top: 10px; display: block;">WeChat Pay</b>
-        </div>
-        <div style="text-align: center;">
-            <img src="https://github.com/user-attachments/assets/9e1988d0-4016-4b8d-9ea6-ce8ff714ee17" 
-                 style="height: 280px; width: auto; border-radius: 10px; border: 2px solid #1677ff;">
-            <br/>
-            <b style="color: #1677ff; margin-top: 10px; display: block;">Alipay</b>
-        </div>
-    </div>
-    <p style="margin-top: 20px;"><i>Your support is the greatest motivation for continuous iteration 🙏</i></p>
-</div>
-
----
-
-## 🛠️ Other Information
-
-- 🐞 Issue Reporting:  
-  [GitHub Issues](https://github.com/b8l8u8e8/siyuan-plugin-share/issues)
-
-- 📄 License:  
-  [MIT License](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/LICENSE)
-
-- 🧾 Changelog:  
-  [CHANGELOG.md](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/CHANGELOG.md)
-
-- 🏅 Contributors:  
-  [Contributors List](https://github.com/b8l8u8e8/siyuan-plugin-share/graphs/contributors)
-
-- 💖 Sponsors:  
-  [Sponsor List](https://github.com/b8l8u8e8/siyuan-plugin-share/blob/main/sponsor-list.md)
+Original project by **b8l8u8e8 and contributors**. Personal fork maintained by **Chen017**. [MIT License](LICENSE).

@@ -1,0 +1,24 @@
+name: Reader frontend regression
+
+on:
+  push:
+    branches: [main, 'beta/**']
+    paths: ['php-site/**', 'tests/frontend.cjs', '.github/workflows/frontend-regression.yml']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reader:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install isolated DOM test runtime
+        run: npm install --prefix "$RUNNER_TEMP/reader-test" --no-save jsdom@26.1.0
+      - name: Verify Markdown, accessibility and lazy diagram loading
+        run: NODE_PATH="$RUNNER_TEMP/reader-test/node_modules" node tests/frontend.cjs

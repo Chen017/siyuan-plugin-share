@@ -1172,6 +1172,22 @@ function render_share_icon_defs(): string {
 SVG;
 }
 
+function site_asset_version(): string {
+    static $version = null;
+    if ($version !== null) return $version;
+    $paths = array_merge(glob(__DIR__ . '/assets/*.*') ?: [], glob(__DIR__ . '/assets/vendor/*.*') ?: []);
+    $parts = [];
+    foreach ($paths as $path) {
+        if (is_file($path)) $parts[] = basename($path) . ':' . filemtime($path) . ':' . filesize($path);
+    }
+    sort($parts);
+    return $version = substr(hash('sha256', implode('|', $parts)), 0, 16);
+}
+
+function site_asset_url(string $path): string {
+    return base_path() . '/assets/' . $path . '?v=' . site_asset_version();
+}
+
 function render_page(string $title, string $content, ?array $user = null, string $baseHref = '', array $options = []): void {
     global $config;
     $base = base_path();
@@ -1195,16 +1211,19 @@ function render_page(string $title, string $content, ?array $user = null, string
     echo "<meta charset='utf-8'>";
     echo "<meta name='viewport' content='width=device-width, initial-scale=1'>";
     echo "<title>{$pageTitle} - {$app}</title>";
+    $description = htmlspecialchars(mb_substr($title . ' - ' . $config['app_name'] . '，在线阅读与分享笔记、课程资料和学习记录。', 0, 160), ENT_QUOTES, 'UTF-8');
+    echo "<meta name='description' content='{$description}'>";
     if ($baseHref !== '') {
         $safeBase = htmlspecialchars($baseHref);
         echo "<base href='{$safeBase}'>";
     }
     if ($includeMarkdown) {
-        echo "<link rel='stylesheet' href='{$base}/assets/vendor/github-markdown.min.css'>";
-        echo "<link rel='stylesheet' href='{$base}/assets/vendor/katex.min.css'>";
-        echo "<link rel='stylesheet' href='{$base}/assets/vendor/highlight.min.css'>";
+        echo "<link rel='stylesheet' href='" . htmlspecialchars(site_asset_url('vendor/github-markdown.min.css'), ENT_QUOTES, 'UTF-8') . "'>";
+        echo "<link rel='stylesheet' href='" . htmlspecialchars(site_asset_url('vendor/katex.min.css'), ENT_QUOTES, 'UTF-8') . "'>";
+        echo "<link rel='stylesheet' href='" . htmlspecialchars(site_asset_url('vendor/highlight.min.css'), ENT_QUOTES, 'UTF-8') . "'>";
     }
-    echo "<link rel='stylesheet' href='{$base}/assets/style.css'>";
+    $styleUrl = htmlspecialchars(site_asset_url('style.css'), ENT_QUOTES, 'UTF-8');
+    echo "<link rel='stylesheet' href='{$styleUrl}'>";
     $siteCustomCssEnabled = get_bool_setting('site_custom_css_enabled', true);
     $siteCustomCss = (string)get_setting('site_custom_css', '');
     if ($siteCustomCssEnabled && trim($siteCustomCss) !== '') {
@@ -1216,7 +1235,7 @@ function render_page(string $title, string $content, ?array $user = null, string
         echo $siteHeadHtml;
     }
     if ($layout === 'share') {
-        echo "<style id='sps-share-font-force'>body.layout-share .markdown-body,body.layout-share .markdown-body :where(p,li,a,strong,em,del,mark,h1,h2,h3,h4,h5,h6,blockquote,td,th){font-family:'misans regular',sans-serif !important;}</style>";
+        echo "<style id='sps-share-font-force'>body.layout-share .markdown-body,body.layout-share .markdown-body :where(p,li,a,strong,em,del,mark,h1,h2,h3,h4,h5,h6,blockquote,td,th){font-family:var(--font-markdown) !important;}</style>";
     }
     if ($layout === 'share' && empty($options['pdf_export'])) {
         echo "<link rel='stylesheet' href='{$base}/assets/pdf-export.css'>";
@@ -1229,7 +1248,7 @@ function render_page(string $title, string $content, ?array $user = null, string
     echo "<body class='{$layoutClass}'>";
 
     if ($layout === 'auth') {
-        echo "<div class='auth-shell'>";
+        echo "<div class='auth-shell' role='main'>";
         echo $content;
         echo "</div>";
     } elseif ($layout === 'share') {
@@ -1239,7 +1258,7 @@ function render_page(string $title, string $content, ?array $user = null, string
             echo render_pdf_export_link($GLOBALS['share_pdf_context']);
         }
         echo $content;
-        echo "<footer class='share-footer'>由 <a href='https://github.com/b8l8u8e8/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>b8l8u8e8</a> 提供支持</footer>";
+        echo "<footer class='share-footer'><span class='footer-credit'>由 <a class='footer-owner' href='https://github.com/Chen017/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Chen017</a> 维护</span><span class='footer-separator' aria-hidden='true'>·</span><span class='footer-credit'>上游：<a class='footer-upstream' href='https://github.com/b8l8u8e8/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Siyuan Share</a></span></footer>";
         echo "<button class='share-side-trigger' type='button' data-share-drawer-open aria-label='打开侧边栏'><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='currentColor' d='M4 6h16v2H4zM4 11h16v2H4zM4 16h16v2H4z'/></svg><span>导航</span></button>";
         echo "<div class='share-side-backdrop' data-share-drawer-close></div>";
         echo "<button class='scroll-top' type='button' data-scroll-top aria-label='回到顶部'><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='currentColor' d='M12 2c-2.76 0-5 2.24-5 5v2.5L4 13l4.5 1L12 22l3.5-8L20 13l-3-3.5V7c0-2.76-2.24-5-5-5zm0 3a2 2 0 0 1 2 2v1.5l-2 2-2-2V7a2 2 0 0 1 2-2z'/></svg></button>";
@@ -1309,12 +1328,12 @@ function render_page(string $title, string $content, ?array $user = null, string
         echo "<main class='app-content'>";
         echo $content;
         echo "</main>";
-        echo "<footer class='app-footer'>由 <a href='https://github.com/b8l8u8e8/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>b8l8u8e8</a> 提供支持</footer>";
+        echo "<footer class='app-footer'><span class='footer-credit'>由 <a class='footer-owner' href='https://github.com/Chen017/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Chen017</a> 维护</span><span class='footer-separator' aria-hidden='true'>·</span><span class='footer-credit'>上游：<a class='footer-upstream' href='https://github.com/b8l8u8e8/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Siyuan Share</a></span></footer>";
         echo "</div>";
         echo "</div>";
         echo "<div class='app-side-backdrop' data-app-drawer-close></div>";
     } else {
-        echo "<div class='public-shell'>";
+        echo "<div class='public-shell' role='main'>";
         echo $content;
         echo "</div>";
     }
@@ -1326,35 +1345,25 @@ function render_page(string $title, string $content, ?array $user = null, string
         }
     }
 
-    // Change the script URL when app.js changes to avoid stale browser/CDN caches.
-    $appJsPath = __DIR__ . '/assets/app.js';
-    $appJsMtime = is_file($appJsPath) ? filemtime($appJsPath) : false;
-    $appJsVersion = $appJsMtime !== false ? '?v=' . (string)$appJsMtime : '';
-    echo "<script defer src='{$base}/assets/app.js{$appJsVersion}'></script>";
+    // Core Markdown is ready before app.js; large diagram engines load only on demand.
     if ($includeMarkdown) {
-        echo "<script defer src='{$base}/assets/vendor/markdown-it.min.js'></script>";
-        echo "<script defer src='{$base}/assets/vendor/markdown-it-task-lists.min.js'></script>";
-        echo "<script defer src='{$base}/assets/vendor/markdown-it-emoji.min.js'></script>";
-        echo "<script defer src='{$base}/assets/vendor/markdown-it-footnote.min.js'></script>";
-        echo "<script defer src='{$base}/assets/vendor/markdown-it-deflist.min.js'></script>";
-        echo "<script defer src='{$base}/assets/vendor/markdown-it-mark.min.js'></script>";
-        echo "<script defer src='{$base}/assets/vendor/markdown-it-sub.min.js'></script>";
-        echo "<script defer src='{$base}/assets/vendor/markdown-it-sup.min.js'></script>";
-        echo "<script defer src='{$base}/assets/vendor/markdown-it-abbr.min.js'></script>";
-        echo "<script defer src='{$base}/assets/vendor/markdown-it-ins.min.js'></script>";
-        echo "<script defer src='{$base}/assets/vendor/markdown-it-container.min.js'></script>";
-        echo "<script defer src='{$base}/assets/vendor/markdown-it-anchor.min.js'></script>";
-        echo "<script defer src='{$base}/assets/vendor/katex.min.js'></script>";
-        echo "<script defer src='{$base}/assets/vendor/highlight.min.js'></script>";
-        echo "<script defer src='{$base}/assets/vendor/mermaid.min.js'></script>";
-        echo "<script defer src='{$base}/assets/vendor/pako.min.js'></script>";
-        echo "<script defer src='{$base}/assets/vendor/echarts.min.js'></script>";
-        echo "<script defer src='{$base}/assets/vendor/abcjs-basic-min.js'></script>";
-        echo "<script defer src='{$base}/assets/vendor/raphael.min.js'></script>";
-        echo "<script defer src='{$base}/assets/vendor/flowchart.min.js'></script>";
-        echo "<script defer src='{$base}/assets/vendor/viz.js'></script>";
-        echo "<script defer src='{$base}/assets/vendor/full.render.js' onload=\"window.dispatchEvent(new Event('sps:markdown-ready'))\"></script>";
+        echo "<script defer src='" . htmlspecialchars(site_asset_url('vendor/markdown-it.min.js'), ENT_QUOTES, 'UTF-8') . "'></script>";
+        echo "<script defer src='" . htmlspecialchars(site_asset_url('vendor/markdown-it-task-lists.min.js'), ENT_QUOTES, 'UTF-8') . "'></script>";
+        echo "<script defer src='" . htmlspecialchars(site_asset_url('vendor/markdown-it-emoji.min.js'), ENT_QUOTES, 'UTF-8') . "'></script>";
+        echo "<script defer src='" . htmlspecialchars(site_asset_url('vendor/markdown-it-footnote.min.js'), ENT_QUOTES, 'UTF-8') . "'></script>";
+        echo "<script defer src='" . htmlspecialchars(site_asset_url('vendor/markdown-it-deflist.min.js'), ENT_QUOTES, 'UTF-8') . "'></script>";
+        echo "<script defer src='" . htmlspecialchars(site_asset_url('vendor/markdown-it-mark.min.js'), ENT_QUOTES, 'UTF-8') . "'></script>";
+        echo "<script defer src='" . htmlspecialchars(site_asset_url('vendor/markdown-it-sub.min.js'), ENT_QUOTES, 'UTF-8') . "'></script>";
+        echo "<script defer src='" . htmlspecialchars(site_asset_url('vendor/markdown-it-sup.min.js'), ENT_QUOTES, 'UTF-8') . "'></script>";
+        echo "<script defer src='" . htmlspecialchars(site_asset_url('vendor/markdown-it-abbr.min.js'), ENT_QUOTES, 'UTF-8') . "'></script>";
+        echo "<script defer src='" . htmlspecialchars(site_asset_url('vendor/markdown-it-ins.min.js'), ENT_QUOTES, 'UTF-8') . "'></script>";
+        echo "<script defer src='" . htmlspecialchars(site_asset_url('vendor/markdown-it-container.min.js'), ENT_QUOTES, 'UTF-8') . "'></script>";
+        echo "<script defer src='" . htmlspecialchars(site_asset_url('vendor/markdown-it-anchor.min.js'), ENT_QUOTES, 'UTF-8') . "'></script>";
+        echo "<script defer src='" . htmlspecialchars(site_asset_url('vendor/katex.min.js'), ENT_QUOTES, 'UTF-8') . "'></script>";
+        echo "<script defer src='" . htmlspecialchars(site_asset_url('vendor/highlight.min.js'), ENT_QUOTES, 'UTF-8') . "'></script>";
     }
+    $appJsUrl = htmlspecialchars(site_asset_url('app.js'), ENT_QUOTES, 'UTF-8');
+    echo "<script defer src='{$appJsUrl}'></script>";
     $siteCustomJsEnabled = get_bool_setting('site_custom_js_enabled', false);
     $siteCustomJs = (string)get_setting('site_custom_js', '');
     if ($siteCustomJsEnabled && trim($siteCustomJs) !== '') {
@@ -1408,6 +1417,7 @@ HTML;
 }
 
 function render_404_page(): void {
+    http_response_code(404);
     $base = base_path();
     $content = '<div class="error-page">';
     $content .= '<div class="error-page__scene">';
@@ -8493,7 +8503,7 @@ function route_share(string $slug, ?string $docId = null): void {
 
     if (share_is_expired($share)) {
         $content = '<div class="share-shell share-shell--single">';
-        $content .= '<div class="share-content">';
+        $content .= '<div class="share-content" role="main">';
         $content .= '<div class="share-header"><h1>' . $shareTitle . '</h1></div>';
         $content .= '<div class="share-empty">该分享已过期，内容不可见。</div>';
         $content .= '</div></div>';
@@ -8503,7 +8513,7 @@ function route_share(string $slug, ?string $docId = null): void {
 
     if (share_visitor_limit_reached($share)) {
         $content = '<div class="share-shell share-shell--single">';
-        $content .= '<div class="share-content">';
+        $content .= '<div class="share-content" role="main">';
         $content .= '<div class="share-header"><h1>' . $shareTitle . '</h1></div>';
         $content .= '<div class="share-empty">访客数已达上限，分享已关闭。</div>';
         $content .= '</div></div>';
@@ -8525,7 +8535,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $error = '访问密码错误';
         }
         $content = '<div class="share-shell share-shell--single">';
-        $content .= '<div class="share-content">';
+        $content .= '<div class="share-content" role="main">';
         $content .= '<div class="share-header"><h1>' . $shareTitle . '</h1></div>';
         $content .= '<div class="share-gate">';
         $content .= '<div class="share-gate-note">该分享设置了访问密码</div>';
@@ -8653,7 +8663,7 @@ function route_share(string $slug, ?string $docId = null): void {
                 $breadcrumbsHtml .= '<span>' . htmlspecialchars($crumb) . '</span>';
             }
             $breadcrumbsHtml .= '</div>';
-            $mainHtml = '<div class="kb-main">';
+            $mainHtml = '<div class="kb-main" role="main">';
             $mainHtml .= '<div class="share-article" data-share-view="preview">';
             $mainHtml .= '<div class="kb-header">' . $breadcrumbsHtml;
             $mainHtml .= '<div class="kb-title-row">';
@@ -8707,7 +8717,7 @@ function route_share(string $slug, ?string $docId = null): void {
         $sidebar .= '</aside>';
         $content = '<div class="share-shell share-shell--notebook">';
         $content .= $sidebar;
-        $content .= '<div class="kb-main">';
+        $content .= '<div class="kb-main" role="main">';
         $content .= '<div class="share-article" data-share-view="preview">';
         $content .= '<div class="kb-header">';
         $content .= '<div class="kb-title-row">';
@@ -8779,7 +8789,7 @@ function route_share(string $slug, ?string $docId = null): void {
                 $breadcrumbsHtml .= '<span>' . htmlspecialchars($crumb) . '</span>';
             }
             $breadcrumbsHtml .= '</div>';
-            $mainHtml = '<div class="kb-main">';
+            $mainHtml = '<div class="kb-main" role="main">';
             $mainHtml .= '<div class="share-article" data-share-view="preview">';
             $mainHtml .= '<div class="kb-header">' . $breadcrumbsHtml;
             $mainHtml .= '<div class="kb-title-row">';
@@ -8809,7 +8819,7 @@ function route_share(string $slug, ?string $docId = null): void {
 
         if (!$docId) {
             $touchShareAccess();
-            $mainHtml = '<div class="kb-main"><div class="share-empty">请先在文档树里面先打开一个文档</div></div>';
+            $mainHtml = '<div class="kb-main" role="main"><div class="share-empty">请先在文档树里面先打开一个文档</div></div>';
             if ($isPartial) {
                 api_response(200, [
                     'title' => $shareTitleRaw,
@@ -8851,7 +8861,7 @@ function route_share(string $slug, ?string $docId = null): void {
         $reportModalHtml = render_share_report_form($share, $viewer, null);
         $content = '<div class="share-shell share-shell--notebook">';
         $content .= $sidebar;
-        $content .= '<div class="kb-main">';
+        $content .= '<div class="kb-main" role="main">';
         $content .= '<div class="kb-header">';
         $content .= '<div class="kb-breadcrumbs"><span>目录</span></div>';
         $content .= '<div class="kb-title-row">';
