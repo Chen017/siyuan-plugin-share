@@ -1,6 +1,14 @@
 @font-face {
   font-family: 'misans regular';
-  src: url('./MiSans-Regular.ttf') format('truetype');
+  src: url('./MiSans-Latin.woff2') format('woff2');
+  font-display: swap;
+  unicode-range: U+0000-024F, U+0300-036F, U+1E00-1EFF, U+2000-206F, U+20A0-20CF;
+}
+
+/* Links remain identifiable without relying on color in either theme. */
+body.layout-share .markdown-body a[href] {
+  text-decoration-line: underline;
+  text-underline-offset: .15em;
 }
 
 :root {
@@ -23,10 +31,10 @@
   --radius-lg: 18px;
   --radius-md: 12px;
   --radius-sm: 8px;
-  
+
   --font-display: "misans regular", sans-serif;
-  --font-body: "misans regular", sans-serif;
-  --font-markdown: "misans regular", sans-serif;
+  --font-body: "misans regular", system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-markdown: "misans regular", system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   --mermaid-font-family: var(--font-body);
 }
 

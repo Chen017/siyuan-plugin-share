@@ -59,6 +59,10 @@ http {
     keepalive_timeout 65;
     client_max_body_size 100m;
     server_tokens off;
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types text/css application/javascript application/json text/plain image/svg+xml;
 
     access_log /var/log/nginx/access.log;
 
@@ -90,6 +94,13 @@ server {
     # Keep original behavior: uploads are always routed to index.php for permission checks
     location ^~ /uploads/ {
         rewrite ^ /index.php?$query_string last;
+    }
+
+    # Public application assets only; uploaded attachments retain their permission checks.
+    location ^~ /assets/ {
+        try_files $uri =404;
+        expires 7d;
+        add_header Cache-Control "public";
     }
 
     # Existing files/directories are served directly, otherwise route to index.php

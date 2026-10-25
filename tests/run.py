@@ -165,6 +165,28 @@ class Regression(unittest.TestCase):
         status, _, body = self.client.request('/s/nonexistent_share')
         self.assertNotIn(b'PHP83_MARKER', body)
 
+    def test_reader_metadata_assets_and_not_found(self):
+        share = self.share(title='Reader <test>', markdown='# Heading\n\nHello $x^2$')
+        status, _, body = Client(self.base).request('/s/' + share['slug'])
+        self.assertEqual(status, 200)
+        self.assertIn(b"<meta name='description'", body)
+        self.assertIn(b'role="main"', body)
+        self.assertIn(b'Reader &lt;test&gt;', body)
+        for library in ['mermaid.min.js', 'full.render.js', 'echarts.min.js', 'abcjs-basic-min.js']:
+            self.assertNotIn(library.encode(), body, library)
+        self.assertEqual(self.client.request('/unknown-audit-test-page')[0], 404)
+        if self.docker:
+            status, headers, font = self.client.request('/assets/MiSans-Latin.woff2')
+            self.assertEqual(status, 200)
+            self.assertTrue(font.startswith(b'wOF2'))
+            self.assertLess(len(font), 100000)
+            self.assertIn('max-age=', headers.get('Cache-Control', ''))
+            status, headers, robots = self.client.request('/robots.txt')
+            self.assertEqual(status, 200)
+            self.assertIn('text/plain', headers.get('Content-Type', ''))
+            self.assertIn(b'User-agent: *', robots)
+            self.assertEqual(json.loads(self.client.request('/.well-known/ai-catalog.json')[2])['entries'], [])
+
     def test_share_create_update_snapshot_delete(self):
         share = self.share()
         path = '/s/' + share['slug']

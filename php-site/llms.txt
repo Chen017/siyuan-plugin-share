@@ -1,0 +1,8 @@
+# Etalib Notes
+
+An online reader for notes shared through SiYuan. Access permissions and share passwords apply to all readers.
+
+## Entry point
+- [Note reader](https://note.etalib.space/): Open an existing public share link to read its notes.
+
+This site does not provide an AI tool endpoint. Do not enumerate share identifiers or bypass access controls.

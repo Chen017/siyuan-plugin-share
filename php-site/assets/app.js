@@ -26,6 +26,30 @@
   };
 
   const tocCleanupMap = new WeakMap();
+  const renderedMarkdown = new WeakMap();
+  const diagramScripts = new Map();
+  const appScriptUrl = document.currentScript?.src ||
+    document.querySelector("script[src*='/assets/app.js']")?.src || "";
+  const loadDiagramScript = (file, ready) => {
+    if (ready()) return Promise.resolve();
+    if (diagramScripts.has(file)) return diagramScripts.get(file);
+    const promise = new Promise((resolve, reject) => {
+      const url = new URL(`vendor/${file}`, appScriptUrl || document.baseURI);
+      const version = appScriptUrl ? new URL(appScriptUrl).searchParams.get("v") : "";
+      if (version) url.searchParams.set("v", version);
+      const script = document.createElement("script");
+      script.src = url.href;
+      script.async = true;
+      script.onload = () => ready() ? resolve() : reject(new Error(`Diagram library unavailable: ${file}`));
+      script.onerror = () => {
+        script.remove();
+        reject(new Error(`Could not load diagram library: ${file}`));
+      };
+      document.head.appendChild(script);
+    }).catch(error => { diagramScripts.delete(file); throw error; });
+    diagramScripts.set(file, promise);
+    return promise;
+  };
   let imageViewerReady = false;
   let shareNavReady = false;
   let commentEditorsGlobalBound = false;
@@ -283,6 +307,16 @@
     };
 
     const ensureHeadingId = (heading, index) => {
+      heading.tabIndex = -1;
+      // Markdown-it may supply percent-encoded IDs. HTML IDs themselves must
+      // contain the decoded text so native fragment links and focus agree.
+      if (heading.id) {
+        try {
+          const decoded = decodeURIComponent(heading.id);
+          const existing = document.getElementById(decoded);
+          if (!existing || existing === heading) heading.id = decoded;
+        } catch { /* Keep literal percent signs in user-supplied IDs. */ }
+      }
       if (heading.id) return heading.id;
       const base = normalizeId(heading.textContent || "") || `section-${index + 1}`;
       let nextId = base;
@@ -872,6 +906,7 @@
           activeLock.id = target.id;
           activeLock.until = Date.now() + 1200;
           target.scrollIntoView({behavior: "smooth", block: "start"});
+          target.focus({preventScroll: true});
           history.replaceState(null, "", href);
           setActiveLink(link);
           ensureVisible(link);
@@ -1457,53 +1492,14 @@
         path: "vendor/highlight.min.js",
         readyEvent: false,
       },
-      {
-        selector: "script[src*='/assets/vendor/mermaid.min.js']",
-        path: "vendor/mermaid.min.js",
-        readyEvent: false,
-      },
-      {
-        selector: "script[src*='/assets/vendor/pako.min.js']",
-        path: "vendor/pako.min.js",
-        readyEvent: false,
-      },
-      {
-        selector: "script[src*='/assets/vendor/echarts.min.js']",
-        path: "vendor/echarts.min.js",
-        readyEvent: false,
-      },
-      {
-        selector: "script[src*='/assets/vendor/abcjs-basic-min.js']",
-        path: "vendor/abcjs-basic-min.js",
-        readyEvent: false,
-      },
-      {
-        selector: "script[src*='/assets/vendor/raphael.min.js']",
-        path: "vendor/raphael.min.js",
-        readyEvent: false,
-      },
-      {
-        selector: "script[src*='/assets/vendor/flowchart.min.js']",
-        path: "vendor/flowchart.min.js",
-        readyEvent: false,
-      },
-      {
-        selector: "script[src*='/assets/vendor/viz.js']",
-        path: "vendor/viz.js",
-        readyEvent: false,
-      },
-      {
-        selector: "script[src*='/assets/vendor/full.render.js']",
-        path: "vendor/full.render.js",
-        readyEvent: true,
-      },
     ];
     return entries
       .map((entry) => ({
         ...entry,
         url: resolveShareAssetUrl(entry.selector, entry.path, assetsBaseUrl),
       }))
-      .filter((entry) => Boolean(entry.url));
+      .filter((entry) => Boolean(entry.url))
+      .sort((a, b) => Number(a.path === "app.js") - Number(b.path === "app.js"));
   };
 
   const collectFootnoteTargetIds = (root) => {
@@ -2401,7 +2397,8 @@
       buttons.forEach((btn) => {
         const isActive = (btn.dataset.shareTab || "") === tab;
         btn.classList.toggle("is-active", isActive);
-        btn.setAttribute("aria-selected", isActive ? "true" : "false");
+        btn.removeAttribute("aria-selected");
+        btn.setAttribute("aria-pressed", isActive ? "true" : "false");
       });
       panels.forEach((panel) => {
         panel.hidden = (panel.dataset.sharePanel || "") !== tab;
@@ -2675,7 +2672,8 @@
       buttons.forEach((btn) => {
         const isActive = (btn.dataset.loginTab || "") === tab;
         btn.classList.toggle("is-active", isActive);
-        btn.setAttribute("aria-selected", isActive ? "true" : "false");
+        btn.removeAttribute("aria-selected");
+        btn.setAttribute("aria-pressed", isActive ? "true" : "false");
       });
       panels.forEach((panel) => {
         panel.hidden = (panel.dataset.loginPanel || "") !== tab;
@@ -3835,13 +3833,13 @@ const initImageViewer = () => {
                 <polyline points="21 4 21 10 15 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
             </button>
-            <a class="image-viewer-btn" data-viewer-download download aria-label="\u4e0b\u8f7d\u56fe\u7247" title="\u4e0b\u8f7d\u56fe\u7247">
+            <button class="image-viewer-btn" type="button" data-viewer-download aria-label="\u4e0b\u8f7d\u56fe\u7247" title="\u4e0b\u8f7d\u56fe\u7247">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                 <polyline points="7 10 12 15 17 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                 <line x1="12" y1="15" x2="12" y2="3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
               </svg>
-            </a>
+            </button>
             <button class="image-viewer-btn" type="button" data-viewer-close aria-label="\u5173\u95ed\u9884\u89c8" title="\u5173\u95ed\u9884\u89c8">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <line x1="6" y1="6" x2="18" y2="18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
@@ -4101,7 +4099,6 @@ const initImageViewer = () => {
       image.classList.remove("is-loaded");
       image.src = src;
       image.alt = item.alt || "";
-      if (download) download.href = src;
       if (count) count.textContent = `${index + 1} / ${items.length}`;
       updateNav();
       updateThumbs();
@@ -4175,6 +4172,16 @@ const initImageViewer = () => {
     if (oneToOne) oneToOne.addEventListener("click", toggleOneToOne);
     if (rotateCw) rotateCw.addEventListener("click", () => rotateBy(90));
     if (rotateCcw) rotateCcw.addEventListener("click", () => rotateBy(-90));
+    if (download) download.addEventListener("click", () => {
+      const src = image?.currentSrc || image?.getAttribute("src");
+      if (!src) return;
+      const link = document.createElement("a");
+      link.href = src;
+      link.download = "";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    });
 
     viewer.addEventListener(
       "wheel",
@@ -5680,38 +5687,77 @@ const initImageViewer = () => {
         );
         if (!target) return;
         const raw = source.value || "";
+        if (renderedMarkdown.get(target) === raw) return;
         target.innerHTML = sanitizeShareHtml(md.render(raw));
+        renderedMarkdown.set(target, raw);
         applySiYuanTableCellAlignment(target);
-        renderMindmap(target);
-        renderEcharts(target);
-        rehydrateEcharts(target);
-        renderAbc(target);
-        renderGraphviz(target);
-        renderFlowchart(target);
-        renderPlantUml(target);
-        renderMermaidWithFonts(target);
-        if (window.hljs) {
-          target.querySelectorAll("pre code").forEach((block) => {
-            if (block.closest(".md-diagram")) return;
-            if (
-              block.classList.contains("language-mermaid") ||
-              block.classList.contains("lang-mermaid") ||
-              block.classList.contains("mermaid")
-            ) {
-              return;
-            }
-            if (block.classList.contains("hljs")) {
-              return;
-            }
-            window.hljs.highlightElement(block);
+        const codes = Array.from(target.querySelectorAll("pre code"));
+        const languages = new Set(codes.map(getLanguage));
+        const wantsMermaid = target.querySelector("div.mermaid") ||
+          ["mermaid", "mindmap"].some(lang => languages.has(lang)) ||
+          codes.some(code => {
+            const lang = getLanguage(code);
+            return (lang === "" && looksLikeMermaid(code.textContent)) ||
+              (lang === "flowchart" && isMermaidFlowchart(code.textContent));
           });
+        const dependencies = [];
+        if (wantsMermaid) dependencies.push(loadDiagramScript("mermaid.min.js", () => !!window.mermaid));
+        if (wantsMermaid || ["plantuml", "puml", "uml"].some(lang => languages.has(lang))) {
+          dependencies.push(loadDiagramScript("pako.min.js", () => !!window.pako));
         }
-        decorateCodeBlocks(target);
-        wrapScrollableMedia(target);
-        fitMarkdownIframes(target);
-        initIframeFullscreen(target);
-        fitMarkdownVideos(target);
-        target.setAttribute("data-sps-rendered", "1");
+        if (languages.has("echarts") || target.querySelector(".md-diagram--echarts")) {
+          dependencies.push(loadDiagramScript("echarts.min.js", () => !!window.echarts));
+        }
+        if (languages.has("abc")) dependencies.push(loadDiagramScript("abcjs-basic-min.js", () => !!window.ABCJS));
+        if (languages.has("graphviz") || languages.has("dot")) {
+          dependencies.push(loadDiagramScript("viz.js", () => !!window.Viz)
+            .then(() => loadDiagramScript("full.render.js", () => typeof window.render === "function")));
+        }
+        if (languages.has("flowchart") && !codes.every(code =>
+          getLanguage(code) !== "flowchart" || isMermaidFlowchart(code.textContent))) {
+          dependencies.push(loadDiagramScript("raphael.min.js", () => !!window.Raphael)
+            .then(() => loadDiagramScript("flowchart.min.js", () => !!window.flowchart)));
+        }
+        const finish = () => {
+          if (!target.isConnected || renderedMarkdown.get(target) !== raw) return;
+          renderMindmap(target);
+          renderEcharts(target);
+          rehydrateEcharts(target);
+          renderAbc(target);
+          renderGraphviz(target);
+          renderFlowchart(target);
+          renderPlantUml(target);
+          renderMermaidWithFonts(target);
+          if (window.hljs) {
+            target.querySelectorAll("pre code").forEach((block) => {
+              if (block.closest(".md-diagram")) return;
+              if (
+                block.classList.contains("language-mermaid") ||
+                block.classList.contains("lang-mermaid") ||
+                block.classList.contains("mermaid")
+              ) {
+                return;
+              }
+              if (block.classList.contains("hljs")) {
+                return;
+              }
+              window.hljs.highlightElement(block);
+            });
+          }
+          decorateCodeBlocks(target);
+          wrapScrollableMedia(target);
+          fitMarkdownIframes(target);
+          initIframeFullscreen(target);
+          fitMarkdownVideos(target);
+          target.setAttribute("data-sps-rendered", "1");
+        };
+        // Basic text and math are already visible. Diagram engines do not hold
+        // up ordinary notes or cause a second whole-document Markdown render.
+        if (dependencies.length) Promise.all(dependencies).then(finish).catch(error => {
+          console.error(error);
+          finish();
+        });
+        else finish();
       });
   };
 
@@ -6294,15 +6340,6 @@ const initImageViewer = () => {
     "sps:markdown-ready",
     () => {
       refreshShareDynamicContent();
-    },
-    {once: true},
-  );
-  window.addEventListener(
-    "load",
-    () => {
-      if (typeof window.markdownit === "function") {
-        refreshShareDynamicContent();
-      }
     },
     {once: true},
   );
