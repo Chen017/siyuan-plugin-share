@@ -45,11 +45,16 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
       await admin.locator('[data-login-panel=password] button[type=submit]').click();
       await admin.goto(`${base}/admin#settings`);
       let settings = admin.locator('[data-pdf-settings-form]');
+      assert.equal(await settings.locator('input[type=number]:visible').count(), 2, 'Only time window and unified allowance are visible by default');
+      assert.equal(await settings.locator('[name="limits[window_seconds]"]').inputValue(), '60');
+      assert.equal(await settings.locator('[name="limits[requests]"]').inputValue(), '5');
+      assert.equal(await settings.locator('[name="limits[max_docs]"]').isVisible(), false);
       const original = await settings.evaluate((form) => Object.fromEntries(new FormData(form)));
       try {
         await settings.locator('[name=pdf_export_enabled]').uncheck();
+        await settings.locator('[data-pdf-advanced] > summary').click();
         await settings.locator('[name="limits[max_docs]"]').fill('5');
-        await settings.locator('summary').click();
+        await settings.locator('[data-pdf-proxy-settings] > summary').click();
         await settings.locator('[name=pdf_export_trusted_proxies]').fill('192.0.2.10');
         await settings.locator('[name=pdf_export_ip_header]').selectOption('HTTP_CF_CONNECTING_IP');
         await settings.locator('button[type=submit]').click();
@@ -59,7 +64,7 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
         assert.equal(await settings.locator('[name="limits[max_docs]"]').inputValue(), '5');
         assert.equal(await settings.locator('[name=pdf_export_trusted_proxies]').inputValue(), '192.0.2.10');
         assert.equal(await settings.locator('[name=pdf_export_ip_header]').inputValue(), 'HTTP_CF_CONNECTING_IP');
-        await settings.locator('summary').click();
+        assert.equal(await settings.locator('[name="limits[max_docs]"]').isVisible(), false);
         await admin.locator('#pdf-export-settings').screenshot({ path: path.join(output, 'pdf-admin-settings.png') });
         await page.goto(shareUrl);
         assert.equal(await page.locator('[data-pdf-export-link]').count(), 0);

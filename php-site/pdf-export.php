@@ -4,9 +4,8 @@ declare(strict_types=1);
 // PDF composition is bounded here; the visitor's browser does the PDF rendering.
 function pdf_export_fields(): array {
     return [
-        'window_seconds' => ['max' => 600, 'label' => '次数统计窗口（秒）'],
-        'ip_requests' => ['max' => 10, 'label' => '每个 IP 在窗口内的导出次数'],
-        'fingerprint_requests' => ['max' => 6, 'label' => '每个浏览器指纹在窗口内的导出次数'],
+        'window_seconds' => ['min' => 60, 'max' => 86400, 'default' => 3600, 'scale' => 60, 'whole' => true, 'label' => '统计时长（分钟）'],
+        'requests' => ['max' => 10, 'default' => 5, 'label' => '允许导出次数'],
         'max_concurrent' => ['max' => 4, 'label' => '全站同时导出数量'],
         'lease_seconds' => ['max' => 180, 'label' => '导出预览有效期（秒）'],
         'max_docs' => ['max' => 30, 'label' => '单次批量文档数'],
@@ -29,9 +28,37 @@ function pdf_export_initial_settings(): array {
         'pdf_export_ip_header' => (string)($config['pdf_export_ip_header'] ?? 'HTTP_X_REAL_IP'),
     ];
     foreach (pdf_export_fields() as $key => $field) {
-        $settings['pdf_export_' . $key] = (string)max($field['min'] ?? 1, min($field['max'], (int)($config['pdf_export'][$key] ?? $field['max'])));
+        $default = $field['default'] ?? $field['max'];
+        $settings['pdf_export_' . $key] = (string)max($field['min'] ?? 1, min($field['max'], (int)($config['pdf_export'][$key] ?? $default)));
     }
     return $settings;
+}
+
+function seed_pdf_export_settings(PDO $pdo): void {
+    $existing = $pdo->query("SELECT key, value FROM settings WHERE key LIKE 'pdf_export_%'")->fetchAll(PDO::FETCH_KEY_PAIR);
+    $initial = pdf_export_initial_settings();
+    if (!array_diff_key($initial, $existing) && !isset($existing['pdf_export_ip_requests']) && !isset($existing['pdf_export_fingerprint_requests'])) return;
+    $ownTransaction = !$pdo->inTransaction();
+    if ($ownTransaction) $pdo->exec('BEGIN IMMEDIATE');
+    try {
+        // Re-read after taking the write lock: upgrades may run in several workers.
+        $existing = $pdo->query("SELECT key, value FROM settings WHERE key LIKE 'pdf_export_%'")->fetchAll(PDO::FETCH_KEY_PAIR);
+        if (!isset($existing['pdf_export_requests']) && (isset($existing['pdf_export_ip_requests']) || isset($existing['pdf_export_fingerprint_requests']))) {
+            $initial['pdf_export_requests'] = (string)max(1, min((int)$initial['pdf_export_requests'],
+                (int)($existing['pdf_export_ip_requests'] ?? 10), (int)($existing['pdf_export_fingerprint_requests'] ?? 6)));
+            if (($existing['pdf_export_window_seconds'] ?? '') === '600'
+                && ($existing['pdf_export_ip_requests'] ?? '') === '10'
+                && ($existing['pdf_export_fingerprint_requests'] ?? '') === '6') {
+                $pdo->exec("UPDATE settings SET value = '3600' WHERE key = 'pdf_export_window_seconds'");
+            }
+        }
+        foreach ($initial as $key => $value) ensure_setting($pdo, $key, $value);
+        $pdo->exec("DELETE FROM settings WHERE key IN ('pdf_export_ip_requests', 'pdf_export_fingerprint_requests')");
+        if ($ownTransaction) $pdo->exec('COMMIT');
+    } catch (Throwable $error) {
+        if ($ownTransaction) $pdo->exec('ROLLBACK');
+        throw $error;
+    }
 }
 
 function pdf_export_settings(): array {
@@ -58,31 +85,40 @@ function pdf_export_setting_number(float $value): string {
     return rtrim(rtrim(sprintf('%.8F', $value), '0'), '.');
 }
 
+function render_pdf_export_limit_inputs(array $keys, array $limits): string {
+    $html = '<div class="grid" style="margin-top:12px">';
+    $fields = pdf_export_fields();
+    foreach ($keys as $key) {
+        $field = $fields[$key];
+        $scale = $field['scale'] ?? 1;
+        $min = $field['min'] ?? 1;
+        $whole = $field['whole'] ?? ($scale === 1);
+        $id = 'pdf-export-' . $key;
+        $html .= '<div><label for="' . $id . '">' . $field['label'] . '</label><input class="input" id="' . $id . '" name="limits[' . $key . ']" type="number" required step="' . ($whole ? '1' : 'any')
+            . '" min="' . pdf_export_setting_number($min / $scale) . '" max="' . pdf_export_setting_number($field['max'] / $scale)
+            . '" value="' . pdf_export_setting_number($limits[$key] / $scale) . '"></div>';
+    }
+    return $html . '</div>';
+}
+
 function render_pdf_export_settings(): string {
     $settings = pdf_export_settings();
     $html = '<section id="pdf-export-settings" style="margin-top:28px"><h2>访客 PDF 导出</h2>';
-    $html .= '<p class="muted">保存后立即生效，无须修改 PHP 文件或重启服务。批量文档合并为一份 PDF。每个 IP 或浏览器同时仅允许一个预览。</p>';
+    $html .= '<p class="muted">通常只需设置统计时长和允许次数。并发、内存与批量大小已预设，可直接使用。</p>';
     $html .= '<form method="post" action="' . base_path() . '/admin/pdf-export-settings" data-pdf-settings-form>';
     $html .= render_hidden_inputs(['csrf' => csrf_token()]);
     $html .= '<label><input type="checkbox" name="pdf_export_enabled" value="1"' . ($settings['enabled'] ? ' checked' : '') . '> 允许访客导出 PDF</label>';
-    $html .= '<div class="grid" style="margin-top:12px">';
-    foreach (pdf_export_fields() as $key => $field) {
-        $scale = $field['scale'] ?? 1;
-        $min = $field['min'] ?? 1;
-        $id = 'pdf-export-' . $key;
-        $html .= '<div><label for="' . $id . '">' . $field['label'] . '</label><input class="input" id="' . $id . '" name="limits[' . $key . ']" type="number" required step="' . ($scale === 1 ? '1' : 'any')
-            . '" min="' . pdf_export_setting_number($min / $scale) . '" max="' . pdf_export_setting_number($field['max'] / $scale)
-            . '" value="' . pdf_export_setting_number($settings['limits'][$key] / $scale) . '">';
-        $html .= '<div class="muted">允许范围：' . pdf_export_setting_number($min / $scale) . ' 至 ' . pdf_export_setting_number($field['max'] / $scale) . '</div></div>';
-    }
-    $html .= '</div><p class="muted">1 MiB = 1024 KiB。数值受程序安全上限约束，不能填写 0 取消限制；服务器已有更低内存限制时继续遵守。缩短次数统计窗口会提高单位时间内的可导出次数。</p>';
-    $html .= '<details style="margin-top:16px"><summary>高级：反向代理真实 IP</summary><p class="muted">仅信任这里明确填写的代理地址。代理必须覆盖写入真实 IP 请求头，不能直接转发访客传入的同名头。留空时按直连地址限流，经过同一代理的访客会共用 IP 配额。</p>';
+    $html .= render_pdf_export_limit_inputs(['window_seconds', 'requests'], $settings['limits']);
+    $html .= '<p class="muted">IP 与浏览器共同使用这里设置的次数上限，任一达到上限就暂停导出。例如 60 分钟内允许 5 次：用完后，只更换 IP 或只更换浏览器都不能继续；两者都更换后才会按新访客计算。次数按导出预览请求计算。</p>';
+    $html .= '<details data-pdf-advanced style="margin-top:16px"><summary>高级设置（已预设，通常无需修改）</summary><p class="muted">以下参数用于保护服务器，可保持默认值。容量单位为 MiB，1 MiB = 1024 KiB；已有更低内存限制时继续遵守。</p>';
+    $html .= render_pdf_export_limit_inputs(array_values(array_diff(array_keys(pdf_export_fields()), ['window_seconds', 'requests'])), $settings['limits']);
+    $html .= '<details data-pdf-proxy-settings style="margin-top:16px"><summary>反向代理真实 IP</summary><p class="muted">仅信任这里明确填写的代理地址。代理必须覆盖写入真实 IP 请求头，不能直接转发访客传入的同名头。留空时按直连地址限流，经过同一代理的访客会共用 IP 配额。</p>';
     $html .= '<label for="pdf-trusted-proxies">可信代理 IP（每行一个，也可用逗号分隔）</label><textarea class="input" id="pdf-trusted-proxies" name="pdf_export_trusted_proxies" rows="3" placeholder="例如：127.0.0.1&#10;::1">' . htmlspecialchars(implode("\n", $settings['trusted_proxies'])) . '</textarea>';
     $html .= '<label for="pdf-ip-header">代理覆盖写入的真实 IP 请求头</label><select class="input" id="pdf-ip-header" name="pdf_export_ip_header">';
     foreach (['HTTP_X_REAL_IP' => 'X-Real-IP', 'HTTP_CF_CONNECTING_IP' => 'CF-Connecting-IP'] as $key => $label) {
         $html .= '<option value="' . $key . '"' . ($settings['ip_header'] === $key ? ' selected' : '') . '>' . $label . '</option>';
     }
-    $html .= '</select><p class="muted">仅接受精确 IPv4 / IPv6 地址，不接受通配符、网段或域名。请填写 PHP 实际看到的代理对端 IP。</p></details>';
+    $html .= '</select><p class="muted">仅接受精确 IPv4 / IPv6 地址，不接受通配符、网段或域名。请填写 PHP 实际看到的代理对端 IP。</p></details></details>';
     $html .= '<div style="margin-top:16px"><button class="button primary" type="submit">保存 PDF 导出设置</button></div></form></section>';
     return $html;
 }
@@ -94,7 +130,8 @@ function save_pdf_export_settings(array $input): void {
     foreach (pdf_export_fields() as $key => $field) {
         $raw = $limits[$key] ?? null;
         $scale = $field['scale'] ?? 1;
-        $pattern = $scale === 1 ? '/^[0-9]{1,10}$/D' : '/^[0-9]{1,10}(?:\.[0-9]{1,8})?$/D';
+        $whole = $field['whole'] ?? ($scale === 1);
+        $pattern = $whole ? '/^[0-9]{1,10}$/D' : '/^[0-9]{1,10}(?:\.[0-9]{1,8})?$/D';
         if (!is_string($raw) || !preg_match($pattern, $raw) || round((float)$raw * $scale) < ($field['min'] ?? 1) || (float)$raw * $scale > $field['max']) {
             throw new InvalidArgumentException('「' . $field['label'] . '」必须在允许范围内。');
         }
@@ -220,7 +257,7 @@ function pdf_export_admit(int $shareId, string $fingerprint): string {
             FROM pdf_export_events');
         $stmt->execute([$ip, $fp]);
         $counts = $stmt->fetch(PDO::FETCH_ASSOC);
-        if ((int)$counts['ip_count'] >= $limits['ip_requests'] || (int)$counts['fp_count'] >= $limits['fingerprint_requests']
+        if ((int)$counts['ip_count'] >= $limits['requests'] || (int)$counts['fp_count'] >= $limits['requests']
             || (int)$counts['total'] >= $limits['max_window_events']) {
             throw new RuntimeException('导出次数已达上限，请稍后再试。', 429);
         }

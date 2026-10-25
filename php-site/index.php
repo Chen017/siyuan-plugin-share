@@ -484,9 +484,7 @@ function seed_default_settings(PDO $pdo): void {
     ensure_setting($pdo, 'site_custom_js', '');
     ensure_setting($pdo, 'access_stats_default_enabled', '1');
     ensure_setting($pdo, 'access_stats_default_retention_days', '7');
-    foreach (pdf_export_initial_settings() as $key => $value) {
-        ensure_setting($pdo, $key, $value);
-    }
+    seed_pdf_export_settings($pdo);
 }
 
 function seed_default_admin(PDO $pdo): void {

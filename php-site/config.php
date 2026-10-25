@@ -9,9 +9,8 @@ return [
     // Existing database settings take precedence and are never overwritten by this file.
     'pdf_export_enabled' => true,
     'pdf_export' => [
-        'window_seconds' => 600,
-        'ip_requests' => 10,
-        'fingerprint_requests' => 6,
+        'window_seconds' => 3600,
+        'requests' => 5,
         'max_concurrent' => 4,
         'lease_seconds' => 180,
         'max_docs' => 30,

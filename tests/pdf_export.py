@@ -41,7 +41,7 @@ class PdfExportTests:
             self.assertEqual(visitor.request(path + '/verify', {'csrf': token, 'lease': lease})[0], 404)
             visitor.request(path + '/release', {'csrf': token, 'lease': lease})
             self.rows('DELETE FROM pdf_export_events')
-            changed = {**original, 'limits[max_docs]': '1', 'limits[ip_requests]': '1',
+            changed = {**original, 'limits[max_docs]': '1', 'limits[requests]': '1', 'limits[window_seconds]': '60',
                        'limits[max_concurrent]': '1', 'limits[max_markdown_bytes]': '0.5',
                        'limits[max_execution_seconds]': '10', 'limits[max_memory_bytes]': '64',
                        'pdf_export_trusted_proxies': '192.0.2.1,2001:0db8:0:0:0:0:0:1', 'pdf_export_ip_header': 'HTTP_CF_CONNECTING_IP'}
@@ -72,7 +72,8 @@ class PdfExportTests:
         self.assertEqual(admin.request('/admin/pdf-export-settings', {**original, 'csrf': 'wrong'})[0], 400)
         self.assertEqual(admin.request('/admin/pdf-export-settings', {**original, 'csrf[x]': 'wrong'})[0], 400)
         for invalid in [
-            {'limits[max_docs]': '31'}, {'limits[ip_requests]': '0'}, {'limits[window_seconds]': '1e2'},
+            {'limits[max_docs]': '31'}, {'limits[requests]': '0'}, {'limits[window_seconds]': '1e2'},
+            {'limits[requests]': '11'}, {'limits[window_seconds]': '0'}, {'limits[window_seconds]': '1441'},
             {'limits[max_docs]': '2.5'}, {'limits[max_markdown_bytes]': '-1'},
             {'limits[max_memory_bytes]': '1'}, {'limits[max_concurrent][x]': '1'},
             {'pdf_export_enabled[x]': '1'}, {'pdf_export_trusted_proxies': '0.0.0.0/0'},
@@ -139,9 +140,9 @@ class PdfExportTests:
         token = self.csrf(client, path + '/export')
         return client, path + '/export', token
 
-    def pdf_post(self, client, path, token, **overrides):
+    def pdf_post(self, client, path, token, headers=None, **overrides):
         data = {'csrf': token, 'fingerprint': 'a' * 64, 'scope': 'all', **overrides}
-        return client.request(path, data)
+        return client.request(path, data, headers)
 
     def pdf_lease(self, body):
         token = re.search(rb'data-lease="([a-f0-9]+)"', body)
@@ -190,6 +191,7 @@ class PdfExportTests:
             client.request(path + '/release', {'csrf': csrf, 'lease': self.pdf_lease(body)})
         other = self.share(markdown='PRIVATE_OTHER_SHARE')
         self.assertNotEqual(other['id'], share['id'])
+        self.rows('DELETE FROM pdf_export_events')
         for extra in [{'scope': 'single', 'doc_id': self.name}, {'scope': 'selected', 'doc_ids[0]': self.name}, {'scope': 'tree', 'doc_id': self.name}]:
             status, _, body = self.pdf_post(client, path, csrf, fingerprint='c' * 64, **extra)
             self.assertEqual(status, 404, body)
@@ -234,17 +236,44 @@ class PdfExportTests:
         self.assertEqual(self.pdf_post(client, path, csrf, scope='selected', **{'doc_ids[0][0]': self.name})[0], 400)
         self.assertEqual(self.rows('SELECT COUNT(*) AS n FROM pdf_export_leases')[0]['n'], 0)
 
+    def test_pdf_combined_quota_requires_changing_both_ip_and_browser(self):
+        share = self.share()
+        client, path, csrf = self.pdf_visitor(share)
+        before = self.rows("SELECT key, value FROM settings WHERE key IN ('pdf_export_trusted_proxies', 'pdf_export_ip_header')")
+        self.rows("UPDATE settings SET value = '[\"127.0.0.1\"]' WHERE key = 'pdf_export_trusted_proxies'")
+        self.rows("UPDATE settings SET value = 'HTTP_X_REAL_IP' WHERE key = 'pdf_export_ip_header'")
+        try:
+            original_ip, other_ip = '203.0.113.10', '203.0.113.20'
+            for _ in range(5):
+                status, _, body = self.pdf_post(client, path, csrf, headers={'X-Real-IP': original_ip})
+                self.assertEqual(status, 200, body)
+                client.request(path + '/release', {'csrf': csrf, 'lease': self.pdf_lease(body)})
+            for ip, fingerprint in [(original_ip, 'b' * 64), (other_ip, 'a' * 64)]:
+                new_client = type(self.client)(self.base)
+                token = self.csrf(new_client, path)
+                status, headers, body = self.pdf_post(new_client, path, token, fingerprint=fingerprint, headers={'X-Real-IP': ip})
+                self.assertEqual(status, 429, (ip, fingerprint, body))
+                self.assertEqual(int(headers['Retry-After']), 3600)
+            new_client = type(self.client)(self.base)
+            token = self.csrf(new_client, path)
+            status, _, body = self.pdf_post(new_client, path, token, fingerprint='b' * 64, headers={'X-Real-IP': other_ip})
+            self.assertEqual(status, 200, body)
+            new_client.request(path + '/release', {'csrf': token, 'lease': self.pdf_lease(body)})
+            self.rows(f'UPDATE pdf_export_events SET created_at = {int(time.time()) - 3601}')
+            self.assertEqual(self.pdf_post(client, path, csrf, headers={'X-Real-IP': original_ip})[0], 200)
+        finally:
+            for row in before:
+                value = row['value'].replace("'", "''")
+                self.rows(f"UPDATE settings SET value = '{value}' WHERE key = '{row['key']}'")
+            self.rows('DELETE FROM pdf_export_leases')
+            self.rows('DELETE FROM pdf_export_events')
+
     def test_pdf_limits_survive_sessions_and_spoofed_proxy_headers(self):
         from run import Client
         share = self.share()
         client, path, csrf = self.pdf_visitor(share)
-        for i in range(10):
-            if i == 6:
-                status, headers, _ = self.pdf_post(client, path, csrf)
-                self.assertEqual(status, 429)  # same fingerprint, independent of cookies
-                self.assertGreater(int(headers['Retry-After']), 0)
-            fingerprint = 'a' * 64 if i < 6 else hashlib.sha256(str(i).encode()).hexdigest()
-            status, _, body = self.pdf_post(client, path, csrf, fingerprint=fingerprint)
+        for _ in range(5):
+            status, _, body = self.pdf_post(client, path, csrf)
             self.assertEqual(status, 200, body)
             client.request(path + '/release', {'csrf': csrf, 'lease': self.pdf_lease(body)})
         replacement = Client(self.base)
