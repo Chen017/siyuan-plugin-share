@@ -11,7 +11,7 @@
 | 静态资源更新 | [3f6ddb5](https://github.com/Chen017/siyuan-plugin-share/commit/3f6ddb5285001ecb97d29cc51f5b73e85d90c5d3)：为 app.js 增加缓存版本；本次扩展到公共样式及渲染资源。 |
 | PHP 与容器维护 | [dbc17ea](https://github.com/Chen017/siyuan-plugin-share/commit/dbc17ea87fd2ab57ecb8853112e6ba0d6b6d2a9d)、[325968d](https://github.com/Chen017/siyuan-plugin-share/commit/325968d)、[b8aeb14](https://github.com/Chen017/siyuan-plugin-share/commit/b8aeb14)：升级到 PHP 8.3.36、修复优雅停机，并增加隔离回归。 |
 | 私有部署与数据校验 | `127.0.0.1:8081` 回环绑定；备份、逐文件恢复校验和 SQLite 指纹脚本。日常推送 main 自动部署，日常部署不自动执行数据备份。详见 [升级验收](docs/VPS_UPGRADE_20261022.md)。 |
-| 2026-10-25 阅读页优化 | 图表按需加载、单次正文渲染、保留英文 MiSans 的字体瘦身、蓝灰深色配色，以及无障碍、SEO 与公开发现文件修复。附件权限检查沿用原实现。 |
+| 2026-10-25 阅读页优化 | 图表按需加载、单次正文渲染、保留英文 MiSans 的字体瘦身、中性深色配色，以及无障碍、SEO 与公开发现文件修复。附件权限检查沿用原实现。 |
 
 ## 已合并到上游的贡献
 

@@ -12,7 +12,7 @@ This is **[Chen017](https://github.com/Chen017)'s personal fork** of [b8l8u8e8/s
 | --- | --- |
 | Runtime | PHP **8.3.36**, graceful Nginx/PHP-FPM shutdown, runtime and API regression checks. |
 | Fonts | Local **MiSans** for Latin letters, digits and common punctuation; system fonts for Chinese. The Latin WOFF2 is **34 KB**, down from the original 8.1 MB TTF. |
-| Reading | Quieter blue-gray dark colors; reading statistics and comments hidden on share pages. |
+| Reading | Neutral dark surfaces and clear blue links; reading statistics and comments hidden on share pages. Footer links lead with this fork and credit upstream. |
 | Rendering | SiYuan table-cell alignment fixes, on-demand diagram engines and one Markdown render per document. Math, footnotes and diagrams remain available. |
 | Accessibility & SEO | Clearer links, correct button states and TOC focus, main landmarks, working image-download controls, page descriptions, robots.txt and real 404 responses. |
 | Deployment | Local-only `127.0.0.1:8081`, versioned static assets, GitHub Actions deployment and isolated regression tests. Backup and restore-verification scripts are included. |
