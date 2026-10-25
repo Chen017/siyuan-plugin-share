@@ -97,7 +97,7 @@ server {
     }
 
     # Public application assets only; uploaded attachments retain their permission checks.
-    location ^~ /assets/ {
+    location /assets/ {
         try_files $uri =404;
         expires 7d;
         add_header Cache-Control "public";

@@ -359,6 +359,20 @@ class Regression(unittest.TestCase):
         status, headers, body = self.client.request('/assets/app.js')
         self.assertEqual(status, 200)
         self.assertGreater(len(body), 1000)
+        # Exercise real files in the disposable container: a static cache
+        # location must not bypass the existing source/secret deny rules.
+        probes = ['audit-probe.php', 'audit-probe.db', '.audit-probe']
+        for name in probes:
+            subprocess.run(['docker', 'exec', self.container, 'sh', '-ec',
+                            'printf AUDIT_SECRET_MARKER > /var/www/html/assets/' + name], check=True)
+        try:
+            for name in probes:
+                status, _, body = self.client.request('/assets/' + name)
+                self.assertIn(status, [403, 404], name)
+                self.assertNotIn(b'AUDIT_SECRET_MARKER', body)
+        finally:
+            subprocess.run(['docker', 'exec', self.container, 'rm', '-f',
+                            *['/var/www/html/assets/' + name for name in probes]], check=True)
 
 
 def command(args, **kwargs):
