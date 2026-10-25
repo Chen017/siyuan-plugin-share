@@ -23,6 +23,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from pdf_export import PdfExportTests
+from pdf_release import PdfReleaseTests
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = """<?php
@@ -81,7 +82,7 @@ class Client:
         return self.request(path, {'csrf': match[1].decode(), **fields})
 
 
-class Regression(PdfExportTests, unittest.TestCase):
+class Regression(PdfReleaseTests, PdfExportTests, unittest.TestCase):
     base = ''
     docker = False
     container = None
@@ -432,7 +433,7 @@ def main():
                 name = 'siyuan-php83-test-' + uuid.uuid4().hex[:10]
                 container = name
                 command(['docker', 'create', '--name', name, '--volume', '/var/www/html/storage', '--volume', '/var/www/html/uploads', '-p', '127.0.0.1::80', args.docker], stdout=subprocess.DEVNULL)
-                for source_path, destination in [(app / 'config.php', '/var/www/html/config.php'), (app / 'bootstrap.php', '/var/www/html/bootstrap.php'), (php_ini, '/usr/local/etc/php/conf.d/zz-regression.ini'), (ROOT / 'tests/runtime.php', '/tmp/runtime.php')]:
+                for source_path, destination in [(app / 'config.php', '/var/www/html/config.php'), (app / 'bootstrap.php', '/var/www/html/bootstrap.php'), (php_ini, '/usr/local/etc/php/conf.d/zz-regression.ini'), (ROOT / 'tests/runtime.php', '/tmp/runtime.php'), (ROOT / 'tests/pdf-race.php', '/tmp/pdf-race.php')]:
                     command(['docker', 'cp', str(source_path), name + ':' + destination])
                 command(['docker', 'start', name], stdout=subprocess.DEVNULL)
                 port = subprocess.check_output(['docker', 'port', name, '80/tcp'], text=True).strip().rsplit(':', 1)[1]

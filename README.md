@@ -55,3 +55,11 @@ Chen017 also contributed [dark-mode code highlighting #38](https://github.com/b8
 - The deployment workflow targets the maintainer's VPS; configure your own Actions secrets before using it.
 
 Original project by **b8l8u8e8 and contributors**. Personal fork maintained by **Chen017**. [MIT License](LICENSE).
+
+## Guest PDF and batch export
+
+Guests can export a document, subtree, entire shared scope or selected documents after satisfying the share's password, expiration and visitor restrictions. Batch export combines documents into one PDF with a new page per document; choose **Save as PDF** in the browser print dialog.
+
+PDFs always use a white background and print-friendly text, tables and code colors, including when reading in dark mode. Math, images and supported diagrams reuse the site's rendering. The server prepares bounded authorized content; the visitor's browser renders the PDF.
+
+Manage export under **Admin → Site settings → Guest PDF export**. Common controls are the export switch, time window and one allowance, defaulting to **5 exports per hour**. Either an exhausted IP or browser fingerprint blocks export; changing only one does not reset the allowance. Resource limits are preset and collapsed under advanced settings. See [export configuration and limits](docs/GUEST_PDF_EXPORT.md).

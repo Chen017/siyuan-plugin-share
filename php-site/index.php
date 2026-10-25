@@ -1201,6 +1201,7 @@ function render_page(string $title, string $content, ?array $user = null, string
     }
     $layoutClass = 'layout-' . preg_replace('/[^a-z0-9_-]+/i', '', $layout);
     $includeMarkdown = !empty($options['markdown']);
+    if (!empty($options['pdf_export']) && $includeMarkdown) $layoutClass .= ' pdf-export-preview';
     $navKey = (string)($options['nav'] ?? '');
     if ($user && $layout !== 'auth' && $layout !== 'share') {
         maybe_send_instance_heartbeat();
@@ -1237,12 +1238,9 @@ function render_page(string $title, string $content, ?array $user = null, string
     if ($layout === 'share') {
         echo "<style id='sps-share-font-force'>body.layout-share .markdown-body,body.layout-share .markdown-body :where(p,li,a,strong,em,del,mark,h1,h2,h3,h4,h5,h6,blockquote,td,th){font-family:var(--font-markdown) !important;}</style>";
     }
-    if ($layout === 'share' && empty($options['pdf_export'])) {
-        echo "<link rel='stylesheet' href='{$base}/assets/pdf-export.css'>";
-    }
-    if (!empty($options['pdf_export'])) {
-        $pdfVersion = (string)filemtime(__DIR__ . '/assets/pdf-export.css');
-        echo "<link rel='stylesheet' href='{$base}/assets/pdf-export.css?v={$pdfVersion}'>";
+    if ($layout === 'share') {
+        $pdfStyleUrl = htmlspecialchars(site_asset_url('pdf-export.css'), ENT_QUOTES, 'UTF-8');
+        echo "<link rel='stylesheet' href='{$pdfStyleUrl}'>";
     }
     echo "</head>";
     echo "<body class='{$layoutClass}'>";
@@ -1371,8 +1369,8 @@ function render_page(string $title, string $content, ?array $user = null, string
         echo "<script id='site-custom-js'>\nwindow.addEventListener('DOMContentLoaded', function () {\n{$safeCustomJs}\n});\n</script>";
     }
     if ($layout === 'share') {
-        $pdfJsVersion = (string)filemtime(__DIR__ . '/assets/pdf-export.js');
-        echo "<script defer src='{$base}/assets/pdf-export.js?v={$pdfJsVersion}'></script>";
+        $pdfJsUrl = htmlspecialchars(site_asset_url('pdf-export.js'), ENT_QUOTES, 'UTF-8');
+        echo "<script defer src='{$pdfJsUrl}'></script>";
     }
     echo "</body>";
     echo "</html>";

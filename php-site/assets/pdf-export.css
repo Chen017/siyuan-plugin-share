@@ -14,10 +14,44 @@
 .pdf-document .markdown-body img { max-width: 100%; }
 .pdf-document .markdown-body pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .pdf-document .markdown-body table { max-width: 100%; }
+/* Export uses a fixed light palette, including when the reader prefers dark. */
+body.layout-share.pdf-export-preview {
+  color-scheme: light;
+  background: #fff !important;
+  color: #1f2328 !important;
+  --text: #1f2328;
+  --muted: #59636e;
+  --surface: #fff;
+  --surface-muted: #f6f8fa;
+  --border: #d1d9e0;
+  --primary: #0969da;
+}
+body.layout-share.pdf-export-preview .markdown-body {
+  background: #fff !important;
+  color: #1f2328 !important;
+  --color-canvas-default: #fff;
+  --color-canvas-subtle: #f6f8fa;
+  --color-fg-default: #1f2328;
+  --color-fg-muted: #59636e;
+  --color-border-default: #d1d9e0;
+  --color-border-muted: #d1d9e0;
+}
+body.layout-share.pdf-export-preview .markdown-body :is(pre, .highlight, .hljs, .code-block, .code-body, .code-lines, blockquote, .md-alert) {
+  background: #f6f8fa !important;
+  color: #1f2328 !important;
+  border-color: #d1d9e0;
+}
+body.layout-share.pdf-export-preview .markdown-body :is(.md-diagram, .mermaid, table) { background: #fff !important; }
+body.layout-share.pdf-export-preview .markdown-body :is(code, .hljs *) { color: #1f2328; }
+body.layout-share.pdf-export-preview .hljs :is(.hljs-keyword, .hljs-selector-tag, .hljs-literal) { color: #cf222e; }
+body.layout-share.pdf-export-preview .hljs :is(.hljs-string, .hljs-regexp) { color: #0a3069; }
+body.layout-share.pdf-export-preview .hljs :is(.hljs-number, .hljs-attr, .hljs-built_in) { color: #0550ae; }
+body.layout-share.pdf-export-preview .hljs :is(.hljs-comment, .hljs-quote) { color: #59636e; }
+body.layout-share.pdf-export-preview .hljs :is(.hljs-title, .hljs-section) { color: #6639ba; }
 @page { size: A4; margin: 16mm 14mm; }
 @media print {
-  html, body.layout-share { background: white !important; color: #1f2328 !important; margin: 0 !important; padding: 0 !important; }
-  body.layout-share .share-page { display: block !important; padding: 0 !important; margin: 0 !important; max-width: none !important; }
+  html, body.layout-share { background: white !important; color: #1f2328 !important; margin: 0 !important; padding: 0 !important; height: auto !important; min-height: 0 !important; }
+  body.layout-share .share-page { display: block !important; padding: 0 !important; margin: 0 !important; max-width: none !important; height: auto !important; min-height: 0 !important; }
   .pdf-print-toolbar, .pdf-share-tools, .share-footer, .share-side-trigger, .share-side-backdrop, .scroll-top,
   .image-viewer, .code-header, .code-block__toolbar, .code-toolbar, .code-copy, [data-code-copy], .md-iframe-fullscreen-btn { display: none !important; }
   .pdf-document { display: block !important; max-width: none; width: auto; margin: 0; padding: 0; font-size: 11pt; }

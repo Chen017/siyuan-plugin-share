@@ -88,20 +88,9 @@ class PdfExportTests:
         self.assertEqual(self.rows("SELECT key, value FROM settings WHERE key LIKE 'pdf_export_%' ORDER BY key"), before)
 
     def test_pdf_atomic_global_admission(self):
-        if not self.php_executable:
-            self.skipTest('Multi-process admission race uses the local PHP CLI')
         share = self.share()
         self.pdf_visitor(share)
-        barrier = str(time.time() + 1.5)
-        processes = [subprocess.Popen([self.php_executable, str(Path(__file__).with_name('pdf-race.php')),
-                                      self.bootstrap_path, str(share['id']), str(i + 1), barrier],
-                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE) for i in range(8)]
-        results = []
-        for process in processes:
-            stdout, stderr = process.communicate(timeout=20)
-            self.assertEqual(process.returncode, 0, stderr)
-            self.assertEqual(stderr, b'')
-            results.append(stdout.decode())
+        results = self.pdf_workers(share, 8)
         self.assertEqual(results.count('accepted'), 4, results)
         self.assertEqual(results.count('limited'), 4, results)
         self.assertEqual(self.rows('SELECT COUNT(*) AS n FROM pdf_export_leases')[0]['n'], 4)
@@ -128,7 +117,8 @@ class PdfExportTests:
         self.pdf_visitor(share)
         output = Path(__file__).resolve().parents[1] / '.test-output'
         output.mkdir(exist_ok=True)
-        subprocess.run(['node', str(Path(__file__).with_name('pdf-browser.cjs')), self.base + '/s/' + share['slug'], str(output)], check=True, timeout=90)
+        subprocess.run(['node', str(Path(__file__).with_name('pdf-browser.cjs')), self.base + '/s/' + share['slug'], str(output)],
+                       input=json.dumps({'apiKey': self.key, 'shareId': share['id']}), text=True, check=True, timeout=180)
 
     def pdf_visitor(self, share, password=None):
         self.rows('DELETE FROM pdf_export_events')
