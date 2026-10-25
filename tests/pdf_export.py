@@ -230,7 +230,14 @@ class PdfExportTests:
         share = self.share()
         client, path, csrf = self.pdf_visitor(share)
         before = self.rows("SELECT key, value FROM settings WHERE key IN ('pdf_export_trusted_proxies', 'pdf_export_ip_header')")
-        self.rows("UPDATE settings SET value = '[\"127.0.0.1\"]' WHERE key = 'pdf_export_trusted_proxies'")
+        peers = ['127.0.0.1']
+        if self.container:
+            # Published Docker ports reach Nginx from the bridge gateway, not
+            # 127.0.0.1. Trust only the disposable fixture's actual gateways.
+            networks = json.loads(subprocess.check_output(['docker', 'inspect', '--format', '{{json .NetworkSettings.Networks}}', self.container], text=True))
+            peers.extend(network['Gateway'] for network in networks.values() if network.get('Gateway'))
+        trusted = json.dumps(peers)
+        self.rows(f"UPDATE settings SET value = '{trusted}' WHERE key = 'pdf_export_trusted_proxies'")
         self.rows("UPDATE settings SET value = 'HTTP_X_REAL_IP' WHERE key = 'pdf_export_ip_header'")
         try:
             original_ip, other_ip = '203.0.113.10', '203.0.113.20'
