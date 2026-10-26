@@ -117,17 +117,13 @@
   };
   const sections = Array.from(documentBody.querySelectorAll('.pdf-doc'));
   const completed = new Set();
-  const printed = new Set();
   let busy = false;
   let prepared = false;
-  const printButtons = sections.map((section) => section.querySelector('[data-pdf-native-print]'));
   function updateControls() {
     const unavailable = !prepared || busy || released || !documentBody.children.length;
     button.disabled = unavailable || completed.size === sections.length;
-    printButtons.forEach((printButton) => { printButton.disabled = unavailable; });
   }
   updateControls();
-  let printIndex = -1;
   let library;
   const loadScript = (source) => new Promise((resolve, reject) => {
     const script = document.createElement('script');
@@ -179,7 +175,7 @@
     const root = document.createElement('div');
     root.className = 'pdf-document pdf-download-document';
     const copy = section.cloneNode(true);
-    copy.querySelectorAll('.markdown-source, .pdf-doc-print').forEach((node) => node.remove());
+    copy.querySelectorAll('.markdown-source').forEach((node) => node.remove());
     const originalCanvas = Array.from(section.querySelectorAll('canvas'));
     copy.querySelectorAll('canvas').forEach((canvas, index) => {
       const image = document.createElement('img');
@@ -278,39 +274,6 @@
       busy = false;
       updateControls();
     }
-  });
-  sections.forEach((section, index) => section.querySelector('[data-pdf-native-print]').addEventListener('click', async () => {
-    if (!prepared || busy || released) return;
-    busy = true;
-    updateControls();
-    try {
-      await verify(true);
-      await claim(index);
-      printIndex = index;
-      documentBody.classList.add('pdf-print-one');
-      section.classList.add('pdf-print-selected');
-      window.print();
-    } catch (error) {
-      status.textContent = error.message;
-      busy = false;
-      updateControls();
-    }
-  }));
-  window.addEventListener('afterprint', () => {
-    if (printIndex < 0) return;
-    printed.add(printIndex);
-    sections[printIndex]?.classList.remove('pdf-print-selected');
-    printIndex = -1;
-    documentBody.classList.remove('pdf-print-one');
-    busy = false;
-    status.textContent = '此篇打印窗口已关闭。';
-    if (sections.every((_, index) => printed.has(index) || completed.has(index))) release();
-    updateControls();
-  });
-  // Browser print is also available from its menu; provide the best local state
-  // there, while the application's PDF action always revalidates on the server.
-  window.addEventListener("beforeprint", () => {
-    documentBody.querySelectorAll("details").forEach((item) => { item.open = true; });
   });
   const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const prepare = async () => {

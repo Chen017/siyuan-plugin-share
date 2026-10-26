@@ -19,7 +19,7 @@
     let measured = 0;
     while ((node = walker.nextNode())) {
       const parent = node.parentElement;
-      if (!parent || parent.closest('.markdown-source, .pdf-doc-print, .katex-mathml, script, style, svg title, svg desc')) continue;
+      if (!parent || parent.closest('.markdown-source, .katex-mathml, script, style, svg title, svg desc')) continue;
       const style = getComputedStyle(parent);
       if (style.visibility !== 'visible' || style.display === 'none') continue;
       const pieces = segmenter ? segmenter.segment(node.data) : Array.from(node.data, (segment) => ({ segment }));

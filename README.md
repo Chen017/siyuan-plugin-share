@@ -58,7 +58,7 @@ Original project by **b8l8u8e8 and contributors**. Personal fork maintained by *
 
 ## Guest PDF and individual batch downloads
 
-Saved PDFs include the original document URL, author `塵`, and rights notice `随意传播，禁止售卖` in hidden XMP metadata and an invisible text layer on every page. No export identifier is added, and visible layout stays unchanged. Native browser printing does not guarantee preservation of this hidden information.
+Saved PDFs include the original document URL, author `塵`, and rights notice `随意传播，禁止售卖` in hidden XMP metadata and an invisible text layer on every page. No export identifier is added, and visible layout stays unchanged.
 
 After opening a shared document, guests can use the PDF action beside Source. Export a document, subtree, shared scope or selected documents: Save triggers sequential browser downloads, **one independent PDF per document, without merging**. Light, dark and mobile exports always use white backgrounds.
 
@@ -66,4 +66,4 @@ Each server-issued visitor Cookie has its own rolling allowance, defaulting to 1
 
 A server-side transaction permits only one active export task per visitor Cookie, including across tabs, windows and website sessions. Existing access/password/expiry checks and preset concurrency, batch and resource limits remain in place.
 
-Save PDF preserves page artwork and adds an aligned Unicode text layer, allowing body text selection, copying and search while retaining hidden provenance. Text inside images is not OCRed. Native Print this document remains available. Browsers may ask permission for multiple downloads. See [configuration, limitations and tests](docs/GUEST_PDF_EXPORT.md).
+Save PDF preserves page artwork and adds an aligned Unicode text layer, allowing body text selection, copying and search while retaining hidden provenance. Text inside images is not OCRed. Browsers may ask permission for multiple downloads. See [configuration, limitations and tests](docs/GUEST_PDF_EXPORT.md).

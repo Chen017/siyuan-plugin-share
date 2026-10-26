@@ -29,6 +29,7 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     preview.on('pageerror', (error) => errors.push(error.message));
     await preview.waitForLoadState();
     await preview.waitForFunction(() => document.querySelector('[data-pdf-download]')?.disabled === false, null, { timeout: 45000 });
+    assert.equal(await preview.getByRole('button', { name: '打印此篇', exact: true }).count(), 0, 'Export offers direct PDF saving only');
     return preview;
   };
   const downloadPdfs = async (preview, count, label) => {
@@ -46,7 +47,6 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     while (downloads.length < count && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(downloads.length, count, 'One download per document');
     assert.equal(await preview.locator('[data-pdf-download]').isDisabled(), true, 'Completed task disables saving');
-    assert.equal(await preview.locator('[data-pdf-native-print]:enabled').count(), 0, 'Completed task disables every print button');
     assert.equal(new Set(downloads.map((d) => d.suggestedFilename())).size, count);
     for (let i = 0; i < downloads.length; i++) {
       assert.equal(await downloads[i].failure(), null);
@@ -126,14 +126,6 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
         await downloadPdfs(preview, scenario.count, 'individual-' + scenario.name);
       } finally { await extra.close(); }
     }
-    const native = await openPreview(context, 'all');
-    await native.evaluate(() => { window.print = () => { window.__printed = true; }; });
-    await native.locator('[data-pdf-native-print]').nth(1).click();
-    await native.waitForFunction(() => window.__printed === true);
-    assert.equal(await native.locator('[data-pdf-native-print]:enabled').count(), 0, 'Printing disables all competing actions');
-    const nativePdf = await native.pdf({ path: path.join(output, 'native-single.pdf'), preferCSSPageSize: true, printBackground: true });
-    assert.equal((nativePdf.toString('latin1').match(/\/Type\s*\/Page\b/g) || []).length, 1);
-    await release(native);
     const revoked = await openPreview(context, 'single');
     let unexpected = false;
     revoked.on('download', () => { unexpected = true; });
@@ -171,6 +163,6 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
       assert.equal(await settings.locator('[name="limits[max_docs]"]').isVisible(), false);
     } finally { await adminContext.close(); }
     assert.deepEqual(errors, []);
-    console.log('Browser passed: individual downloads, dark/mobile white PDFs, task mutex, native single print, CAPTCHA UI, access revocation, reader actions and 256 settings.');
+    console.log('Browser passed: direct individual downloads, dark/mobile white PDFs, task mutex, CAPTCHA UI, access revocation, reader actions and 256 settings.');
   } finally { await context.close(); await browser.close(); }
 })().catch((error) => { console.error(error); process.exitCode = 1; });
