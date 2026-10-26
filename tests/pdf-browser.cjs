@@ -2,6 +2,7 @@
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
+const zlib = require('node:zlib');
 const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright');
 (async () => {
   const [shareUrl, output] = process.argv.slice(2);
@@ -31,6 +32,7 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     return preview;
   };
   const downloadPdfs = async (preview, count, label) => {
+    const sources = await preview.locator('[data-pdf-source]').evaluateAll((nodes) => nodes.map((node) => new URL(node.dataset.pdfSource, location.origin).href));
     const downloads = [];
     const listener = (download) => downloads.push(download);
     preview.on('download', listener);
@@ -52,6 +54,14 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
       const saved = path.join(output, label + '-' + (i + 1) + '.pdf');
       await downloads[i].saveAs(saved);
       const bytes = fs.readFileSync(saved);
+      const raw = bytes.toString('latin1');
+      assert.ok(bytes.includes(Buffer.from(`<dc:source>${sources[i]}</dc:source>`)), 'Each file identifies its own source document');
+      assert.ok(bytes.includes(Buffer.from('<rdf:li>塵</rdf:li>')), 'XMP records the requested author');
+      assert.ok(bytes.includes(Buffer.from('随意传播，禁止售卖')), 'XMP preserves the exact Chinese rights notice');
+      const streams = [...raw.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)].flatMap((match) => {
+        try { return [zlib.inflateSync(Buffer.from(match[1], 'latin1')).toString('latin1')]; } catch { return []; }
+      });
+      assert.ok(streams.some((stream) => /\b3 Tr\b/.test(stream)), 'Hidden text uses PDF invisible rendering mode');
       assert.ok(bytes.length > 5000, 'PDF contains rendered content');
       assert.equal((bytes.toString('latin1').match(/\/Type\s*\/Page\b/g) || []).length, 1, 'No empty trailing page');
     }

@@ -137,6 +137,33 @@
     document.head.append(script);
   }));
   const names = new Map();
+  let provenanceFont;
+  const loadProvenanceFont = () => provenanceFont || (provenanceFont = (async () => {
+    const response = await fetch(preview.dataset.pdfFont, { credentials: 'same-origin' });
+    if (!response.ok) throw new Error('来源信息字体加载失败，请重试。');
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    let binary = '';
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return btoa(binary);
+  })().catch((error) => { provenanceFont = null; throw error; }));
+  const addProvenance = async (pdf, section) => {
+    const source = new URL(section.dataset.pdfSource, location.origin).href;
+    const author = '塵';
+    const rights = '随意传播，禁止售卖';
+    const xml = (value) => value.replace(/[<>&"']/g, (char) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[char]));
+    pdf.setProperties({ author, subject: rights });
+    pdf.addMetadata(`<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:source>${xml(source)}</dc:source><dc:creator><rdf:Seq><rdf:li>${xml(author)}</rdf:li></rdf:Seq></dc:creator><dc:rights><rdf:Alt><rdf:li xml:lang="x-default">${xml(rights)}</rdf:li></rdf:Alt></dc:rights></rdf:Description></rdf:RDF></x:xmpmeta>`, true);
+    pdf.addFileToVFS('pdf-provenance.ttf', await loadProvenanceFont());
+    pdf.addFont('pdf-provenance.ttf', 'SharePDFHidden', 'normal');
+    pdf.setFont('SharePDFHidden', 'normal');
+    pdf.setFontSize(8);
+    const lines = [`原文网址：${source}`, `作者：${author}`, `版权说明：${rights}`]
+      .flatMap((line) => pdf.splitTextToSize(line, 182));
+    for (let page = 1; page <= pdf.getNumberOfPages(); page++) {
+      pdf.setPage(page);
+      pdf.text(lines, 14, 6, { renderingMode: 'invisible' });
+    }
+  };
   const filenames = sections.map((section, index) => {
     let title = Array.from((section.dataset.pdfTitle || `文档-${index + 1}`).normalize('NFKC').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')).slice(0, 100).join('').replace(/[. ]+$/, '').trim() || `文档-${index + 1}`;
     if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i.test(title)) title = `文档_${title}`;
@@ -197,6 +224,7 @@
         canvas.width = canvas.height = 0;
         await verify(true);
       }
+      await addProvenance(pdf, section);
       return pdf.output('blob');
     } finally {
       worker.prop?.overlay?.remove();
@@ -217,6 +245,7 @@
     try {
       await verify(true);
       await loadLibrary();
+      await loadProvenanceFont();
       for (let index = 0; index < sections.length; index++) {
         if (completed.has(index)) continue;
         if (heartbeatError) throw heartbeatError;
