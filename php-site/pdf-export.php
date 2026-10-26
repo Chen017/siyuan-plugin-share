@@ -370,7 +370,7 @@ function pdf_export_lease(int $shareId, string $visitor, string $token, bool $re
     $stmt = db()->prepare('SELECT * FROM pdf_export_leases WHERE token = ? AND share_id = ? AND session_hash = ? AND visitor_hash = ? AND expires_at > ?');
     $stmt->execute([$token, $shareId, hash('sha256', session_id()), $visitor, $now]);
     $lease = $stmt->fetch(PDO::FETCH_ASSOC);
-    if (!$lease) throw new RuntimeException('导出任务已失效，请重新打开弹窗。', 410);
+    if (!$lease || (int)$lease['created_at'] + 1800 <= $now) throw new RuntimeException('导出任务已失效，请重新打开弹窗。', 410);
     // Renew at most once per minute, rather than once per generated page.
     if ($renew && (int)$lease['expires_at'] <= $now + (int)floor(pdf_export_limits()['lease_seconds'] * 2 / 3)) {
         $expires = min((int)$lease['created_at'] + 1800, $now + pdf_export_limits()['lease_seconds']);

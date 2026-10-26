@@ -328,7 +328,8 @@ class PdfExportTests:
         self.assertEqual(client.request(path + '/document', {**fields, 'index': '0'})[0], 200)
         self.assertEqual(self.rows('SELECT SUM(doc_count) AS n FROM pdf_export_events')[0]['n'], 4)
         client.request(path + '/release', fields)
-        self.assertEqual(self.rows('SELECT COUNT(*) AS n FROM pdf_export_documents')[0]['n'], 0)
+        # The shared regression database may contain jobs owned by other tests/visitors.
+        self.assertEqual(self.rows(f"SELECT COUNT(*) AS n FROM pdf_export_documents WHERE job_token = '{lease}'")[0]['n'], 0)
 
     def test_pdf_resource_budgets_and_failed_job_cleanup(self):
         share, _ = self.pdf_notebook(121)

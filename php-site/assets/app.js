@@ -1,6 +1,103 @@
 (() => {
   "use strict";
 
+  const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+  const scrollBehavior = () => reduceMotion?.matches ? "auto" : "smooth";
+  const readerAnnounce = (message) => {
+    const status = document.querySelector("[data-reader-status]");
+    if (status) status.textContent = message;
+  };
+  // Shared, interruptible presentation lifecycle. Timers are bounded and cancelled on reopening.
+  const surfaceTimers = new WeakMap();
+  const showSurface = (surface) => {
+    if (!surface) return;
+    clearTimeout(surfaceTimers.get(surface));
+    surfaceTimers.delete(surface);
+    surface.classList.remove("is-dismissing");
+    surface.hidden = false;
+  };
+  const hideSurface = (surface, finish = () => { surface.hidden = true; }) => {
+    if (!surface || surface.hidden || surfaceTimers.has(surface)) return;
+    if (reduceMotion?.matches) { finish(); return; }
+    surface.classList.add("is-dismissing");
+    surfaceTimers.set(surface, window.setTimeout(() => {
+      surfaceTimers.delete(surface);
+      surface.classList.remove("is-dismissing");
+      finish();
+    }, 180));
+  };
+
+  // One last position per share; no note text, account data, or server writes.
+  const readerKey = () => {
+    const slug = document.querySelector("[data-share-sidebar]")?.dataset.shareSlug;
+    return slug ? `sps:reading:${slug}` : "";
+  };
+  const readerDocumentLink = (id) => Array.from(document.querySelectorAll(".kb-tree-item[data-doc-id]"))
+    .find((link) => link.dataset.docId === id);
+  const readerRevealDocument = (id) => {
+    let node = readerDocumentLink(id)?.closest(".kb-tree-node");
+    while (node) {
+      node.classList.remove("is-collapsed");
+      node.classList.add("is-open");
+      node.querySelector(":scope > .kb-tree-row .kb-tree-toggle")?.setAttribute("aria-expanded", "true");
+      node = node.parentElement?.closest(".kb-tree-node");
+    }
+  };
+  const readerSavePosition = () => {
+    const key = readerKey();
+    const id = document.querySelector(".share-shell")?.dataset.shareDocId;
+    const title = document.querySelector(".kb-title")?.textContent?.trim();
+    if (!key || !id || !title || !readerDocumentLink(id)) return;
+    try { localStorage.setItem(key, JSON.stringify({id, title, y: Math.max(0, window.scrollY), time: Date.now()})); } catch (_) {}
+  };
+  let readerResume = null;
+  const initReaderWelcome = () => {
+    const resume = document.querySelector("[data-reader-resume]");
+    if (!resume || !readerKey()) return;
+    try {
+      const record = JSON.parse(localStorage.getItem(readerKey()) || "null");
+      const link = record && readerDocumentLink(record.id);
+      if (!link || !Number.isFinite(record.time) || record.time > Date.now() || Date.now() - record.time > 30 * 86400000) return;
+      resume.href = link.href;
+      resume.querySelector("span").textContent = link.textContent.trim();
+      resume.dataset.shareNav = "doc";
+      resume.hidden = false;
+      resume.onclick = () => {
+        readerResume = {id: record.id, y: Math.max(0, Number(record.y) || 0)};
+      };
+    } catch (_) {}
+  };
+
+  const initReaderBehavior = () => {
+    if (!document.body.classList.contains("layout-share")) return;
+    readerRevealDocument(document.querySelector(".share-shell")?.dataset.shareDocId);
+    window.addEventListener("pagehide", readerSavePosition);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") readerSavePosition();
+    });
+    window.addEventListener("sps:share-dynamic-ready", () => {
+      initReaderWelcome();
+      const id = document.querySelector(".share-shell")?.dataset.shareDocId;
+      if (!readerResume || readerResume.id !== id) return;
+      const position = readerResume.y;
+      readerResume = null;
+      requestAnimationFrame(() => window.scrollTo({top: position, behavior: "auto"}));
+    });
+    // Native button feedback remains CSS-only; short content transitions never block navigation.
+    document.addEventListener("keydown", (event) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "k" || event.altKey) return;
+      const input = document.querySelector("[data-share-search-input]");
+      if (!input || document.querySelector("dialog[open], .image-viewer:not([hidden])")) return;
+      event.preventDefault();
+      document.querySelector("[data-reader-show-tree]")?.click();
+      if (!document.body.classList.contains("share-side-open") && matchMedia("(max-width: 960px)").matches) {
+        document.querySelector("[data-share-drawer-open]")?.click();
+      }
+      input.focus({preventScroll: true});
+    });
+    initReaderWelcome();
+  };
+
   const refreshCaptcha = (img) => {
     const base = img.getAttribute("data-src") || img.getAttribute("src") || "";
     const clean = base.split("?")[0];
@@ -79,7 +176,7 @@
         ].join("-");
         document.cookie = `announcement_hide_date=${today}; path=/; max-age=86400`;
       }
-      modal.remove();
+      hideSurface(modal, () => modal.remove());
     };
     modal.addEventListener("click", (event) => {
       const target = event.target;
@@ -135,7 +232,7 @@
           const target = document.getElementById(hash);
           if (target) {
             event.preventDefault();
-            target.scrollIntoView({behavior: "smooth", block: "start"});
+            target.scrollIntoView({behavior: scrollBehavior(), block: "start"});
             history.replaceState(null, "", `#${hash}`);
             setActive(item);
           }
@@ -287,7 +384,7 @@
       return;
     }
     const offset = itemRect.top - sidebarRect.top - sidebar.clientHeight / 3;
-    sidebar.scrollTo({top: sidebar.scrollTop + offset, behavior: "smooth"});
+    sidebar.scrollTo({top: sidebar.scrollTop + offset, behavior: scrollBehavior()});
   };
 
   const initShareToc = () => {
@@ -490,7 +587,7 @@
         const offset = rect.top - box.top - 24;
         scrollBox.scrollTo({
           top: scrollBox.scrollTop + offset,
-          behavior: "smooth",
+          behavior: scrollBehavior(),
         });
       };
       body.innerHTML = "";
@@ -570,7 +667,7 @@
         const baseOffset = document.body.classList.contains("layout-share") ? 120 : 0;
         const offset = Math.max(baseOffset, Number.isFinite(marginTop) ? marginTop : 0);
         const top = element.getBoundingClientRect().top + window.scrollY - offset;
-        window.scrollTo({top, behavior: "smooth"});
+        window.scrollTo({top, behavior: scrollBehavior()});
       };
 
       const jumpToBackref = (href) => {
@@ -905,7 +1002,7 @@
           event.preventDefault();
           activeLock.id = target.id;
           activeLock.until = Date.now() + 1200;
-          target.scrollIntoView({behavior: "smooth", block: "start"});
+          target.scrollIntoView({behavior: scrollBehavior(), block: "start"});
           target.focus({preventScroll: true});
           history.replaceState(null, "", href);
           setActiveLink(link);
@@ -1761,6 +1858,7 @@
         footnoteTabStyle +
         `</head><body class="layout-share sps-footnote-tab">` +
         `<div class="share-page">` +
+        `<header class="reader-mobile-bar"><button class="reader-nav-button" type="button" data-share-drawer-open aria-label="打开导航" aria-expanded="false">导航</button><span class="reader-mobile-title">${headerTitle}</span></header>` +
         `<div class="share-shell share-shell--notebook">` +
         `<aside class="kb-sidebar" data-share-sidebar data-share-slug="">` +
         `<div class="kb-side-tabs" data-share-tabs data-share-default="toc">` +
@@ -1781,7 +1879,6 @@
         `</div>` +
         `</div>` +
         `<footer class="share-footer">\u7531 <a href="https://github.com/b8l8u8e8/siyuan-plugin-share" target="_blank" rel="noopener noreferrer">b8l8u8e8</a> \u63d0\u4F9B\u652F\u6301</footer>` +
-        `<button class="share-side-trigger" type="button" data-share-drawer-open aria-label="\u6253\u5F00\u4FA7\u8FB9\u680F"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 6h16v2H4zM4 11h16v2H4zM4 16h16v2H4z"/></svg><span>\u5BFC\u822A</span></button>` +
         `<div class="share-side-backdrop" data-share-drawer-close></div>` +
         `<button class="scroll-top" type="button" data-scroll-top aria-label="\u56DE\u5230\u9876\u90E8"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2c-2.76 0-5 2.24-5 5v2.5L4 13l4.5 1L12 22l3.5-8L20 13l-3-3.5V7c0-2.76-2.24-5-5-5zm0 3a2 2 0 0 1 2 2v1.5l-2 2-2-2V7a2 2 0 0 1 2-2z"/></svg></button>` +
         `</div>` +
@@ -1800,7 +1897,7 @@
   const closeFootnoteWindow = (windowEl) => {
     if (!windowEl) return;
     footnoteWindows.delete(windowEl);
-    windowEl.remove();
+    hideSurface(windowEl, () => windowEl.remove());
   };
 
   const clearFootnoteWindows = () => {
@@ -2425,31 +2522,90 @@
       openBtn.hidden = true;
     }
     if (!openBtn && !backdrop) return;
-    const setOpen = (open) => {
-      document.body.classList.toggle("share-side-open", open);
+    if (!sidebar) return;
+    const mq = window.matchMedia("(max-width: 960px)");
+    const heading = document.createElement("div");
+    heading.className = "reader-drawer-heading";
+    heading.innerHTML = '<span>阅读导航</span><button class="reader-drawer-close" type="button" aria-label="关闭导航">关闭</button>';
+    sidebar.prepend(heading);
+    sidebar.id ||= "reader-navigation";
+    openBtn?.setAttribute("aria-controls", sidebar.id);
+    let returnFocus = null;
+    const updateAccessibility = (open) => {
+      const modal = mq.matches && open;
+      sidebar.inert = mq.matches && !open;
+      sidebar.setAttribute("aria-hidden", mq.matches && !open ? "true" : "false");
+      if (modal) {
+        sidebar.setAttribute("role", "dialog");
+        sidebar.setAttribute("aria-modal", "true");
+        sidebar.setAttribute("aria-label", "阅读导航");
+      } else {
+        sidebar.removeAttribute("role");
+        sidebar.removeAttribute("aria-modal");
+      }
+      document.querySelectorAll(".kb-main, .share-footer").forEach((node) => { node.inert = modal; });
+      openBtn?.setAttribute("aria-expanded", String(modal));
+      openBtn?.setAttribute("aria-label", modal ? "关闭导航" : "打开导航");
     };
+    const setOpen = (open, restoreFocus = true) => {
+      const wasOpen = document.body.classList.contains("share-side-open");
+      if (open && !wasOpen) returnFocus = document.activeElement;
+      document.body.classList.toggle("share-side-open", open && mq.matches);
+      updateAccessibility(open && mq.matches);
+      if (open && mq.matches) heading.querySelector("button").focus({preventScroll: true});
+      else if (wasOpen && restoreFocus) (returnFocus?.isConnected ? returnFocus : openBtn)?.focus({preventScroll: true});
+    };
+    heading.querySelector("button").addEventListener("click", () => setOpen(false));
     if (openBtn) {
       openBtn.addEventListener("click", () => {
         const isOpen = document.body.classList.contains("share-side-open");
         setOpen(!isOpen);
+        if (!isOpen) returnFocus = openBtn;
       });
     }
     if (backdrop) {
       backdrop.addEventListener("click", () => setOpen(false));
     }
     document.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") setOpen(false);
+      if (!document.body.classList.contains("share-side-open")) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setOpen(false);
+      }
+      if (event.key === "Tab") {
+        const targets = Array.from(sidebar.querySelectorAll('button, a[href], input, select, textarea'))
+          .filter((node) => !node.disabled && !node.closest('[hidden]') && node.getClientRects().length);
+        const first = targets[0], last = targets[targets.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
     });
-    document.querySelectorAll(".kb-sidebar a, .share-toc a").forEach((link) => {
-      link.addEventListener("click", () => setOpen(false));
+    document.addEventListener("click", (event) => {
+      const target = event.target;
+      if (target.closest(".kb-sidebar a, .share-toc a") && !event.ctrlKey && !event.metaKey && !event.shiftKey) setOpen(false, false);
+      const branch = target.closest("[data-reader-branch]");
+      if (target.closest("[data-reader-show-tree]") || branch) {
+        document.querySelector('[data-share-tab="tree"]')?.click();
+        setOpen(true);
+        let node = sidebar;
+        if (branch) {
+          node = Array.from(sidebar.querySelectorAll("[data-tree-key]")).find((item) => item.dataset.treeKey === branch.dataset.readerBranch) || sidebar;
+          const toggle = node.querySelector(".kb-tree-toggle");
+          if (toggle?.getAttribute("aria-expanded") === "false") toggle.click();
+        } else {
+          const toggle = sidebar.querySelector('.kb-tree-toggle[aria-expanded="false"]');
+          toggle?.click();
+        }
+        (node.querySelector(".kb-tree-toggle, .kb-tree-item, [data-share-search-input]") || heading.querySelector("button")).focus({preventScroll: true});
+      }
     });
     if (openBtn && sidebar) {
-      const mq = window.matchMedia("(max-width: 960px)");
       const updateTrigger = () => {
-        const pos = window.getComputedStyle(sidebar).position;
-        const shouldShow = mq.matches || pos === "fixed";
+        const shouldShow = mq.matches;
         openBtn.hidden = !shouldShow;
         openBtn.style.display = shouldShow ? "inline-flex" : "none";
+        if (!mq.matches) setOpen(false, false);
+        else updateAccessibility(document.body.classList.contains("share-side-open"));
       };
       if (typeof mq.addEventListener === "function") {
         mq.addEventListener("change", updateTrigger);
@@ -2459,7 +2615,7 @@
       window.addEventListener("resize", updateTrigger, {passive: true});
       window.addEventListener("orientationchange", updateTrigger, {passive: true});
       requestAnimationFrame(updateTrigger);
-      setTimeout(updateTrigger, 300);
+      updateTrigger();
     }
   };
 
@@ -2508,6 +2664,8 @@
       }
       if (payload?.title) {
         document.title = payload.title;
+        const mobileTitle = document.querySelector("[data-reader-mobile-title]");
+        if (mobileTitle) mobileTitle.textContent = payload.title;
       }
       if (pushState) {
         history.pushState({spsDocId: payload?.docId || ""}, "", url);
@@ -2515,6 +2673,11 @@
         history.replaceState({spsDocId: payload?.docId || ""}, "", url);
       }
       setActiveDoc(payload?.docId || "");
+      readerRevealDocument(payload?.docId || "");
+      const heading = document.querySelector(".kb-main .kb-title");
+      if (heading) { heading.tabIndex = -1; heading.focus({preventScroll: true}); }
+      readerAnnounce(payload?.docId ? `已打开：${payload.title || "文档"}` : "已返回笔记本");
+      initReaderWelcome();
       const hash = url.includes("#") ? url.slice(url.indexOf("#")) : "";
       if (hash) {
         const target = document.getElementById(hash.slice(1));
@@ -2528,12 +2691,19 @@
     };
 
     const loadDoc = async (url, {pushState = true} = {}) => {
+      readerSavePosition();
       clearFootnoteWindows();
       const currentId = ++requestId;
       if (controller) controller.abort();
       controller = new AbortController();
       const main = document.querySelector(".kb-main");
-      if (main) main.classList.add("is-loading");
+      document.querySelectorAll(".kb-tree-item.is-pending").forEach((item) => item.classList.remove("is-pending"));
+      const pending = Array.from(document.querySelectorAll(".kb-tree-item[href]")).find((item) => item.href === url);
+      if (main) { main.classList.add("is-loading"); main.setAttribute("aria-busy", "true"); }
+      pending?.classList.add("is-pending");
+      const pendingTimer = window.setTimeout(() => {
+        if (currentId === requestId) readerAnnounce("正在打开文档…");
+      }, 250);
       try {
         const targetUrl = new URL(url, window.location.href);
         targetUrl.searchParams.set("partial", "1");
@@ -2553,8 +2723,12 @@
         if (err?.name === "AbortError") return;
         window.location.href = url;
       } finally {
-        const latestMain = document.querySelector(".kb-main");
-        if (latestMain) latestMain.classList.remove("is-loading");
+        window.clearTimeout(pendingTimer);
+        if (currentId === requestId) {
+          const latestMain = document.querySelector(".kb-main");
+          if (latestMain) { latestMain.classList.remove("is-loading"); latestMain.removeAttribute("aria-busy"); }
+          pending?.classList.remove("is-pending");
+        }
       }
     };
 
@@ -2655,7 +2829,7 @@
       btn.classList.toggle("is-visible", window.scrollY > 320);
     };
     btn.addEventListener("click", () => {
-      window.scrollTo({top: 0, behavior: "smooth"});
+      window.scrollTo({top: 0, behavior: scrollBehavior()});
     });
     window.addEventListener("scroll", toggle, {passive: true});
     toggle();
@@ -2898,7 +3072,7 @@
     const modal = document.querySelector("[data-user-modal]");
     if (!modal) return;
     const close = () => {
-      modal.hidden = true;
+      hideSurface(modal);
     };
     modal.addEventListener("click", (event) => {
       const target = event.target;
@@ -2912,7 +3086,7 @@
     });
     document.querySelectorAll("[data-user-edit]").forEach((btn) => {
       btn.addEventListener("click", () => {
-        modal.hidden = false;
+        showSurface(modal);
         const dataset = btn.dataset;
         modal.querySelector("[data-user-field='id']").value =
           dataset.userId || "";
@@ -3331,7 +3505,7 @@
     if (!openButtons.length) return;
     const form = modal.querySelector("form");
     const close = () => {
-      modal.hidden = true;
+      hideSurface(modal);
     };
     modal.addEventListener("click", (event) => {
       const target = event.target;
@@ -3346,7 +3520,7 @@
     openButtons.forEach((btn) => {
       btn.addEventListener("click", () => {
         if (form) form.reset();
-        modal.hidden = false;
+        showSurface(modal);
       });
     });
   };
@@ -3372,10 +3546,10 @@
     const openButtons = document.querySelectorAll("[data-report-open]");
     if (!openButtons.length) return;
     const open = (modal) => {
-      if (modal) modal.hidden = false;
+      if (modal) showSurface(modal);
     };
     const close = (modal) => {
-      if (modal) modal.hidden = true;
+      if (modal) hideSurface(modal);
     };
     openButtons.forEach((btn) => {
       if (btn.dataset.reportOpenBound === "1") return;
@@ -3577,7 +3751,7 @@
     };
     const open = (mode, dataset) => {
       if (!actionBase) return;
-      modal.hidden = false;
+      showSurface(modal);
       refreshModalCaptcha();
       const maskedEmail = dataset.commentEmail || "";
       if (mode === "reply") {
@@ -3641,7 +3815,7 @@
       }
     };
     const close = () => {
-      modal.hidden = true;
+      hideSurface(modal);
     };
     if (!modalBound) {
       modal.addEventListener("click", (event) => {
@@ -3689,10 +3863,10 @@
     const contentInput = form.querySelector("[data-admin-comment-content]");
     const noteEl = modal.querySelector("[data-admin-comment-note]");
     const close = () => {
-      modal.hidden = true;
+      hideSurface(modal);
     };
     const open = (dataset) => {
-      modal.hidden = false;
+      showSurface(modal);
       if (idInput) idInput.value = dataset.adminCommentId || "";
       if (contentInput) contentInput.value = dataset.adminCommentContent || "";
       const noteParts = [];
@@ -4122,14 +4296,16 @@ const initImageViewer = () => {
       items = collectImages();
       if (!items.length) return;
       index = clamp(startIndex, 0, items.length - 1);
-      viewer.hidden = false;
+      showSurface(viewer);
       document.body.classList.add("image-viewer-open");
       updateView();
     };
 
     const closeViewer = () => {
-      viewer.hidden = true;
-      document.body.classList.remove("image-viewer-open");
+      hideSurface(viewer, () => {
+        viewer.hidden = true;
+        document.body.classList.remove("image-viewer-open");
+      });
     };
 
     document.addEventListener("click", (event) => {
@@ -4426,7 +4602,7 @@ const initImageViewer = () => {
         logTimer = null;
       }
       if (status) status.textContent = "初始化扫描...";
-      if (bar) bar.style.width = "0%";
+      if (bar) bar.style.transform = "scaleX(0)";
       if (submitBtn) submitBtn.disabled = true;
       doneMessage = "";
       if (autoRefreshTimer) {
@@ -4448,7 +4624,7 @@ const initImageViewer = () => {
           );
           offset = Number(step.nextOffset || offset);
           const progress = total > 0 ? Math.min(100, Math.round((offset / total) * 100)) : 100;
-          if (bar) bar.style.width = `${progress}%`;
+          if (bar) bar.style.transform = `scaleX(${progress / 100})`;
           if (status) {
             status.textContent = `扫描中：${offset}/${total || "-"} (${progress}%)`;
           }
@@ -5448,11 +5624,17 @@ const initImageViewer = () => {
           const success = await writeClipboardText(raw);
           if (success) {
             copyBtn.setAttribute("data-tooltip", "已复制");
+            copyBtn.setAttribute("aria-label", "已复制");
             copyBtn.classList.add("is-copied");
+            readerAnnounce("代码已复制");
             setTimeout(() => {
               copyBtn.setAttribute("data-tooltip", "复制");
+              copyBtn.setAttribute("aria-label", "复制");
               copyBtn.classList.remove("is-copied");
             }, 1500);
+          } else {
+            copyBtn.setAttribute("data-tooltip", "复制失败，请选择代码手动复制");
+            readerAnnounce("复制失败，请选择代码手动复制");
           }
         });
         if (lang || langLabel.textContent) {
@@ -5777,6 +5959,10 @@ const initImageViewer = () => {
 
     let debounceTimer = null;
     let abortController = null;
+    let searchVersion = 0;
+    let keyboardIndex = -1;
+    resultsEl.setAttribute("aria-live", "polite");
+    resultsEl.setAttribute("aria-label", "搜索结果");
 
     const getBasePath = () => {
       const pathMatch = window.location.pathname.match(/^(.*?)\/s\//);
@@ -5814,7 +6000,7 @@ const initImageViewer = () => {
       }
     };
 
-    const doSearch = async (query) => {
+    const doSearch = async (query, version = searchVersion) => {
       if (abortController) abortController.abort();
       if (!query || query.length < 1) {
         resultsEl.hidden = true;
@@ -5823,6 +6009,12 @@ const initImageViewer = () => {
         return;
       }
       abortController = new AbortController();
+      const busyTimer = setTimeout(() => {
+        if (version !== searchVersion) return;
+        resultsEl.textContent = "正在搜索…";
+        resultsEl.hidden = false;
+        hideTabsAndPanels(true);
+      }, 200);
       const base = getBasePath();
       const url = base + "/s/" + encodeURIComponent(slug) + "/search?q=" + encodeURIComponent(query);
       try {
@@ -5831,6 +6023,7 @@ const initImageViewer = () => {
           signal: abortController.signal,
         });
         const payload = await resp.json().catch(() => null);
+        if (version !== searchVersion) return;
         if (!payload || payload.code !== 0) {
           resultsEl.innerHTML = '<div class="kb-search-empty">搜索失败</div>';
           resultsEl.hidden = false;
@@ -5840,14 +6033,17 @@ const initImageViewer = () => {
         const results = payload.data?.results || [];
         renderResults(results, query);
       } catch (err) {
-        if (err?.name === "AbortError") return;
+        if (err?.name === "AbortError" || version !== searchVersion) return;
         resultsEl.innerHTML = '<div class="kb-search-empty">搜索出错</div>';
         resultsEl.hidden = false;
         hideTabsAndPanels(true);
+      } finally {
+        clearTimeout(busyTimer);
       }
     };
 
     const renderResults = (results, query) => {
+      keyboardIndex = -1;
       if (!results.length) {
         resultsEl.innerHTML = '<div class="kb-search-empty">没有找到结果</div>';
         resultsEl.hidden = false;
@@ -5858,11 +6054,15 @@ const initImageViewer = () => {
       let html = '<ul class="kb-search-list">';
       results.forEach((r) => {
         const titleHtml = highlightText(r.title, query);
-        const snippetHtml = highlightText(r.snippet, query);
+        const snippet = String(r.snippet || "").replace(/\$\$[\s\S]*?\$\$|\$[^$\n]+\$/g, "〔公式〕")
+          .replace(/\${1,2}[^$]*$/g, "〔公式〕")
+          .replace(/!\[[^\]]*\]\([^)]*\)/g, "〔图片〕").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+          .replace(/(?:\*\*|__|`|^#{1,6}\s)/g, "");
+        const snippetHtml = highlightText(snippet, query);
         const pathHtml = r.hpath ? escapeHtml(r.hpath) : '';
         const href = base + "/s/" + encodeURIComponent(slug) + "/" + encodeURIComponent(r.docId) + "?highlight=" + encodeURIComponent(query);
         html += '<li class="kb-search-item">';
-        html += '<a class="kb-search-link" href="' + escapeHtml(href) + '" target="_blank" rel="noopener">';
+        html += '<a class="kb-search-link" href="' + escapeHtml(href) + '" data-share-nav="doc">';
         html += '<div class="kb-search-title">' + titleHtml + '</div>';
         if (pathHtml) {
           html += '<div class="kb-search-path">' + pathHtml + '</div>';
@@ -5877,6 +6077,10 @@ const initImageViewer = () => {
     };
 
     const clearSearch = () => {
+      searchVersion++;
+      clearTimeout(debounceTimer);
+      abortController?.abort();
+      keyboardIndex = -1;
       input.value = "";
       if (clearBtn) clearBtn.hidden = true;
       resultsEl.hidden = true;
@@ -5885,10 +6089,28 @@ const initImageViewer = () => {
     };
 
     input.addEventListener("input", () => {
+      const version = ++searchVersion;
+      abortController?.abort();
       const val = input.value.trim();
       if (clearBtn) clearBtn.hidden = val.length === 0;
       clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => doSearch(val), 300);
+      if (!val) { clearSearch(); return; }
+      debounceTimer = setTimeout(() => doSearch(val, version), 300);
+    });
+
+    input.addEventListener("keydown", (event) => {
+      if (event.isComposing) return;
+      if (event.key === "Escape" && input.value) {
+        event.preventDefault(); event.stopPropagation(); clearSearch(); return;
+      }
+      if (!["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) return;
+      const links = Array.from(resultsEl.querySelectorAll(".kb-search-link"));
+      if (!links.length) return;
+      event.preventDefault();
+      if (event.key === "Enter") { links[Math.max(0, keyboardIndex)]?.click(); return; }
+      keyboardIndex = (keyboardIndex + (event.key === "ArrowDown" ? 1 : -1) + links.length) % links.length;
+      links.forEach((link, index) => link.classList.toggle("is-keyboard-active", index === keyboardIndex));
+      links[keyboardIndex].scrollIntoView({block: "nearest", behavior: "auto"});
     });
 
     if (clearBtn) {
@@ -6116,7 +6338,7 @@ const initImageViewer = () => {
           const nextTarget = getTargetScrollTop(mark, nextMetrics);
           if (nextTarget === null) return;
           const offset = getViewportOffset();
-          window.scrollTo({ top: Math.max(nextTarget - offset, 0), behavior: "smooth" });
+          window.scrollTo({ top: Math.max(nextTarget - offset, 0), behavior: scrollBehavior() });
         });
         track.appendChild(dot);
       });
@@ -6365,6 +6587,7 @@ const initImageViewer = () => {
   initSearchHighlight();
   initShareSidebarTabs();
   initShareDrawer();
+  initReaderBehavior();
   initShareDocNavigation();
   initImageViewer();
   initAppDrawer();

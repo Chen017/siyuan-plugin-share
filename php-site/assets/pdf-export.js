@@ -7,7 +7,7 @@
     if (!dialog?.open || closeTimer) return;
     dialogFrame.contentWindow.postMessage({ type: 'sps-pdf-cancel' }, location.origin);
     dialog.dataset.closing = '1';
-    const delay = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 160;
+    const delay = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 180;
     closeTimer = setTimeout(() => {
       dialog.close();
       dialogFrame.src = 'about:blank';
@@ -116,7 +116,18 @@
     };
     const showQuota = (value) => {
       const next = value.next_recovery_at ? `下一次恢复：${new Date(value.next_recovery_at * 1000).toLocaleString('zh-CN')}（恢复 ${value.next_recovery_count} 篇，本地时间）。` : '当前额度充足。';
-      quota.textContent = `每 ${value.window_seconds / 60} 分钟最多导出 ${value.limit} 篇，当前已用 ${value.used} 篇，剩余 ${value.remaining} 篇。${next}请合理导出，额度随时间逐篇恢复，并非整点重置。`;
+      const expanded = quota.querySelector('details')?.open || false;
+      const summary = document.createElement('p');
+      summary.className = 'pdf-quota-summary';
+      summary.textContent = `剩余 ${value.remaining} 篇 · ${value.window_seconds / 60} 分钟额度 ${value.limit} 篇`;
+      const details = document.createElement('details');
+      details.open = expanded;
+      const label = document.createElement('summary');
+      label.textContent = '额度与恢复规则';
+      const description = document.createElement('p');
+      description.textContent = `当前已用 ${value.used} 篇。${next}额度随时间逐篇恢复，并非整点重置。`;
+      details.append(label, description);
+      quota.replaceChildren(summary, details);
     };
     showQuota(JSON.parse(quota.dataset.pdfQuota));
     const refreshQuota = async () => {

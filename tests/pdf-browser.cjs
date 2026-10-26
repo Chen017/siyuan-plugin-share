@@ -146,7 +146,7 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     await modal.waitFor({ state: 'visible' });
     const options = reader.frameLocator('[data-pdf-dialog-frame]');
     await options.locator('[data-pdf-export-form]').waitFor();
-    assert.match(await options.locator('[data-pdf-quota]').innerText(), /每 60 分钟最多导出 120 篇.*剩余 120 篇/);
+    assert.match(await options.locator('[data-pdf-quota]').innerText(), /剩余 120 篇.*60 分钟额度 120 篇/);
     assert.match(await modal.evaluate((node) => getComputedStyle(node, '::backdrop').backdropFilter), /blur/);
     await reader.waitForTimeout(250); // Let the requested opening/height animations settle.
     await reader.screenshot({ path: path.join(output, 'pdf-dialog-desktop.png'), animations: 'disabled' });

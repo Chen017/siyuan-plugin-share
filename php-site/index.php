@@ -1253,10 +1253,11 @@ function render_page(string $title, string $content, ?array $user = null, string
     } elseif ($layout === 'share') {
         echo "<div class='share-page'>";
         echo render_share_icon_defs();
+        echo "<header class='reader-mobile-bar'><button class='reader-nav-button' type='button' data-share-drawer-open aria-label='打开导航' aria-expanded='false'><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='currentColor' d='M4 6h16v2H4zM4 11h16v2H4zM4 16h16v2H4z'/></svg><span>导航</span></button><span class='reader-mobile-title' data-reader-mobile-title>{$pageTitle}</span></header>";
         echo $content;
         echo "<footer class='share-footer'><span class='footer-credit'>由 <a class='footer-owner' href='https://github.com/Chen017/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Chen017</a> 维护</span><span class='footer-separator' aria-hidden='true'>·</span><span class='footer-credit'>上游：<a class='footer-upstream' href='https://github.com/b8l8u8e8/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Siyuan Share</a></span></footer>";
-        echo "<button class='share-side-trigger' type='button' data-share-drawer-open aria-label='打开侧边栏'><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='currentColor' d='M4 6h16v2H4zM4 11h16v2H4zM4 16h16v2H4z'/></svg><span>导航</span></button>";
         echo "<div class='share-side-backdrop' data-share-drawer-close></div>";
+        echo "<p class='reader-status sr-only' data-reader-status role='status' aria-live='polite'></p>";
         echo "<button class='scroll-top' type='button' data-scroll-top aria-label='回到顶部'><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='currentColor' d='M12 2c-2.76 0-5 2.24-5 5v2.5L4 13l4.5 1L12 22l3.5-8L20 13l-3-3.5V7c0-2.76-2.24-5-5-5zm0 3a2 2 0 0 1 2 2v1.5l-2 2-2-2V7a2 2 0 0 1 2-2z'/></svg></button>";
         echo "</div>";
     } elseif ($user) {
@@ -8434,7 +8435,7 @@ function render_doc_tree(array $nodes, string $slug, ?string $activeId = null, i
         $html .= '<li class="' . $nodeClass . '" data-tree-key="' . htmlspecialchars($nodeKey) . '">';
         $html .= '<div class="kb-tree-row">';
         if ($hasChildren) {
-            $html .= '<button class="kb-tree-toggle" type="button" aria-expanded="' . ($shouldOpen ? 'true' : 'false') . '">';
+            $html .= '<button class="kb-tree-toggle" type="button" aria-label="展开或收起 ' . htmlspecialchars((string)$node['title'], ENT_QUOTES, 'UTF-8') . '" aria-expanded="' . ($shouldOpen ? 'true' : 'false') . '">';
             $html .= '<svg class="kb-tree-toggle-icon kb-tree-toggle-icon--collapsed" viewBox="0 0 24 24" aria-hidden="true"><use href="#sps-tree-arrow-collapsed"></use></svg>';
             $html .= '<svg class="kb-tree-toggle-icon kb-tree-toggle-icon--open" viewBox="0 0 24 24" aria-hidden="true"><use href="#sps-tree-arrow-expanded"></use></svg>';
             $html .= '</button>';
@@ -8446,7 +8447,7 @@ function render_doc_tree(array $nodes, string $slug, ?string $activeId = null, i
             $docTitle = htmlspecialchars($doc['title'] ?? $docId);
             $docPath = base_path() . '/s/' . $slug . '/' . rawurlencode($docId);
             $activeClass = $isActive ? ' is-active' : '';
-            $docAttrs = ' href="' . $docPath . '" data-doc-id="' . htmlspecialchars($docId) . '" data-share-nav="doc"';
+            $docAttrs = ' href="' . $docPath . '" title="' . htmlspecialchars((string)($doc['title'] ?? $docId), ENT_QUOTES, 'UTF-8') . '" data-doc-id="' . htmlspecialchars($docId) . '" data-share-nav="doc"';
             $html .= '<a class="kb-tree-item' . $activeClass . '"' . $docAttrs . '>';
             $html .= render_doc_tree_icon($doc, $assetBasePath);
             $html .= '<span class="kb-tree-label">' . $docTitle . '</span></a>';
@@ -8487,6 +8488,30 @@ function render_share_document_actions(string $slug, string $docId): string {
     return '<div class="share-document-actions">'
         . '<button class="button ghost share-view-toggle" type="button" data-share-toggle aria-pressed="false">源码</button>'
         . render_pdf_export_link(['slug' => $slug, 'doc_id' => $docId]) . '</div>';
+}
+
+function render_notebook_welcome(array $nodes, string $slug, string $title): string {
+    $html = '<div class="kb-main" role="main"><section class="notebook-welcome" data-notebook-welcome>';
+    $html .= '<p class="notebook-eyebrow">笔记本</p><h1 class="kb-title">' . htmlspecialchars($title) . '</h1>';
+    $html .= '<p class="notebook-intro">选择课程开始阅读，或展开左侧导航栏中的文档树。手机上可点击顶部「导航」。</p>';
+    $html .= '<div class="notebook-actions"><button class="button primary" type="button" data-reader-show-tree>展开文档树</button>';
+    $html .= '<a class="button" data-reader-resume hidden>继续阅读：<span></span></a></div>';
+    $html .= '<h2 class="notebook-section-title">课程与文档</h2><ul class="notebook-course-list">';
+    foreach ($nodes as $node) {
+        $label = htmlspecialchars((string)$node['title']);
+        $doc = $node['doc'] ?? null;
+        $html .= '<li>';
+        if ($doc) {
+            $href = base_path() . '/s/' . rawurlencode($slug) . '/' . rawurlencode((string)$doc['doc_id']);
+            $html .= '<a class="notebook-course" href="' . htmlspecialchars($href, ENT_QUOTES, 'UTF-8') . '" data-share-nav="doc"><span>' . $label . '</span><span aria-hidden="true">↗</span></a>';
+        } else {
+            $key = 'folder:' . trim((string)$node['title'], '/');
+            $html .= '<button class="notebook-course" type="button" data-reader-branch="' . htmlspecialchars($key, ENT_QUOTES, 'UTF-8') . '"><span>' . $label . '</span><span aria-hidden="true">›</span></button>';
+        }
+        $html .= '</li>';
+    }
+    if (!$nodes) $html .= '<li class="muted">还没有可阅读的文档。</li>';
+    return $html . '</ul></section></div>';
 }
 
 function route_share(string $slug, ?string $docId = null): void {
@@ -8736,7 +8761,8 @@ function route_share(string $slug, ?string $docId = null): void {
     }
 
     if ($share['type'] === 'notebook') {
-        $treeHtml = render_doc_tree(build_doc_tree($docs, $docId), $slug, $docId, 0, '', $assetBasePath);
+        $notebookTree = build_doc_tree($docs, $docId);
+        $treeHtml = render_doc_tree($notebookTree, $slug, $docId, 0, '', $assetBasePath);
         $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
         $sidebar .= render_share_search_box($slug);
         $sidebar .= '<div class="kb-side-tabs" data-share-tabs data-share-default="tree">';
@@ -8820,7 +8846,7 @@ function route_share(string $slug, ?string $docId = null): void {
 
         if (!$docId) {
             $touchShareAccess();
-            $mainHtml = '<div class="kb-main" role="main"><div class="share-empty">请先在文档树里面先打开一个文档</div></div>';
+            $mainHtml = render_notebook_welcome($notebookTree, $slug, $shareTitleRaw);
             if ($isPartial) {
                 api_response(200, [
                     'title' => $shareTitleRaw,

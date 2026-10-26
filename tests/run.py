@@ -149,6 +149,32 @@ class Regression(PdfCookieTests, PdfReleaseTests, PdfExportTests, unittest.TestC
         payload = {'docId': self.name, 'title': '中文分享', 'markdown': 'PHP83_MARKER **中文正文**', **extra}
         return self.api('shares/doc', payload)['share']
 
+    def test_notebook_reader_landing(self):
+        share = self.api('shares/notebook', {
+            'notebookId': self.name, 'title': '课程 <Notebook>',
+            'docs': [
+                {'docId': self.name + 'root', 'title': '课程 <A>', 'markdown': ''},
+                {'docId': self.name + 'child', 'parentId': self.name + 'root', 'title': '内部讲义', 'markdown': '# 正文'},
+                {'docId': self.name + 'other', 'title': '课程 B', 'markdown': '说明'},
+            ],
+        })['share']
+        status, _, body = Client(self.base).request('/s/' + share['slug'])
+        self.assertEqual(status, 200)
+        text = body.decode()
+        welcome = re.search(r'<section class="notebook-welcome".*?</section>', text).group()
+        self.assertIn('课程 &lt;Notebook&gt;', welcome)
+        self.assertIn('课程 &lt;A&gt;', welcome)
+        self.assertIn('课程 B', welcome)
+        self.assertNotIn('内部讲义', welcome)
+        self.assertIn('data-reader-resume hidden', welcome)
+        self.assertIn('data-reader-show-tree', welcome)
+        self.assertIn('reader-mobile-bar', text)
+        self.assertNotIn('share-side-trigger', text)
+        self.assertIn('/assets/style.css', text)
+        status, _, body = Client(self.base).request('/s/' + share['slug'] + '?partial=1')
+        self.assertEqual(status, 200)
+        self.assertIn('data-notebook-welcome', json.loads(body)['data']['html'])
+
     def test_authentication_and_sessions(self):
         self.assertEqual(self.api('auth/verify')['user']['username'], self.name)
         self.api('auth/verify', key='wrong', status=401)
