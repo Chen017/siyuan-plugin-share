@@ -214,6 +214,11 @@ class Regression(PdfCookieTests, PdfReleaseTests, PdfExportTests, unittest.TestC
             self.assertIn('data-reader-home href="' + saved_home + '"', page)
             self.assertIn('aria-label="Return to home">Home</a>', page)
             self.assertNotRegex(page, r'data-reader-home[^>]*data-share-nav')
+            # TLS termination must not show Home inside the home share when PHP sees HTTP.
+            secure_home = saved_home.replace('http://', 'https://', 1)
+            admin.request('/admin/settings', {**fields, 'reader_home_url': secure_home})
+            self.assertNotIn(b'data-reader-home', visitor.request(home_path)[2])
+            admin.request('/admin/settings', {**fields, 'reader_home_url': saved_home})
             # An omitted field from an older form does not clear the saved home.
             self.assertEqual(admin.request('/admin/settings', fields)[0], 302)
             for invalid in ['javascript:alert(1)', '//example.com/s/home', 'https://user:pass@example.com/s/home', 'bad url']:

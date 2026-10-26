@@ -8370,10 +8370,12 @@ function reader_home_url_key(string $url): string {
     if (!is_array($parts) || empty($parts['host'])) return '';
     $scheme = strtolower((string)($parts['scheme'] ?? ''));
     if (!in_array($scheme, ['http', 'https'], true) || isset($parts['user']) || isset($parts['pass'])) return '';
-    $port = (int)($parts['port'] ?? ($scheme === 'https' ? 443 : 80));
+    $port = (int)($parts['port'] ?? 0);
+    if (($scheme === 'https' && $port === 443) || ($scheme === 'http' && $port === 80)) $port = 0;
     $path = (string)($parts['path'] ?? '/');
     if (preg_match('#^(.*?/s/[a-zA-Z0-9_-]+)(?:/|$)#', $path, $matches)) $path = $matches[1];
-    return $scheme . '://' . strtolower((string)$parts['host']) . ':' . $port . rtrim($path, '/');
+    // TLS may terminate at a reverse proxy while PHP sees HTTP. Share identity is unchanged.
+    return strtolower((string)$parts['host']) . ($port ? ':' . $port : '') . rtrim($path, '/');
 }
 
 function render_reader_home_link(string $slug): string {
