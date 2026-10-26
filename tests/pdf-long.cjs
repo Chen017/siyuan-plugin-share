@@ -16,6 +16,7 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     const preview = await opened;
     await preview.waitForLoadState();
     await preview.waitForFunction(() => document.querySelector('[data-pdf-download]')?.disabled === false);
+    assert.match(await preview.locator('.markdown-body').innerText(), /LONG_TAIL_MARKER/, 'Preview contains final paragraph');
     const downloaded = preview.waitForEvent('download', { timeout: 180000 });
     await preview.locator('[data-pdf-download]').click();
     let download;
@@ -28,7 +29,7 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     const pages = (bytes.match(/\/Type\s*\/Page\b/g) || []).length;
     const images = (bytes.match(/\/Subtype\s*\/Image\b/g) || []).length;
     assert.ok(pages >= 3 && pages < 30, 'Long fixture is split into several pages');
-    assert.ok(images >= pages, 'Each page has its own rendered image');
+    assert.equal(images, pages, 'Exactly one rendered image per page, without rounding pages');
     console.log('Long document PDF passed: ' + pages + ' pages with independent page images.');
   } finally { await browser.close(); }
 })().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -173,7 +173,7 @@
         // later pages cannot be reflowed or measured differently.
         if (!container.isConnected) document.body.append(worker.prop.overlay);
         worker = worker.set({ html2canvas: { scale: 2, backgroundColor: '#ffffff', useCORS: true, allowTaint: false, logging: false,
-          windowWidth: 1100, scrollX: 0, scrollY: 0, y: page * pageHeight, width: size.inner.px.width,
+          windowWidth: innerWidth, scrollX: 0, scrollY: 0, y: page * pageHeight, width: size.inner.px.width,
           height: Math.min(pageHeight, Math.ceil(height - page * pageHeight)) } }).toCanvas();
         await worker;
         const canvas = await worker.get('canvas');
