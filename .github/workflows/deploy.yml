@@ -50,6 +50,12 @@ jobs:
             git merge --ff-only origin/main
             docker compose build --pull web
             docker run --rm --network none --entrypoint php siyuan-share-web:latest -r 'if (PHP_MAJOR_VERSION !== 8 || PHP_MINOR_VERSION !== 3 || PHP_VERSION_ID < 80336) exit(1); echo "Built PHP ", PHP_VERSION, "\n";'
+            # Git checkout respects umask 077. The bind-mounted configuration must remain readable by FPM.
+            if [ -f php-site/config.php ]; then
+              config_gid=$(docker run --rm --network none --entrypoint id siyuan-share-web:latest -g www-data)
+              chgrp "$config_gid" php-site/config.php
+              chmod 640 php-site/config.php
+            fi
             migration_backup=
             # This schema retirement gets one verified backup; routine upgrades keep the existing policy.
             if [ -s /core-before.json ] || ! docker exec siyuan-share-web php -r '$c = is_file("/var/www/html/config.php") ? require "/var/www/html/config.php" : []; $p = new PDO("sqlite:" . ($c["db_path"] ?? "/var/www/html/storage/app.db")); $p->exec("PRAGMA query_only=ON"); $s=$p->prepare("SELECT value FROM settings WHERE key=?"); $s->execute(["admin_only_schema_v1"]); exit($s->fetchColumn() === "1" ? 0 : 1);'; then
@@ -77,6 +83,7 @@ jobs:
             done
             test "$health" = healthy
             test "$(curl --max-time 15 -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8081/login)" = 200
+            curl --max-time 15 -fsS http://127.0.0.1:8081/login | grep -F '<h1>Sign in</h1>' >/dev/null
             docker exec siyuan-share-web php -r 'if (PHP_MAJOR_VERSION !== 8 || PHP_MINOR_VERSION !== 3 || PHP_VERSION_ID < 80336) exit(1); echo "Running PHP ", PHP_VERSION, "\n";'
             if [ -n "$migration_backup" ]; then
               docker cp scripts/data-snapshot.php siyuan-share-web:/tmp/core-data-snapshot.php
