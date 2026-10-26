@@ -5,6 +5,33 @@
 .pdf-export-panel fieldset { max-height: 360px; overflow: auto; padding: 16px; }
 .pdf-export-panel fieldset label { padding: 6px 0; overflow-wrap: anywhere; }
 .pdf-export-panel [hidden] { display: none !important; }
+.pdf-quota-notice { padding: 14px 16px; border: 1px solid var(--border, #d1d9e0); border-radius: 12px; background: var(--surface-muted, #f6f8fa); color: var(--muted, #59636e); font-size: 14px; line-height: 1.75; }
+.pdf-export-worker { position: fixed; left: -100000px; top: 0; width: 1100px; height: 900px; border: 0; opacity: 0; pointer-events: none; }
+html.pdf-dialog-open { overflow: hidden; }
+.pdf-export-dialog { width: min(720px, calc(100vw - 32px)); max-width: none; max-height: calc(100dvh - 32px); margin: auto; padding: 0; overflow: hidden; color: var(--text, #1f2328); background: var(--surface, #fff); border: 1px solid var(--border, #d1d9e0); border-radius: 20px; box-shadow: 0 24px 80px rgba(15, 23, 42, .25); }
+.pdf-export-dialog[open] { animation: pdf-dialog-enter .22s cubic-bezier(.2,.8,.2,1) both; }
+.pdf-export-dialog::backdrop { background: rgba(15, 23, 42, .3); backdrop-filter: blur(7px); -webkit-backdrop-filter: blur(7px); animation: pdf-backdrop-enter .22s ease both; }
+.pdf-export-dialog[data-closing] { animation: pdf-dialog-exit .16s ease both; }
+.pdf-export-dialog[data-closing]::backdrop { animation: pdf-backdrop-exit .16s ease both; }
+.pdf-dialog-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 24px; border-bottom: 1px solid var(--border, #d1d9e0); }
+.pdf-dialog-header h2 { margin: 0; font-size: 20px; }
+.pdf-dialog-close { width: 36px; height: 36px; padding: 0 !important; font-size: 26px; line-height: 1; border-radius: 50%; }
+.pdf-dialog-loading { margin: 0; padding: 20px 24px; }
+.pdf-export-dialog > iframe { display: block; width: 100%; height: 380px; border: 0; transition: height .18s ease; }
+.pdf-export-dialog > iframe[hidden], .pdf-dialog-loading[hidden] { display: none !important; }
+body.pdf-export-embedded { margin: 0 !important; padding: 0 !important; min-height: 0 !important; background: var(--surface, #fff) !important; }
+.pdf-export-embedded .share-page { display: block; margin: 0; padding: 0; min-height: 0; max-width: none; }
+.pdf-export-embedded :is(.share-footer, .scroll-top, .share-side-trigger, .share-side-backdrop) { display: none !important; }
+.pdf-export-embedded .pdf-export-panel { margin: 0; padding: 20px 24px; max-width: none; }
+.pdf-export-embedded .pdf-export-panel > p:first-child { margin-top: 0; }
+.pdf-export-embedded .pdf-export-panel form { margin: 18px 0 0; gap: 16px; }
+.pdf-export-panel [inert] { opacity: .65; }
+.pdf-export-panel [data-pdf-form-status] { margin: 0; line-height: 1.6; overflow-wrap: anywhere; }
+@keyframes pdf-dialog-enter { from { opacity: 0; transform: translateY(12px) scale(.97); } to { opacity: 1; transform: none; } }
+@keyframes pdf-dialog-exit { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(8px) scale(.98); } }
+@keyframes pdf-backdrop-enter { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pdf-backdrop-exit { from { opacity: 1; } to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .pdf-export-dialog, .pdf-export-dialog::backdrop { animation-duration: .001s !important; } .pdf-export-dialog > iframe { transition: none; } }
 .pdf-export-toolbar { max-width: 900px; margin: 20px auto; padding: 20px; border: 1px solid #bbb; border-radius: 12px; }
 .pdf-document { max-width: 900px; margin: auto; background: white; color: #1f2328; padding: 32px; }
 .pdf-doc + .pdf-doc { margin-top: 48px; border-top: 1px solid #ccc; padding-top: 32px; }

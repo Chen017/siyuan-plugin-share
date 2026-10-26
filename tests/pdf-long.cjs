@@ -11,17 +11,11 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     await context.addCookies([{ name: 'sps_pdf_visitor', value: fixture.cookie, url: new URL(url).origin, httpOnly: true }]);
     const page = await context.newPage();
     await page.goto(url + '/export');
-    const opened = context.waitForEvent('page');
+    const downloaded = page.waitForEvent('download', { timeout: 180000 });
     await page.locator('[data-pdf-export-form] button[type=submit]').click();
-    const preview = await opened;
-    await preview.waitForLoadState();
-    await preview.waitForFunction(() => document.querySelector('[data-pdf-download]')?.disabled === false);
-    assert.match(await preview.locator('.markdown-body').innerText(), /LONG_TAIL_MARKER/, 'Preview contains final paragraph');
-    const downloaded = preview.waitForEvent('download', { timeout: 180000 });
-    await preview.locator('[data-pdf-download]').click();
     let download;
     try { download = await downloaded; }
-    catch (error) { throw new Error(`${await preview.locator('[data-pdf-status]').textContent()}; ${error.message}`); }
+    catch (error) { throw new Error(`${await page.locator('[data-pdf-form-status]').textContent()}; ${error.message}`); }
     assert.equal(await download.failure(), null);
     const saved = path.join(output, 'long-individual.pdf');
     await download.saveAs(saved);

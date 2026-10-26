@@ -86,6 +86,28 @@ function pdf_visitor_quota(string $visitor, array $limits, int $documents = 1): 
     if ((int)$row['total'] >= $limits['max_window_events']) throw new RuntimeException('导出服务繁忙，请稍后再试。', 429);
 }
 
+function pdf_visitor_usage(string $visitor): array {
+    $limits = pdf_export_limits();
+    $now = time();
+    $stmt = db()->prepare('SELECT created_at, SUM(doc_count) AS documents FROM pdf_export_events
+        WHERE visitor_hash = ? AND created_at > ? AND doc_count > 0 GROUP BY created_at ORDER BY created_at');
+    $stmt->execute([$visitor, $now - $limits['window_seconds']]);
+    $events = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $used = array_sum(array_column($events, 'documents'));
+    $remaining = max(0, $limits['requests'] - $used);
+    $pending = $used;
+    $next = null;
+    $restored = 0;
+    foreach ($events as $event) {
+        $pending -= (int)$event['documents'];
+        $restored = max(0, $limits['requests'] - $pending) - $remaining;
+        if ($restored > 0) { $next = (int)$event['created_at'] + $limits['window_seconds']; break; }
+    }
+    return ['limit' => $limits['requests'], 'window_seconds' => $limits['window_seconds'],
+        'used' => $used, 'remaining' => $remaining, 'next_recovery_at' => $next,
+        'next_recovery_count' => $restored, 'server_time' => $now];
+}
+
 function pdf_visitor_needs_captcha(string $visitor, string $fingerprint): bool {
     $pdo = db();
     $now = time();

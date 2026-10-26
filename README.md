@@ -14,6 +14,7 @@ This is **[Chen017](https://github.com/Chen017)'s personal fork** of [b8l8u8e8/s
 | Fonts | Local **MiSans** for Latin letters, digits and common punctuation; system fonts for Chinese. The Latin WOFF2 is **34 KB**, down from the original 8.1 MB TTF. |
 | Reading | Neutral dark surfaces and clear blue links; reading statistics and comments hidden on share pages. Footer links lead with this fork and credit upstream. |
 | Rendering | SiYuan table-cell alignment fixes, on-demand diagram engines and one Markdown render per document. Math, footnotes and diagrams remain available. |
+| PDF export | Single/batch downloads in a dialog, selectable text, hidden attribution and visitor quota indicators. [Details](docs/GUEST_PDF_EXPORT.md). |
 | Accessibility & SEO | Clearer links, correct button states and TOC focus, main landmarks, working image-download controls, page descriptions, robots.txt and real 404 responses. |
 | Deployment | Local-only `127.0.0.1:8081`, versioned static assets, GitHub Actions deployment and isolated regression tests. Backup and restore-verification scripts are included. |
 
@@ -55,15 +56,3 @@ Chen017 also contributed [dark-mode code highlighting #38](https://github.com/b8
 - The deployment workflow targets the maintainer's VPS; configure your own Actions secrets before using it.
 
 Original project by **b8l8u8e8 and contributors**. Personal fork maintained by **Chen017**. [MIT License](LICENSE).
-
-## Guest PDF and individual batch downloads
-
-Saved PDFs include the original document URL, author `塵`, and rights notice `随意传播，禁止售卖` in hidden XMP metadata and an invisible text layer on every page. No export identifier is added, and visible layout stays unchanged.
-
-After opening a shared document, guests can use the PDF action beside Source. Export a document, subtree, shared scope or selected documents: Save triggers sequential browser downloads, **one independent PDF per document, without merging**. Light, dark and mobile exports always use white backgrounds.
-
-Each server-issued visitor Cookie has its own rolling allowance, defaulting to 120 documents per 60 minutes; administrators may configure up to 256. Visitors sharing a campus or office IP do not share personal quotas. A new Cookie with an exactly matching recent fingerprint requires one server-verified CAPTCHA, then uses its own allowance without repeated verification during that Cookie's lifetime. CAPTCHA never refills an exhausted Cookie's quota. Anonymous Cookies and fingerprints cannot reliably identify natural persons.
-
-A server-side transaction permits only one active export task per visitor Cookie, including across tabs, windows and website sessions. Existing access/password/expiry checks and preset concurrency, batch and resource limits remain in place.
-
-Save PDF preserves page artwork and adds an aligned Unicode text layer, allowing body text selection, copying and search while retaining hidden provenance. Text inside images is not OCRed. Browsers may ask permission for multiple downloads. See [configuration, limitations and tests](docs/GUEST_PDF_EXPORT.md).
