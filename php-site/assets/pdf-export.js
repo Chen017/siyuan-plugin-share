@@ -95,6 +95,7 @@
   const release = () => {
     if (released) return;
     released = true;
+    updateControls();
     navigator.sendBeacon?.(`${url}/release`, fields());
   };
   window.addEventListener("pagehide", release);
@@ -118,6 +119,14 @@
   const completed = new Set();
   const printed = new Set();
   let busy = false;
+  let prepared = false;
+  const printButtons = sections.map((section) => section.querySelector('[data-pdf-native-print]'));
+  function updateControls() {
+    const unavailable = !prepared || busy || released || !documentBody.children.length;
+    button.disabled = unavailable || completed.size === sections.length;
+    printButtons.forEach((printButton) => { printButton.disabled = unavailable; });
+  }
+  updateControls();
   let printIndex = -1;
   let library;
   const loadLibrary = () => library || (library = new Promise((resolve, reject) => {
@@ -194,9 +203,9 @@
     }
   };
   button.addEventListener("click", async () => {
-    if (busy || released) return;
+    if (!prepared || busy || released) return;
     busy = true;
-    button.disabled = true;
+    updateControls();
     let heartbeatError;
     let ticking = false;
     const heartbeat = setInterval(async () => {
@@ -233,13 +242,13 @@
     } finally {
       clearInterval(heartbeat);
       busy = false;
-      button.disabled = released || completed.size === sections.length || !documentBody.children.length;
+      updateControls();
     }
   });
   sections.forEach((section, index) => section.querySelector('[data-pdf-native-print]').addEventListener('click', async () => {
-    if (busy || released) return;
+    if (!prepared || busy || released) return;
     busy = true;
-    button.disabled = true;
+    updateControls();
     try {
       await verify(true);
       await claim(index);
@@ -250,7 +259,7 @@
     } catch (error) {
       status.textContent = error.message;
       busy = false;
-      button.disabled = released;
+      updateControls();
     }
   }));
   window.addEventListener('afterprint', () => {
@@ -262,7 +271,7 @@
     busy = false;
     status.textContent = '此篇打印窗口已关闭。';
     if (sections.every((_, index) => printed.has(index) || completed.has(index))) release();
-    button.disabled = released;
+    updateControls();
   });
   // Browser print is also available from its menu; provide the best local state
   // there, while the application's PDF action always revalidates on the server.
@@ -317,7 +326,8 @@
     status.textContent = incomplete || diagramPending
       ? "部分图片未能加载。请检查下方预览，必要时重新打开后再保存。"
       : "预览已就绪。点击保存即可逐篇下载，每篇一个 PDF。";
-    button.disabled = false;
+    prepared = true;
+    updateControls();
   };
   prepare().catch((error) => {
     status.textContent = error.message || "导出准备失败，请重新打开预览。";

@@ -43,6 +43,8 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     const until = Date.now() + 10000;
     while (downloads.length < count && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(downloads.length, count, 'One download per document');
+    assert.equal(await preview.locator('[data-pdf-download]').isDisabled(), true, 'Completed task disables saving');
+    assert.equal(await preview.locator('[data-pdf-native-print]:enabled').count(), 0, 'Completed task disables every print button');
     assert.equal(new Set(downloads.map((d) => d.suggestedFilename())).size, count);
     for (let i = 0; i < downloads.length; i++) {
       assert.equal(await downloads[i].failure(), null);
@@ -118,6 +120,7 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     await native.evaluate(() => { window.print = () => { window.__printed = true; }; });
     await native.locator('[data-pdf-native-print]').nth(1).click();
     await native.waitForFunction(() => window.__printed === true);
+    assert.equal(await native.locator('[data-pdf-native-print]:enabled').count(), 0, 'Printing disables all competing actions');
     const nativePdf = await native.pdf({ path: path.join(output, 'native-single.pdf'), preferCSSPageSize: true, printBackground: true });
     assert.equal((nativePdf.toString('latin1').match(/\/Type\s*\/Page\b/g) || []).length, 1);
     await release(native);
