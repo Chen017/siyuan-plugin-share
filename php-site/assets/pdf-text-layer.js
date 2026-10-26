@@ -4,7 +4,8 @@
  */
 (() => {
   'use strict';
-  const pause = () => new Promise((resolve) => requestAnimationFrame(resolve));
+  // Animation frames stop in background tabs; a timer keeps batch exports moving.
+  const pause = () => new Promise((resolve) => setTimeout(resolve, 0));
   const hex = (number, width) => number.toString(16).padStart(width, '0');
   const utf16 = (text) => Array.from({ length: text.length }, (_, index) => hex(text.charCodeAt(index), 4)).join('');
 
