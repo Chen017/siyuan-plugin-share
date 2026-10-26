@@ -29,10 +29,6 @@ from pdf_cookie import PdfCookieTests
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = """<?php
 return [
-    'captcha_enabled' => false,
-    'email_verification_enabled' => false,
-    'smtp_enabled' => false,
-    'central_stats_url' => '',
     'chunk_cleanup_probability' => 0,
 ];
 """
@@ -104,10 +100,14 @@ class Regression(PdfCookieTests, PdfReleaseTests, PdfExportTests, unittest.TestC
     def setUp(self):
         self.client = Client(self.base)
         self.name = 'test_' + uuid.uuid4().hex[:12]
-        result = self.client.form('/register', {'username': self.name, 'email': self.name + '@example.com', 'password': 'Test-PHP83!pass'})
-        self.assertEqual(result[0], 302)
-        self.assertEqual(result[1]['Location'], '/dashboard')
+        self.create_actor(self.name)
+        self.assertEqual(self.client.form('/login', {'username': self.name, 'password': 'Test-PHP83!pass'})[0], 302)
         self.key = self.rotate_key(self.client)
+
+    def create_actor(self, name, role='admin'):
+        # Test-only identity fixture. Public registration and user management no longer exist.
+        encoded = '$2y$10$nxAGHI1ZkpshiwzuMgwQDu7PYcOgGdhTK8FdVri6aUdfuYpHyQ5hS'
+        self.rows(f"INSERT INTO users(username,password_hash,role,must_change_password,created_at,updated_at) VALUES ('{name}','{encoded}','{role}',0,datetime('now'),datetime('now'))")
 
     def rotate_key(self, client):
         status, _, body = client.request('/dashboard')
@@ -197,13 +197,13 @@ class Regression(PdfCookieTests, PdfReleaseTests, PdfExportTests, unittest.TestC
         other_path = '/s/' + other['slug']
         admin = self.admin()
         original = self.rows('SELECT key, value FROM settings')
-        fields = {'csrf': self.csrf(admin, '/admin'), 'allow_registration': '1'}
+        fields = {'csrf': self.csrf(admin, '/admin')}
         visitor = Client(self.base)
         saved_home = self.base + home_path + '/?view=read#section'
         try:
             self.assertNotIn(b'data-reader-home', visitor.request(other_path)[2])
             self.assertIn(b'name="reader_home_url"', admin.request('/admin')[2])
-            self.assertEqual(self.client.request('/admin/settings', {'csrf': self.csrf(self.client, '/account'), 'reader_home_url': saved_home})[0], 403)
+            self.assertEqual(visitor.request('/admin/settings', {'reader_home_url': saved_home})[0], 302)
             self.assertEqual(admin.request('/admin/settings', {**fields, 'reader_home_url': saved_home})[0], 302)
             self.assertEqual(self.rows("SELECT value FROM settings WHERE key='reader_home_url'")[0]['value'], saved_home)
             for suffix in ['', '?view=read', '/' + self.name + '-parent', '/' + self.name + '-child?partial=1']:
@@ -240,7 +240,7 @@ class Regression(PdfCookieTests, PdfReleaseTests, PdfExportTests, unittest.TestC
     def test_public_reader_controls_use_english(self):
         share = self.share(title='中文标题', markdown='# 正文\n\n原始中文内容不得翻译。')
         visitor = Client(self.base)
-        for path in ['/', '/login', '/register', '/forgot', '/reset', '/s/' + share['slug'], '/s/' + share['slug'] + '/export']:
+        for path in ['/', '/login', '/s/' + share['slug'], '/s/' + share['slug'] + '/export']:
             status, _, body = visitor.request(path)
             if status != 200:
                 continue
@@ -273,14 +273,25 @@ class Regression(PdfCookieTests, PdfReleaseTests, PdfExportTests, unittest.TestC
         self.assertEqual((status, headers['Location']), (302, '/dashboard'))
         self.assertEqual(stranger.request('/dashboard')[0], 200)
         self.assertEqual(self.client.request('/login', {'username': self.name, 'password': 'Test-PHP83!pass', 'csrf': 'wrong'})[0], 400)
-        self.assertEqual(self.client.request('/admin')[0], 403)
+        self.assertEqual(self.client.request('/admin')[0], 200)
 
-    def test_pages_and_captcha(self):
-        for path in ['/', '/login', '/register', '/forgot', '/reset', '/account', '/dashboard']:
+    def test_removed_public_and_admin_routes(self):
+        share = self.share()
+        retired = ['/register', '/forgot', '/reset', '/captcha', '/email-code', '/login/email', '/login/email/prepare', '/login/email-code',
+                   '/account/email-code', '/account/email-change', '/admin-home', '/api/instances/heartbeat', '/api/instances/stats',
+                   '/admin/announcement/create', '/admin/announcement/update', '/admin/announcement/delete', '/admin/announcement/toggle',
+                   '/admin/smtp-test', '/admin/user-create', '/admin/user-update', '/admin/user-delete', '/admin/user-batch',
+                   '/admin/user-toggle', '/admin/user-role', '/admin/user-limit', '/admin/chunk-clean', '/admin/chunk-delete',
+                   '/admin/scan', '/admin/scan/start', '/admin/scan/step', '/admin/scan/batch', '/admin/scan/delete', '/admin/scan/disable',
+                   '/admin/report-handle', '/admin/report-share-delete', '/admin/report-user-disable', '/admin/report-delete', '/admin/report-batch',
+                   '/admin/comment/edit', '/admin/reset-data', '/dashboard/comment-notify', '/dashboard/access-stats/update',
+                   '/dashboard/access-stats/delete', '/dashboard/access-stats/delete-all']
+        retired += ['/s/' + share['slug'] + '/' + suffix for suffix in ['comment', 'comment/upload', 'comment/edit', 'comment/delete', 'report']]
+        for path in retired:
+            for method in ['GET', 'POST']:
+                self.assertEqual(self.client.request(path, data={} if method == 'POST' else None, method=method)[0], 404, (method, path))
+        for path in ['/', '/login', '/account', '/dashboard', '/admin']:
             self.assertIn(self.client.request(path)[0], [200, 302], path)
-        self.assertEqual(self.client.request('/captcha')[0], 404)
-        status, _, body = self.client.request('/s/nonexistent_share')
-        self.assertNotIn(b'PHP83_MARKER', body)
 
     def test_reader_metadata_assets_and_not_found(self):
         share = self.share(title='Reader <test>', markdown='# Heading\n\nHello $x^2$')
@@ -401,7 +412,8 @@ class Regression(PdfCookieTests, PdfReleaseTests, PdfExportTests, unittest.TestC
     def test_owner_permissions_and_key_rotation(self):
         share = self.share()
         other = Client(self.base)
-        self.assertEqual(other.form('/register', {'username': self.name + '_other', 'password': 'Other-Pass!'})[0], 302)
+        self.create_actor(self.name + '_other')
+        self.assertEqual(other.form('/login', {'username': self.name + '_other', 'password': 'Test-PHP83!pass'})[0], 302)
         key = self.rotate_key(other)
         self.api('shares/snapshot', {'shareId': share['id']}, key=key, status=404)
         self.api('shares/access/update', {'shareId': share['id'], 'password': 'hacked'}, key=key, status=404)
@@ -421,44 +433,42 @@ class Regression(PdfCookieTests, PdfReleaseTests, PdfExportTests, unittest.TestC
         self.assertEqual(self.client.request('/logout', {'csrf': token})[0], 302)
         self.assertEqual(self.client.request('/dashboard')[0], 302)
 
-    def test_comments_and_reports(self):
-        share = self.share()
-        path = '/s/' + share['slug']
-        token = self.csrf(self.client, path)
-        status, _, _ = self.client.request(path + '/comment', {'csrf': token, 'email': self.name + '@example.com', 'content': '**COMMENT_MARKER**'})
-        self.assertEqual(status, 302)
-        # This fork intentionally hides the public comments UI; verify the retained endpoints in SQLite.
-        comments = self.rows(f"SELECT id, content FROM share_comments WHERE share_id = {int(share['id'])}")
-        self.assertEqual(len(comments), 1)
-        self.assertEqual(comments[0]['content'], '**COMMENT_MARKER**')
-        comment_id = comments[0]['id']
-        status, _, _ = self.client.request(path + '/comment/edit', {'csrf': token, 'comment_id': comment_id, 'email': self.name + '@example.com', 'content': 'EDITED_COMMENT_MARKER'})
-        self.assertEqual(status, 302)
-        self.assertEqual(self.rows(f'SELECT content FROM share_comments WHERE id = {int(comment_id)}')[0]['content'], 'EDITED_COMMENT_MARKER')
-        status, _, _ = self.client.request(path + '/report', {'csrf': token, 'report_email': self.name + '@example.com', 'reason_type': 'other', 'reason_detail': 'REPORT_MARKER'})
-        self.assertEqual(status, 302)
+    def test_admin_only_settings_and_legacy_owner_preservation(self):
         admin = self.admin()
-        self.assertIn(b'REPORT_MARKER', admin.request('/admin')[2])
-        status, _, _ = self.client.request(path + '/comment/delete', {'csrf': token, 'comment_id': comment_id})
-        self.assertEqual(status, 302)
-        self.assertEqual(self.rows(f'SELECT id FROM share_comments WHERE id = {int(comment_id)}'), [])
-
-    def test_admin_pages_settings_and_captcha(self):
-        admin = self.admin()
-        for page in ['/admin', '/admin-home', '/admin?tab=users', '/admin?tab=shares', '/admin?tab=reports']:
-            status, _, body = admin.request(page)
+        for path in ['/admin', '/dashboard', '/account']:
+            status, _, page = admin.request(path)
             self.assertEqual(status, 200)
-            self.assertNotIn(b'topbar-version is-update', body)
-        token = self.csrf(admin, '/admin')
-        settings = {'csrf': token, 'allow_registration': '1', 'default_storage_limit_mb': '1024', 'email_from': 'no-reply@example.com'}
+            for marker in [b'topbar-version is-update', '管理员入口'.encode(), b'/admin-home', b'/register', b'data-announcement', b'data-report', b'data-comment', b'data-user-edit', b'data-scan']:
+                self.assertNotIn(marker, page)
+        name = self.name + '_legacy'
+        self.create_actor(name, role='user')
+        legacy = Client(self.base)
+        result = legacy.form('/login', {'username': name, 'password': 'Test-PHP83!pass'})
+        self.assertEqual((result[0], result[1]['Location']), (302, '/login'))
+        settings = {'csrf': self.csrf(admin, '/admin'), 'default_storage_limit_mb': '1024', 'reader_home_url': '',
+                    'site_custom_css_enabled': '1', 'site_custom_css': 'body.layout-share { color: red; }',
+                    'site_custom_js_enabled': '1', 'site_custom_js': 'window.testCustom = true;', 'site_head_html': '<meta name="test-head" content="kept">'}
+        original = self.rows('SELECT key, value FROM settings')
         try:
-            self.assertEqual(admin.request('/admin/settings', {**settings, 'captcha_enabled': '1'})[0], 302)
-            status, headers, body = self.client.request('/captcha')
-            self.assertEqual(status, 200)
-            self.assertIn('image/', headers['Content-Type'])
-            self.assertGreater(len(body), 50)
-        finally:
             self.assertEqual(admin.request('/admin/settings', settings)[0], 302)
+            page = Client(self.base).request('/s/' + self.share()['slug'])[2]
+            for marker in [b'site-custom-css', b'window.testCustom = true;', b'name="test-head"']: self.assertIn(marker, page)
+            self.assertEqual(admin.request('/admin/settings', {**settings, 'csrf': 'invalid'})[0], 400)
+        finally:
+            for row in original:
+                value = row['value'].replace("'", "''")
+                self.rows(f"UPDATE settings SET value='{value}' WHERE key='{row['key']}'")
+
+    def test_admin_share_restore_and_delete(self):
+        share = self.share()
+        admin = self.admin()
+        fields = {'csrf': self.csrf(admin, '/dashboard'), 'share_id': share['id']}
+        self.assertEqual(admin.request('/admin/share-delete', fields)[0], 302)
+        self.assertEqual(Client(self.base).request('/s/' + share['slug'])[0], 404)
+        self.assertEqual(admin.request('/admin/share-restore', fields)[0], 302)
+        self.assertIn(b'PHP83_MARKER', Client(self.base).request('/s/' + share['slug'])[2])
+        self.assertEqual(admin.request('/admin/share-hard-delete', fields)[0], 302)
+        self.assertEqual(self.rows(f"SELECT id FROM shares WHERE id={int(share['id'])}"), [])
 
     def test_api_errors_and_cors(self):
         self.api('shares/doc', {}, status=400)
@@ -546,7 +556,7 @@ def main():
                 name = 'siyuan-php83-test-' + uuid.uuid4().hex[:10]
                 container = name
                 command(['docker', 'create', '--name', name, '--volume', '/var/www/html/storage', '--volume', '/var/www/html/uploads', '-p', '127.0.0.1::80', args.docker], stdout=subprocess.DEVNULL)
-                for source_path, destination in [(app / 'config.php', '/var/www/html/config.php'), (app / 'bootstrap.php', '/var/www/html/bootstrap.php'), (php_ini, '/usr/local/etc/php/conf.d/zz-regression.ini'), (ROOT / 'tests/runtime.php', '/tmp/runtime.php'), (ROOT / 'tests/pdf-race.php', '/tmp/pdf-race.php')]:
+                for source_path, destination in [(app / 'config.php', '/var/www/html/config.php'), (app / 'bootstrap.php', '/var/www/html/bootstrap.php'), (php_ini, '/usr/local/etc/php/conf.d/zz-regression.ini'), (ROOT / 'tests/runtime.php', '/tmp/runtime.php'), (ROOT / 'tests/pdf-race.php', '/tmp/pdf-race.php'), (ROOT / 'tests/legacy-migration.php', '/tmp/legacy-migration.php'), (ROOT / 'scripts/data-snapshot.php', '/tmp/data-snapshot.php')]:
                     command(['docker', 'cp', str(source_path), name + ':' + destination])
                 command(['docker', 'start', name], stdout=subprocess.DEVNULL)
                 port = subprocess.check_output(['docker', 'port', name, '80/tcp'], text=True).strip().rsplit(':', 1)[1]

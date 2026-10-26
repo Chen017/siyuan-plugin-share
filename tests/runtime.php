@@ -54,7 +54,6 @@ foreach (['中文标题', '<strong>加粗</strong>', '<table>', '<li>', '<code']
 }
 $clean = sanitize_share_html('<script>alert(1)</script><img src="x" onerror="alert(1)"><a href="javascript:alert(1)">link</a>');
 check(!str_contains($clean, '<script') && !str_contains($clean, 'onerror') && !str_contains($clean, 'javascript:'), 'HTML sanitization');
-check(str_contains(render_comment_markdown('**comment**'), '<strong>comment</strong>'), 'Comment rendering');
 $table = render_markdown("| A | B |\n| :--- | ---: |\n| left | right |\n{: colgroup=\"{x}{x}\"}");
 check(str_contains($table, '<table>') && str_contains($table, 'left'), 'SiYuan table attributes render without diagnostics');
 
@@ -112,15 +111,6 @@ check($zip->open($zipPath) === true && $zip->getFromName('note.md') === $markdow
 $zip->close();
 unlink($zipPath);
 
-foreach (['Exception', 'PHPMailer', 'SMTP'] as $class) {
-    require_once dirname($argv[1]) . '/vendor/PHPMailer/' . $class . '.php';
-}
-$mailer = new PHPMailer\PHPMailer\PHPMailer(true);
-$mailer->CharSet = 'UTF-8';
-$mailer->setFrom('sender@example.com', '思源');
-$mailer->addAddress('reader@example.com');
-$mailer->Subject = '中文通知';
-$mailer->Body = '测试正文';
-check($mailer->preSend(), 'PHPMailer MIME generation without sending');
-check(str_contains($mailer->getSentMIMEMessage(), 'reader@example.com'), 'PHPMailer recipient');
+require __DIR__ . '/legacy-migration.php';
+
 echo "Runtime checks passed: {$checks}; PHP " . PHP_VERSION . "\n";

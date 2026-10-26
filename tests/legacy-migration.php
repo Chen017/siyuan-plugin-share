@@ -1,0 +1,73 @@
+<?php
+// Included by runtime.php; every path and row belongs to a disposable test database.
+$savedConfig = $config;
+$fixtureRoot = dirname($argv[1]) . '/storage/legacy-fixture';
+ensure_dir($fixtureRoot . '/uploads/comment-files/1');
+$config['db_path'] = $fixtureRoot . '/storage/app.db';
+ensure_dir(dirname($config['db_path']));
+$config['uploads_dir'] = $fixtureRoot . '/uploads';
+$legacy = new PDO('sqlite:' . $config['db_path'], null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+$legacy->exec('PRAGMA foreign_keys = ON');
+migrate($legacy);
+$legacy->exec("DELETE FROM settings WHERE key = 'admin_only_schema_v1'");
+$legacy->exec('ALTER TABLE shares ADD COLUMN access_count INTEGER DEFAULT 999');
+$legacy->exec('ALTER TABLE shares ADD COLUMN comment_notify INTEGER DEFAULT 1');
+$legacy->exec('ALTER TABLE users ADD COLUMN email TEXT');
+$legacy->exec('ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 1');
+$legacy->exec('ALTER TABLE users ADD COLUMN last_active_at TEXT');
+$legacy->exec('CREATE TABLE share_access_logs (share_id INTEGER, visitor_id TEXT, created_at TEXT)');
+foreach (['share_access_geo_cache', 'user_settings', 'share_comments', 'share_reports', 'announcements', 'email_codes', 'password_resets', 'instance_heartbeats'] as $table) {
+    $legacy->exec('CREATE TABLE ' . $table . ' (retired_data TEXT)');
+    $legacy->exec('INSERT INTO ' . $table . ' VALUES ("retired")');
+}
+// Historical owner identities and keys are not deleted or reassigned.
+$legacy->exec("INSERT INTO users (username,password_hash,role,api_key_hash,api_key_prefix,created_at,updated_at) VALUES ('legacy-owner','hash','user','legacy-key-hash','prefix','before','before')");
+$owner = (int)$legacy->lastInsertId();
+$insertShare = $legacy->prepare('INSERT INTO shares(user_id,type,slug,title,size_bytes,visitor_limit,created_at,updated_at) VALUES (?,"doc",?,?,9999,2,"before","before")');
+$insertDoc = $legacy->prepare('INSERT INTO share_docs(share_id,doc_id,title,markdown,size_bytes,created_at,updated_at) VALUES (?,?,?,?,?,"before","before")');
+for ($n = 0; $n < 12; $n++) {
+    $slug = 'keep-note-' . $n;
+    $insertShare->execute([$owner, $slug, $slug]);
+    $id = (int)$legacy->lastInsertId();
+    $markdown = $n === 0 ? '# Keep [attachment](/uploads/comment-files/1/used.png)' : '# Note ' . $n;
+    $insertDoc->execute([$id, 'doc-' . $n, $slug, $markdown, strlen($markdown)]);
+    $legacy->exec('INSERT INTO share_access_logs VALUES (' . $id . ', "old-visitor", "before")');
+}
+$legacy->exec('INSERT INTO share_visitors(share_id,visitor_id,created_at) VALUES (1,"existing-visitor","before")');
+$legacy->exec('INSERT INTO share_access_logs VALUES (1,"old-visitor","later")');
+$legacy->exec("INSERT INTO share_assets(share_id,asset_path,file_path,size_bytes,created_at) VALUES (1,'comment-files/1/used.png','comment-files/1/used.png',4,'before'),(1,'comment-files/1/unused.png','comment-files/1/unused.png',6,'before')");
+file_put_contents($config['uploads_dir'] . '/comment-files/1/used.png', 'used');
+file_put_contents($config['uploads_dir'] . '/comment-files/1/unused.png', 'unused');
+file_put_contents(dirname($config['db_path']) . '/release_cache.json', '{"version":"upstream"}');
+foreach (['allow_registration', 'captcha_enabled', 'email_from', 'smtp_pass', 'access_stats_default_enabled', 'central_stats_cache', 'instance_id', 'banned_words', 'site_icp', 'site_contact_email'] as $key) ensure_setting($legacy, $key, 'retired');
+$legacy->exec("UPDATE settings SET value='https://example.com/s/keep-note-0' WHERE key='reader_home_url'");
+$beforeShares = $legacy->query('SELECT id,user_id,slug,title,visitor_limit FROM shares ORDER BY id')->fetchAll(PDO::FETCH_ASSOC);
+$beforeDocs = $legacy->query('SELECT * FROM share_docs ORDER BY id')->fetchAll(PDO::FETCH_ASSOC);
+$beforeOwners = $legacy->query('SELECT id,username,password_hash,role,api_key_hash,api_key_prefix FROM users ORDER BY id')->fetchAll(PDO::FETCH_ASSOC);
+$snapshotScript = is_file(__DIR__ . '/../scripts/data-snapshot.php') ? __DIR__ . '/../scripts/data-snapshot.php' : '/tmp/data-snapshot.php';
+$snapshotCommand = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($snapshotScript) . ' ' . escapeshellarg($config['db_path']) . ' --core-only';
+$coreBefore = shell_exec($snapshotCommand);
+check(is_string($coreBefore) && is_array(json_decode($coreBefore, true)), 'Read-only deployment fingerprint can inspect a legacy database');
+retire_legacy_modules($legacy);
+check($coreBefore === shell_exec($snapshotCommand), 'Deployment fingerprint preserves notes, URLs, API keys, visitor limits, settings and linked file bytes');
+check($beforeShares === $legacy->query('SELECT id,user_id,slug,title,visitor_limit FROM shares ORDER BY id')->fetchAll(PDO::FETCH_ASSOC), 'Keep all twelve notes, links, limits and ownership');
+check($beforeDocs === $legacy->query('SELECT * FROM share_docs ORDER BY id')->fetchAll(PDO::FETCH_ASSOC), 'Keep document content and metadata');
+check($beforeOwners === $legacy->query('SELECT id,username,password_hash,role,api_key_hash,api_key_prefix FROM users ORDER BY id')->fetchAll(PDO::FETCH_ASSOC), 'Keep owner identities and API keys');
+check(is_file($config['uploads_dir'] . '/comment-files/1/used.png') && !is_file($config['uploads_dir'] . '/comment-files/1/unused.png'), 'Retire only unreferenced comment uploads');
+check((int)$legacy->query('SELECT COUNT(*) FROM share_assets')->fetchColumn() === 1, 'Keep attachment referenced in a note');
+check((int)$legacy->query('SELECT COUNT(*) FROM share_visitors WHERE share_id=1')->fetchColumn() === 2, 'Merge historical visitors without resetting or duplicating limits');
+check(!table_has_column($legacy, 'shares', 'access_count') && !table_has_column($legacy, 'users', 'email'), 'Retire analytics and email columns');
+check((int)$legacy->query("SELECT COUNT(*) FROM sqlite_master WHERE name IN ('share_access_logs','share_comments','share_reports','announcements','email_codes','password_resets','instance_heartbeats','user_settings','share_access_geo_cache')")->fetchColumn() === 0, 'Retire dedicated tables and history');
+check((int)$legacy->query("SELECT COUNT(*) FROM settings WHERE key IN ('smtp_pass','email_from','allow_registration','banned_words','captcha_enabled','site_icp','site_contact_email','central_stats_cache','instance_id','access_stats_default_enabled')")->fetchColumn() === 0, 'Retire module settings and caches');
+check(!is_file(dirname($config['db_path']) . '/release_cache.json'), 'Retire upstream release cache');
+check(fetch_setting($legacy, 'reader_home_url') === 'https://example.com/s/keep-note-0' && fetch_setting($legacy, 'pdf_export_requests') === '120', 'Keep home and PDF settings');
+$expected = (int)$legacy->query('SELECT SUM(size_bytes) FROM share_docs')->fetchColumn() + 4;
+check((int)$legacy->query('SELECT SUM(size_bytes) FROM shares')->fetchColumn() === $expected, 'Recalculate note and file usage without removed data');
+check((int)$legacy->query('SELECT storage_used_bytes FROM users WHERE id=' . $owner)->fetchColumn() === $expected, 'Recalculate owner quota');
+$after = $legacy->query('SELECT name,sql FROM sqlite_master ORDER BY name')->fetchAll(PDO::FETCH_ASSOC);
+retire_legacy_modules($legacy);
+check($after === $legacy->query('SELECT name,sql FROM sqlite_master ORDER BY name')->fetchAll(PDO::FETCH_ASSOC), 'Legacy cleanup is idempotent');
+check($legacy->query('PRAGMA integrity_check')->fetchColumn() === 'ok' && $legacy->query('PRAGMA foreign_key_check')->fetchAll() === [], 'Legacy upgrade database integrity');
+$legacy = null;
+$config = $savedConfig;
+echo "Legacy upgrade passed: twelve notes, ownership, linked files, visitor limits, quotas and PDF settings preserved.\n";

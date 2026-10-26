@@ -12,7 +12,12 @@ This is **[Chen017](https://github.com/Chen017)'s personal fork** of [b8l8u8e8/s
 | --- | --- |
 | Runtime | PHP **8.3.36**, graceful Nginx/PHP-FPM shutdown, runtime and API regression checks. |
 | Fonts | Local **MiSans** for Latin letters, digits and common punctuation; system fonts for Chinese. The Latin WOFF2 is **34 KB**, down from the original 8.1 MB TTF. |
-| Reading | Neutral dark surfaces and clear blue links; reading statistics and comments hidden on share pages. Footer links lead with this fork and credit upstream. |
+| Reading | Neutral surfaces, clear blue links, rounded press feedback and short motion with reduced-motion support. Notebook landing pages offer Browse documents and local Continue reading, without duplicating the document tree. Reader controls use English. Footer links lead with this fork and credit upstream. |
+| Home navigation | Configurable reader home URL. Other shares show Home / Return to home; documents, query strings and anchors within the same home share do not. |
+| Administrator-only backend | Notes, Site settings and Password navigation; administrator sign-in/out, password changes, API keys, share management and storage quotas remain. Public registration and multi-user management are removed. |
+| Removed services | Access analytics and logs, admin KPI/charts, instance statistics/heartbeats, SMTP/email flows, comments, reports, announcements, moderation/scanning, ordinary CAPTCHA, ICP/contact settings, manual chunk cleanup and the global data-reset endpoint. PDF CAPTCHA and automatic upload cleanup remain. |
+| Configuration | Website/share URL prefix, HTML Head insertion and custom CSS/JS switches, editors, help and injection remain available. Upstream release checks and update prompts are removed; attribution remains. |
+| Data migration | Retired module data is removed once. Notes, share URLs, ownership, API keys and referenced attachments are preserved; historical visitor limits carry forward and storage usage is recalculated. [Scope and migration](docs/FOCUS_SIMPLIFICATION.md). |
 | Rendering | SiYuan table-cell alignment fixes, on-demand diagram engines and one Markdown render per document. Math, footnotes and diagrams remain available. |
 | PDF export | Single/batch downloads in a dialog, selectable text, hidden attribution and visitor quota indicators. [Details](docs/GUEST_PDF_EXPORT.md). |
 | Accessibility & SEO | Clearer links, correct button states and TOC focus, main landmarks, working image-download controls, page descriptions, robots.txt and real 404 responses. |
@@ -34,7 +39,7 @@ docker compose up -d
 
 The service listens on **`127.0.0.1:8081`**. Point your HTTPS reverse proxy at that address. SQLite data, uploads and configuration persist outside the container.
 
-Registration and captcha are disabled in this fork's default configuration. Set up the administrator first, create an API key, then enter your own server URL and key in the SiYuan plugin.
+Only administrator password sign-in is available. Public registration, email authentication and ordinary CAPTCHA have been removed; PDF CAPTCHA remains independent. Set up the administrator, create an API key, then enter your server URL and key in the SiYuan plugin.
 
 ## Using the plugin
 

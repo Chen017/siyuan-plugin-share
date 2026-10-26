@@ -5,18 +5,18 @@ require_once __DIR__ . '/pdf-visitor.php';
 // PDF composition is bounded here; the visitor's browser does the PDF rendering.
 function pdf_export_fields(): array {
     return [
-        'window_seconds' => ['min' => 60, 'max' => 86400, 'default' => 3600, 'scale' => 60, 'whole' => true, 'label' => '统计时长（分钟）'],
-        'requests' => ['max' => 256, 'default' => 120, 'label' => '每位访客允许导出篇数'],
-        'max_concurrent' => ['max' => 4, 'label' => '全站同时导出数量'],
-        'lease_seconds' => ['max' => 180, 'label' => '导出预览有效期（秒）'],
-        'max_docs' => ['max' => 120, 'label' => '单次批量文档数'],
-        'max_markdown_bytes' => ['max' => 2097152, 'label' => '单批源内容上限（MiB）', 'scale' => 1048576],
-        'max_html_bytes' => ['max' => 8388608, 'label' => '单批排版内容上限（MiB）', 'scale' => 1048576],
-        'max_asset_bytes' => ['max' => 52428800, 'label' => '单批关联附件上限（MiB）', 'scale' => 1048576],
-        'max_images' => ['max' => 200, 'label' => '单批图片数量'],
-        'max_execution_seconds' => ['max' => 15, 'label' => '服务器整理时间上限（秒）'],
-        'max_memory_bytes' => ['min' => 16777216, 'max' => 134217728, 'label' => '服务器整理内存上限（MiB）', 'scale' => 1048576],
-        'max_window_events' => ['max' => 20000, 'label' => '全站在窗口内的导出次数'],
+        'window_seconds' => ['min' => 60, 'max' => 86400, 'default' => 3600, 'scale' => 60, 'whole' => true, 'label' => 'Time window (minutes)'],
+        'requests' => ['max' => 256, 'default' => 120, 'label' => 'Documents per visitor'],
+        'max_concurrent' => ['max' => 4, 'label' => 'Concurrent exports'],
+        'lease_seconds' => ['max' => 180, 'label' => 'Preview lease (seconds)'],
+        'max_docs' => ['max' => 120, 'label' => 'Documents per batch'],
+        'max_markdown_bytes' => ['max' => 2097152, 'label' => 'Source content per batch (MiB)', 'scale' => 1048576],
+        'max_html_bytes' => ['max' => 8388608, 'label' => 'Layout content per batch (MiB)', 'scale' => 1048576],
+        'max_asset_bytes' => ['max' => 52428800, 'label' => 'Attachments per batch (MiB)', 'scale' => 1048576],
+        'max_images' => ['max' => 200, 'label' => 'Images per batch'],
+        'max_execution_seconds' => ['max' => 15, 'label' => 'Server preparation timeout (seconds)'],
+        'max_memory_bytes' => ['min' => 16777216, 'max' => 134217728, 'label' => 'Preparation memory limit (MiB)', 'scale' => 1048576],
+        'max_window_events' => ['max' => 20000, 'label' => 'Export events per window'],
     ];
 }
 
@@ -107,24 +107,24 @@ function render_pdf_export_limit_inputs(array $keys, array $limits): string {
 
 function render_pdf_export_settings(): string {
     $settings = pdf_export_settings();
-    $html = '<section id="pdf-export-settings" style="margin-top:28px"><h2>访客 PDF 导出</h2>';
-    $html .= '<p class="muted">通常只需设置统计时长和允许次数。并发、内存与批量大小已预设，可直接使用。</p>';
+    $html = '<section id="pdf-export-settings" style="margin-top:28px"><h2>Visitor PDF export</h2>';
+    $html .= '<p class="muted">Set the time window and document allowance. Resource limits are preset.</p>';
     $html .= '<form method="post" action="' . base_path() . '/admin/pdf-export-settings" data-pdf-settings-form>';
     $html .= render_hidden_inputs(['csrf' => csrf_token()]);
-    $html .= '<label><input type="checkbox" name="pdf_export_enabled" value="1"' . ($settings['enabled'] ? ' checked' : '') . '> 允许访客导出 PDF</label>';
+    $html .= '<label><input type="checkbox" name="pdf_export_enabled" value="1"' . ($settings['enabled'] ? ' checked' : '') . '> Allow visitors to export PDF</label>';
     $html .= render_pdf_export_limit_inputs(['window_seconds', 'requests'], $settings['limits']);
-    $html .= '<p class="muted">这是每个访客 Cookie 的独立篇数额度，不是全站共享额度。同一校园网或公司网络下的访客互不占用额度。例如 60 分钟 120 篇表示每位访客滚动一小时最多开始导出 120 篇，不另加每分钟 2 篇限制。批量中的每篇计 1 篇；同一任务重试该篇不重复计数。匿名 Cookie 只能近似识别浏览器访客，不能可靠识别自然人。</p>';
-    $html .= '<p class="muted">不同 Cookie 在统计时长内出现完全相同的指纹时，要求一次验证码。通过后新 Cookie 使用自己的额度，在该 Cookie 有效期内不重复验证；指纹不直接用于共享或封禁个人额度。</p>';
-    $html .= '<details data-pdf-advanced style="margin-top:16px"><summary>高级设置（已预设，通常无需修改）</summary><p class="muted">以下参数用于保护服务器，可保持默认值。容量单位为 MiB，1 MiB = 1024 KiB；已有更低内存限制时继续遵守。</p>';
+    $html .= '<p class="muted">Each visitor cookie has its own rolling allowance. Shared networks do not share a personal quota. Each document in a batch counts once; retrying it within the same task does not count again. Cookies identify browser visitors approximately, not people.</p>';
+    $html .= '<p class="muted">An identical fingerprint from another cookie requires one verification. It does not share or reset the personal quota.</p>';
+    $html .= '<details data-pdf-advanced style="margin-top:16px"><summary>Advanced settings (preset)</summary><p class="muted">These limits protect server resources. Sizes use MiB. Existing lower memory limits remain effective.</p>';
     $html .= render_pdf_export_limit_inputs(array_values(array_diff(array_keys(pdf_export_fields()), ['window_seconds', 'requests'])), $settings['limits']);
-    $html .= '<details data-pdf-proxy-settings style="margin-top:16px"><summary>反向代理真实 IP</summary><p class="muted">仅信任这里明确填写的代理地址。代理必须覆盖写入真实 IP 请求头，不能直接转发访客传入的同名头。留空时按直连地址限流，经过同一代理的访客会共用 IP 配额。</p>';
-    $html .= '<label for="pdf-trusted-proxies">可信代理 IP（每行一个，也可用逗号分隔）</label><textarea class="input" id="pdf-trusted-proxies" name="pdf_export_trusted_proxies" rows="3" placeholder="例如：127.0.0.1&#10;::1">' . htmlspecialchars(implode("\n", $settings['trusted_proxies'])) . '</textarea>';
-    $html .= '<label for="pdf-ip-header">代理覆盖写入的真实 IP 请求头</label><select class="input" id="pdf-ip-header" name="pdf_export_ip_header">';
+    $html .= '<details data-pdf-proxy-settings style="margin-top:16px"><summary>Reverse proxy client IP</summary><p class="muted">Only listed proxy peers are trusted. The proxy must overwrite the client-IP header. Visitor cookies continue to own personal quotas.</p>';
+    $html .= '<label for="pdf-trusted-proxies">Trusted proxy IPs (one per line or comma-separated)</label><textarea class="input" id="pdf-trusted-proxies" name="pdf_export_trusted_proxies" rows="3" placeholder="127.0.0.1&#10;::1">' . htmlspecialchars(implode("\n", $settings['trusted_proxies'])) . '</textarea>';
+    $html .= '<label for="pdf-ip-header">Client-IP header overwritten by the proxy</label><select class="input" id="pdf-ip-header" name="pdf_export_ip_header">';
     foreach (['HTTP_X_REAL_IP' => 'X-Real-IP', 'HTTP_CF_CONNECTING_IP' => 'CF-Connecting-IP'] as $key => $label) {
         $html .= '<option value="' . $key . '"' . ($settings['ip_header'] === $key ? ' selected' : '') . '>' . $label . '</option>';
     }
-    $html .= '</select><p class="muted">仅接受精确 IPv4 / IPv6 地址，不接受通配符、网段或域名。请填写 PHP 实际看到的代理对端 IP。</p></details></details>';
-    $html .= '<div style="margin-top:16px"><button class="button primary" type="submit">保存 PDF 导出设置</button></div></form></section>';
+    $html .= '</select><p class="muted">Use exact IPv4 or IPv6 peer addresses seen by PHP. Wildcards, networks and hostnames are not accepted.</p></details></details>';
+    $html .= '<div style="margin-top:16px"><button class="button primary" type="submit">Save PDF settings</button></div></form></section>';
     return $html;
 }
 
@@ -652,7 +652,7 @@ function route_pdf_export(string $slug, string $action = ''): never {
         $auto = ($_POST['auto_download'] ?? '') === '1' ? '1' : '0';
         $renewAfter = max(1, (int)$expires['expires_at'] - time() - (int)floor($limits['lease_seconds'] * 2 / 3));
         $content = '<div class="pdf-export-toolbar" data-pdf-preview data-pdf-job="1" data-pdf-auto="' . $auto . '" data-pdf-renew-after="' . $renewAfter . '"' . pdf_export_worker_attributes($url, $lease) . '>';
-        $content .= '<p data-pdf-status role="status">正在逐篇准备文档…</p><button class="button primary" type="button" data-pdf-download>下载 PDF</button></div><script type="application/json" data-pdf-manifest>' . $manifest . '</script>';
+        $content .= '<p data-pdf-status role="status">Preparing documents…</p><button class="button primary" type="button" data-pdf-download>Download PDF</button></div><script type="application/json" data-pdf-manifest>' . $manifest . '</script>';
         $complete = true;
         render_page(count($docs) === 1 ? (string)$docs[0]['title'] : (string)$share['title'], $content, null, '', ['layout' => 'share', 'pdf_export' => true]);
     } catch (Throwable $error) {

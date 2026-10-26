@@ -49,11 +49,11 @@ cutover_started=1
 docker stop --signal SIGTERM --time 30 siyuan-share-web >/dev/null
 docker run --rm --network none --read-only --volumes-from siyuan-share-web:ro \
     --mount "type=bind,source=$ops_dir,target=/ops,readonly" \
-    --entrypoint php "$new_image" /ops/data-snapshot.php /var/www/html/storage/app.db > "$backup_dir/pre-install-snapshot.json"
+    --entrypoint php "$new_image" /ops/data-snapshot.php /var/www/html/storage/app.db --core-only > "$backup_dir/pre-install-snapshot.json"
 docker compose up -d --no-build --pull never web
 docker exec siyuan-share-web curl --retry 30 --retry-connrefused --retry-delay 1 --fail --silent --output /dev/null http://127.0.0.1/login
 docker cp "$ops_dir/data-snapshot.php" siyuan-share-web:/tmp/deploy-data-snapshot.php
-docker exec siyuan-share-web php /tmp/deploy-data-snapshot.php /var/www/html/storage/app.db > "$backup_dir/after-snapshot.json"
+docker exec siyuan-share-web php /tmp/deploy-data-snapshot.php /var/www/html/storage/app.db --core-only > "$backup_dir/after-snapshot.json"
 cmp "$backup_dir/pre-install-snapshot.json" "$backup_dir/after-snapshot.json"
 for attempt in $(seq 1 45); do
     health=$(docker inspect --format '{{.State.Health.Status}}' siyuan-share-web)

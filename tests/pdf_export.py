@@ -109,7 +109,7 @@ class PdfExportTests:
     def test_pdf_admin_settings_authorization_and_validation(self):
         visitor = type(self.client)(self.base)
         self.assertEqual(visitor.request('/admin/pdf-export-settings', {})[0], 302)
-        self.assertEqual(self.client.request('/admin/pdf-export-settings', {})[0], 403)
+        self.assertEqual(self.client.request('/admin/pdf-export-settings', {})[0], 400)
         admin = self.admin()
         original = self.pdf_admin_form(admin)
         before = self.rows("SELECT key, value FROM settings WHERE key LIKE 'pdf_export_%' ORDER BY key")
