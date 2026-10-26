@@ -497,26 +497,47 @@
     let worker = window.html2pdf().set({
       margin: [16, 14], image: { type: 'jpeg', quality: .98 },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait', compress: true },
-      pagebreak: { mode: ['css'], avoid: ['img', 'svg', 'tr', '.katex-display', 'pre'] },
+      enableLinks: false, // Link positions below use the same variable page offsets.
+      // Page planning below uses the final text lines and object bounds. Disable
+      // html2pdf's fixed-height spacer insertion, which cannot protect text lines.
+      pagebreak: { mode: [], before: [], after: [], avoid: [] },
     }).from(root);
+    let removeMetricsGuard = () => {};
     try {
       worker = worker.toContainer();
       await worker;
       const size = await worker.get('pageSize');
       const container = await worker.get('container');
+      removeMetricsGuard = SPSPdfTextLayer.protectFontMetrics(container);
       const height = container.getBoundingClientRect().height;
       // Match jsPDF's canvas rounding, otherwise a 1px remainder creates a page.
       const pageHeight = Math.floor(size.inner.px.width * size.inner.ratio);
-      const pages = Math.max(1, Math.ceil(height / pageHeight));
       const text = await SPSPdfTextLayer.capture(container);
+      const bounds = container.getBoundingClientRect();
+      const origin = bounds.top;
+      const links = Array.from(container.querySelectorAll('a[href]')).flatMap((anchor) =>
+        Array.from(anchor.getClientRects(), (rect) => ({ url: anchor.href, x: rect.left - bounds.left, y: rect.top - origin, width: rect.width, height: rect.height })));
+      const protectedRanges = [];
+      const forcedBreaks = [];
+      for (const element of container.querySelectorAll('p,div,li,table,tr,pre,h1,h2,h3,h4,h5,h6,blockquote,section,figure,img,svg,canvas,hr,.katex,.katex-display')) {
+        if (element.closest('.katex-mathml, .markdown-source')) continue;
+        const style = getComputedStyle(element);
+        if (style.display === 'none' || style.visibility !== 'visible') continue;
+        const rect = element.getBoundingClientRect();
+        const top = rect.top - origin, bottom = rect.bottom - origin;
+        if (/^(always|page|left|right)$/.test(style.breakBefore || style.pageBreakBefore)) forcedBreaks.push(top);
+        if (/^(always|page|left|right)$/.test(style.breakAfter || style.pageBreakAfter) || element.classList.contains('html2pdf__page-break')) forcedBreaks.push(bottom);
+        if (element.matches('img,svg,canvas,tr,pre,hr,.katex,.katex-display') || /^(avoid|avoid-page)$/.test(style.breakInside || style.pageBreakInside)) protectedRanges.push({ top, bottom });
+      }
+      const pages = SPSPdfTextLayer.paginate(text, height, pageHeight, protectedRanges, forcedBreaks);
       let pdf;
-      for (let page = 0; page < pages; page++) {
+      for (let page = 0; page < pages.length; page++) {
         // toCanvas detaches its overlay. Reuse this exact paginated layout so
         // later pages cannot be reflowed or measured differently.
         if (!container.isConnected) document.body.append(worker.prop.overlay);
         worker = worker.set({ html2canvas: { scale: 2, backgroundColor: '#ffffff', useCORS: true, allowTaint: false, logging: false,
-          windowWidth: innerWidth, scrollX: 0, scrollY: 0, y: page * pageHeight, width: size.inner.px.width,
-          height: Math.min(pageHeight, Math.ceil(height - page * pageHeight)) } }).toCanvas();
+          windowWidth: innerWidth, scrollX: 0, scrollY: 0, y: pages[page].start, width: size.inner.px.width,
+          height: pages[page].end - pages[page].start } }).toCanvas();
         await worker;
         const canvas = await worker.get('canvas');
         if (!pdf) {
@@ -529,10 +550,19 @@
         }
         canvas.width = canvas.height = 0;
       }
-      SPSPdfTextLayer.write(pdf, text, { width: size.inner.width, pixelWidth: size.inner.px.width, pixelHeight: pageHeight }, await loadProvenanceFont());
+      const mmPerPixel = size.inner.width / size.inner.px.width;
+      for (const link of links) {
+        const page = SPSPdfTextLayer.pageAt(pages, link.y + link.height / 2);
+        if (page < 0 || page >= pages.length || link.width <= 0 || link.height <= 0) continue;
+        pdf.setPage(page + 1);
+        pdf.link(14 + link.x * mmPerPixel, 16 + (link.y - pages[page].start) * mmPerPixel,
+          link.width * mmPerPixel, link.height * mmPerPixel, { url: link.url });
+      }
+      SPSPdfTextLayer.write(pdf, text, { width: size.inner.width, pixelWidth: size.inner.px.width, pixelHeight: pageHeight, pages }, await loadProvenanceFont());
       await addProvenance(pdf, section);
       return pdf.output('blob');
     } finally {
+      removeMetricsGuard();
       worker.prop?.overlay?.remove();
     }
   };

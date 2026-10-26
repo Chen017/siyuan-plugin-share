@@ -2,11 +2,24 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const assert = require('node:assert/strict');
 const { jsPDF } = require('jspdf');
 const output = process.argv[2];
 fs.mkdirSync(output, { recursive: true });
 const api = {};
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../php-site/assets/pdf-text-layer.js'), 'utf8'), { globalThis: api, Intl });
+const lineRecords = [{ y: 20, height: 18 }, { y: 980, height: 25 }, { y: 1060, height: 18 }];
+const planned = api.SPSPdfTextLayer.paginate(lineRecords, 1100, 1000);
+assert.equal(planned[0].end, 979);
+assert.equal(api.SPSPdfTextLayer.pageAt(planned, 992), 1);
+for (const page of planned.slice(0, -1)) {
+  assert.ok(lineRecords.every((record) => record.y >= page.end || record.y + record.height <= page.end), 'Never split a text line');
+}
+const objectPages = api.SPSPdfTextLayer.paginate([{ y: 20, height: 18 }], 1200, 1000, [{ top: 850, bottom: 1050 }]);
+assert.equal(objectPages[0].end, 850, 'Keep a page-sized object together');
+const rows = Array.from({ length: 12 }, (_, index) => ({ top: index * 120, bottom: (index + 1) * 120 }));
+const tablePages = api.SPSPdfTextLayer.paginate([], 1440, 1000, rows);
+assert.equal(tablePages[0].end, 960, 'Break long tables between adjacent rows');
 const pdf = new jsPDF({ compress: true });
 pdf.text('Visible reference', 14, 16);
 fs.writeFileSync(path.join(output, 'baseline.pdf'), Buffer.from(pdf.output('arraybuffer')));
