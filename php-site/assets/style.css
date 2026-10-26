@@ -3685,6 +3685,8 @@ body.layout-share .markdown-body :where(
 .markdown-body .katex-display {
   overflow-x: auto;
   overflow-y: hidden;
+  /* Keep descenders inside the outer horizontal scroller's clip area. */
+  padding-block: .25em;
   max-width: 100%;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-x;
@@ -3703,8 +3705,53 @@ body.layout-share .markdown-body :where(
 
 .markdown-body .katex {
   max-width: 100%;
-  overflow-x: auto;
+  /* Only display math's outer wrapper scrolls; inner glyphs must not clip. */
+  overflow: visible !important;
 }
+
+/* Protect KaTeX's font metrics from ordinary font-replacement extensions.
+   Keep font size, struts, positioning and SVG clipping under KaTeX's control.
+   Important user-origin or inline extension styles can still take precedence.
+   Font-specific rules below follow the vendored KaTeX stylesheet's order. */
+.markdown-body .katex {
+  font-family: KaTeX_Main, "Times New Roman", serif !important;
+  font-style: normal !important;
+  font-weight: 400 !important;
+  line-height: 1.2 !important;
+}
+.markdown-body .katex * {
+  font-family: inherit !important;
+  font-style: inherit !important;
+  font-weight: inherit !important;
+}
+.markdown-body .katex .textbf { font-weight:700 !important; }
+.markdown-body .katex .textit { font-style:italic !important; }
+.markdown-body .katex .textrm { font-family:KaTeX_Main !important; }
+.markdown-body .katex .textsf { font-family:KaTeX_SansSerif !important; }
+.markdown-body .katex .texttt { font-family:KaTeX_Typewriter !important; }
+.markdown-body .katex .mathnormal { font-family:KaTeX_Math !important; font-style:italic !important; }
+.markdown-body .katex .mathit { font-family:KaTeX_Main !important; font-style:italic !important; }
+.markdown-body .katex .mathrm { font-style:normal !important; }
+.markdown-body .katex .mathbf { font-family:KaTeX_Main !important; font-weight:700 !important; }
+.markdown-body .katex .boldsymbol { font-family:KaTeX_Math !important; font-style:italic !important; font-weight:700 !important; }
+.markdown-body .katex .amsrm, .markdown-body .katex .mathbb, .markdown-body .katex .textbb { font-family:KaTeX_AMS !important; }
+.markdown-body .katex .mathcal { font-family:KaTeX_Caligraphic !important; }
+.markdown-body .katex .mathfrak, .markdown-body .katex .textfrak { font-family:KaTeX_Fraktur !important; }
+.markdown-body .katex .mathboldfrak, .markdown-body .katex .textboldfrak { font-family:KaTeX_Fraktur !important; font-weight:700 !important; }
+.markdown-body .katex .mathtt { font-family:KaTeX_Typewriter !important; }
+.markdown-body .katex .mathscr, .markdown-body .katex .textscr { font-family:KaTeX_Script !important; }
+.markdown-body .katex .mathsf, .markdown-body .katex .textsf { font-family:KaTeX_SansSerif !important; }
+.markdown-body .katex .mathboldsf, .markdown-body .katex .textboldsf { font-family:KaTeX_SansSerif !important; font-weight:700 !important; }
+.markdown-body .katex .mathitsf, .markdown-body .katex .textitsf { font-family:KaTeX_SansSerif !important; font-style:italic !important; }
+.markdown-body .katex .mainrm { font-family:KaTeX_Main !important; font-style:normal !important; }
+.markdown-body .katex .delimsizing.size1 { font-family:KaTeX_Size1 !important; }
+.markdown-body .katex .delimsizing.size2 { font-family:KaTeX_Size2 !important; }
+.markdown-body .katex .delimsizing.size3 { font-family:KaTeX_Size3 !important; }
+.markdown-body .katex .delimsizing.size4 { font-family:KaTeX_Size4 !important; }
+.markdown-body .katex .delimsizing.mult .delim-size1>span { font-family:KaTeX_Size1 !important; }
+.markdown-body .katex .delimsizing.mult .delim-size4>span { font-family:KaTeX_Size4 !important; }
+.markdown-body .katex .op-symbol.small-op { font-family:KaTeX_Size1 !important; }
+.markdown-body .katex .op-symbol.large-op { font-family:KaTeX_Size2 !important; }
 
 .share-side-trigger {
   position: fixed;
