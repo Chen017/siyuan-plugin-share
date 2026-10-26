@@ -79,7 +79,7 @@ $_SERVER['REMOTE_ADDR'] = '2001:db8::abcd';
 check(pdf_export_client_ip() === $ipv6, 'IPv6 privacy addresses share a /64 quota');
 $config['pdf_export'] = ['max_docs' => 100000, 'max_concurrent' => 0];
 $fileDefaults = pdf_export_initial_settings();
-check($fileDefaults['pdf_export_max_docs'] === '30' && $fileDefaults['pdf_export_max_concurrent'] === '1', 'Configuration cannot disable export safety ceilings');
+check($fileDefaults['pdf_export_max_docs'] === '120' && $fileDefaults['pdf_export_max_concurrent'] === '1', 'Configuration cannot disable export safety ceilings');
 unset($config['pdf_export']);
 set_setting('pdf_export_requests', '3');
 migrate($pdo);

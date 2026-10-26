@@ -10,6 +10,11 @@ on:
         required: false
         default: false
         type: boolean
+      apply_pdf_batch_limit:
+        description: 'Explicitly set the saved PDF batch limit to 120 documents'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -56,6 +61,9 @@ jobs:
             docker exec siyuan-share-web php -r 'if (PHP_MAJOR_VERSION !== 8 || PHP_MINOR_VERSION !== 3 || PHP_VERSION_ID < 80336) exit(1); echo "Running PHP ", PHP_VERSION, "\n";'
             if [ '${{ github.event_name == 'workflow_dispatch' && inputs.apply_pdf_limits && 'yes' || 'no' }}' = yes ]; then
               docker exec --user www-data -i siyuan-share-web php /dev/stdin /var/www/html 60 120 < scripts/configure-pdf-limits.php
+            fi
+            if [ '${{ github.event_name == 'workflow_dispatch' && inputs.apply_pdf_batch_limit && 'yes' || 'no' }}' = yes ]; then
+              docker exec --user www-data -i siyuan-share-web php /dev/stdin /var/www/html --batch 120 < scripts/configure-pdf-limits.php
             fi
             docker image prune -f
             echo 'VPS updated; container healthy and login HTTP 200.'

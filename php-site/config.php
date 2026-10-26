@@ -13,7 +13,7 @@ return [
         'requests' => 120,
         'max_concurrent' => 4,
         'lease_seconds' => 180,
-        'max_docs' => 30,
+        'max_docs' => 120,
         'max_markdown_bytes' => 2097152,
         'max_html_bytes' => 8388608,
         'max_asset_bytes' => 52428800,

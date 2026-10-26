@@ -56,14 +56,14 @@ class PdfReleaseTests:
 
     def test_pdf_release_tree_overflow_and_exact_batch_boundary(self):
         docs = [{'docId': self.name + str(i), 'title': '边界文档' + str(i), 'markdown': 'RELEASE_BOUNDARY_' + str(i),
-                 'parentId': self.name + '0' if i else ''} for i in range(31)]
+                 'parentId': self.name + '0' if i else ''} for i in range(121)]
         share = self.api('shares/notebook', {'notebookId': self.name, 'title': 'Boundary', 'docs': docs})['share']
         visitor, path, csrf = self.pdf_visitor(share)
         self.assertEqual(self.pdf_post(visitor, path, csrf, scope='tree', doc_id=docs[0]['docId'])[0], 413)
-        selected = {f'doc_ids[{i}]': docs[i]['docId'] for i in range(30)}
+        selected = {f'doc_ids[{i}]': docs[i]['docId'] for i in range(120)}
         status, _, body = self.pdf_post(visitor, path, csrf, scope='selected', **selected)
         self.assertEqual(status, 200, body[:300])
-        self.assertEqual(body.count(b'data-pdf-doc='), 30)
+        self.assertEqual(body.count(b'data-pdf-doc='), 120)
         self.assertNotIn(b'RELEASE_BOUNDARY_30', body)
         visitor.request(path + '/release', {'csrf': csrf, 'lease': self.pdf_lease(body)})
         self.assertEqual(self.pdf_post(visitor, path, csrf, scope='single', doc_id="' OR 1=1 --")[0], 404)

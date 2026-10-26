@@ -116,7 +116,7 @@ class PdfExportTests:
         self.assertEqual(admin.request('/admin/pdf-export-settings', {**original, 'csrf': 'wrong'})[0], 400)
         self.assertEqual(admin.request('/admin/pdf-export-settings', {**original, 'csrf[x]': 'wrong'})[0], 400)
         for invalid in [
-            {'limits[max_docs]': '31'}, {'limits[requests]': '0'}, {'limits[window_seconds]': '1e2'},
+            {'limits[max_docs]': '121'}, {'limits[requests]': '0'}, {'limits[window_seconds]': '1e2'},
             {'limits[requests]': '257'}, {'limits[window_seconds]': '0'}, {'limits[window_seconds]': '1441'},
             {'limits[max_docs]': '2.5'}, {'limits[max_markdown_bytes]': '-1'},
             {'limits[max_memory_bytes]': '1'}, {'limits[max_concurrent][x]': '1'},
@@ -293,7 +293,7 @@ class PdfExportTests:
         self.assertEqual(self.pdf_post(client, path, csrf)[0], 200)
 
     def test_pdf_resource_budgets_and_failed_job_cleanup(self):
-        share, _ = self.pdf_notebook(31)
+        share, _ = self.pdf_notebook(121)
         client, path, csrf = self.pdf_visitor(share)
         self.assertEqual(self.pdf_post(client, path, csrf)[0], 413)
         self.assertEqual(self.rows('SELECT COUNT(*) AS n FROM pdf_export_leases')[0]['n'], 0)

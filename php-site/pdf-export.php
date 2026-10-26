@@ -9,7 +9,7 @@ function pdf_export_fields(): array {
         'requests' => ['max' => 256, 'default' => 120, 'label' => '每位访客允许导出篇数'],
         'max_concurrent' => ['max' => 4, 'label' => '全站同时导出数量'],
         'lease_seconds' => ['max' => 180, 'label' => '导出预览有效期（秒）'],
-        'max_docs' => ['max' => 30, 'label' => '单次批量文档数'],
+        'max_docs' => ['max' => 120, 'label' => '单次批量文档数'],
         'max_markdown_bytes' => ['max' => 2097152, 'label' => '单批源内容上限（MiB）', 'scale' => 1048576],
         'max_html_bytes' => ['max' => 8388608, 'label' => '单批排版内容上限（MiB）', 'scale' => 1048576],
         'max_asset_bytes' => ['max' => 52428800, 'label' => '单批关联附件上限（MiB）', 'scale' => 1048576],
