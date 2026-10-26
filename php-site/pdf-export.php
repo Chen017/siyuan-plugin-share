@@ -486,8 +486,8 @@ function route_pdf_export(string $slug, string $action = ''): never {
         $stmt->execute(array_merge([$shareId], $docIds));
         if ((int)$stmt->fetchColumn() > $limits['max_asset_bytes']) throw new RuntimeException('关联附件过大，请减少单次导出篇数。', 413);
         $stmt = db()->prepare('SELECT substr(CAST(markdown AS BLOB), 1, ?) FROM share_docs WHERE share_id = ? AND id = ?');
-        $content = '<div class="pdf-print-toolbar" data-pdf-preview data-pdf-library="' . htmlspecialchars(site_asset_url('vendor/html2pdf.bundle.min.js')) . '" data-pdf-font="' . htmlspecialchars(site_asset_url('vendor/fonts/pdf-provenance.ttf')) . '" data-export-url="' . htmlspecialchars($url) . '" data-lease="' . $lease . '" data-csrf="' . csrf_token() . '">';
-        $content .= '<p data-pdf-status role="status">正在准备公式、字体和图片…</p><button class="button primary" type="button" data-pdf-download disabled>' . (count($docs) > 1 ? '保存全部 PDF（逐篇下载）' : '保存 PDF') . '</button><p>每篇分别下载。若浏览器询问，请允许连续下载多个文件。直接下载优先保留视觉排版；需要可选中文字时，可使用每篇的“打印此篇”。</p><p>关闭预览释放任务；同一访客跨标签页也只能同时导出一个任务。</p></div><main class="pdf-document">';
+        $content = '<div class="pdf-print-toolbar" data-pdf-preview data-pdf-library="' . htmlspecialchars(site_asset_url('vendor/html2pdf.bundle.min.js')) . '" data-pdf-font="' . htmlspecialchars(site_asset_url('vendor/fonts/pdf-provenance.ttf')) . '" data-pdf-text-library="' . htmlspecialchars(site_asset_url('pdf-text-layer.js')) . '" data-export-url="' . htmlspecialchars($url) . '" data-lease="' . $lease . '" data-csrf="' . csrf_token() . '">';
+        $content .= '<p data-pdf-status role="status">正在准备公式、字体和图片…</p><button class="button primary" type="button" data-pdf-download disabled>' . (count($docs) > 1 ? '保存全部 PDF（逐篇下载）' : '保存 PDF') . '</button><p>每篇分别下载。若浏览器询问，请允许连续下载多个文件。保存的 PDF 支持选择、复制和搜索正文，并保留隐藏来源与版权信息；也可使用“打印此篇”打开系统打印。</p><p>关闭预览释放任务；同一访客跨标签页也只能同时导出一个任务。</p></div><main class="pdf-document">';
         $images = 0;
         $sourceBytes = 0;
         foreach ($docs as $index => $doc) {

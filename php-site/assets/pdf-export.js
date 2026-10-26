@@ -129,13 +129,16 @@
   updateControls();
   let printIndex = -1;
   let library;
-  const loadLibrary = () => library || (library = new Promise((resolve, reject) => {
+  const loadScript = (source) => new Promise((resolve, reject) => {
     const script = document.createElement('script');
-    script.src = preview.dataset.pdfLibrary;
+    script.src = source;
     script.onload = () => resolve();
-    script.onerror = () => { library = null; reject(new Error('PDF 组件加载失败，请重试。')); };
+    script.onerror = () => reject(new Error('PDF 组件加载失败，请重试。'));
     document.head.append(script);
-  }));
+  });
+  const loadLibrary = () => library || (library = Promise.all([
+    loadScript(preview.dataset.pdfLibrary), loadScript(preview.dataset.pdfTextLibrary),
+  ]).catch((error) => { library = null; throw error; }));
   const names = new Map();
   let provenanceFont;
   const loadProvenanceFont = () => provenanceFont || (provenanceFont = (async () => {
@@ -203,6 +206,7 @@
       // Match jsPDF's canvas rounding, otherwise a 1px remainder creates a page.
       const pageHeight = Math.floor(size.inner.px.width * size.inner.ratio);
       const pages = Math.max(1, Math.ceil(height / pageHeight));
+      const text = await SPSPdfTextLayer.capture(container);
       let pdf;
       for (let page = 0; page < pages; page++) {
         // toCanvas detaches its overlay. Reuse this exact paginated layout so
@@ -224,6 +228,7 @@
         canvas.width = canvas.height = 0;
         await verify(true);
       }
+      SPSPdfTextLayer.write(pdf, text, { width: size.inner.width, pixelWidth: size.inner.px.width, pixelHeight: pageHeight }, await loadProvenanceFont());
       await addProvenance(pdf, section);
       return pdf.output('blob');
     } finally {
