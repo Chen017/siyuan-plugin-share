@@ -82,7 +82,8 @@ jobs:
               docker cp scripts/data-snapshot.php siyuan-share-web:/tmp/core-data-snapshot.php
               docker exec siyuan-share-web php /tmp/core-data-snapshot.php /var/www/html/storage/app.db --core-only > "$migration_backup/core-after.json"
               cmp "$migration_backup/core-before.json" "$migration_backup/core-after.json"
-              docker exec siyuan-share-web php -r '$p=new PDO("sqlite:/var/www/html/storage/app.db"); $p->exec("PRAGMA query_only=ON"); $s=$p->prepare("SELECT value FROM settings WHERE key=?"); $s->execute(["admin_only_schema_v1"]); if ($s->fetchColumn() !== "1" || $p->query("PRAGMA foreign_key_check")->fetch()) exit(1);'
+              echo 'CUTOVER_CORE_DATA_PRESERVED=1'
+              docker exec siyuan-share-web php -r '$p=new PDO("sqlite:/var/www/html/storage/app.db"); $p->exec("PRAGMA query_only=ON"); $s=$p->prepare("SELECT value FROM settings WHERE key=?"); $s->execute(["admin_only_schema_v1"]); $marker=$s->fetchColumn(); $violations=$p->query("PRAGMA foreign_key_check")->fetchAll(PDO::FETCH_ASSOC); echo "MIGRATION_MARKER_OK=", ($marker === "1" ? "1" : "0"), "\nFOREIGN_KEY_VIOLATIONS=", count($violations), "\n"; foreach (array_count_values(array_column($violations, "table")) as $table => $count) echo "FOREIGN_KEY_TABLE=", $table, " COUNT=", $count, "\n"; if ($marker !== "1" || $violations) exit(1);'
               if [ -s /core-before.json ]; then
                 cmp /core-before.json "$migration_backup/core-after.json"
                 mv /core-before.json "$migration_backup/core-before-retirement.json"
