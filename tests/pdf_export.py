@@ -53,9 +53,12 @@ class PdfExportTests:
             self.assertEqual(restored_form['pdf_export_ip_header'], 'HTTP_CF_CONNECTING_IP')
             self.assertEqual(self.rows("SELECT value FROM settings WHERE key = 'pdf_export_max_markdown_bytes'")[0]['value'], '524288')
             self.assertEqual(self.pdf_post(visitor, path, token)[0], 413)
+            result = self.pdf_post(visitor, path, token, scope='single', doc_id=docs[0]['docId'])
+            self.assertEqual(result[0], 200)
+            one_lease = self.pdf_lease(result[2])
+            self.assertEqual(visitor.request(path + '/claim', {'csrf': token, 'lease': one_lease, 'index': '0'})[0], 200)
+            visitor.request(path + '/release', {'csrf': token, 'lease': one_lease})
             self.assertEqual(self.pdf_post(visitor, path, token, scope='single', doc_id=docs[0]['docId'])[0], 429)
-            self.rows('DELETE FROM pdf_export_events')
-            self.assertEqual(self.pdf_post(visitor, path, token, scope='single', doc_id=docs[0]['docId'])[0], 200)
             self.assertEqual(self.rows("SELECT key, value FROM settings WHERE key NOT LIKE 'pdf_export_%' ORDER BY key"), general_before)
         finally:
             admin.request('/admin/pdf-export-settings', original)
@@ -73,7 +76,7 @@ class PdfExportTests:
         self.assertEqual(admin.request('/admin/pdf-export-settings', {**original, 'csrf[x]': 'wrong'})[0], 400)
         for invalid in [
             {'limits[max_docs]': '31'}, {'limits[requests]': '0'}, {'limits[window_seconds]': '1e2'},
-            {'limits[requests]': '11'}, {'limits[window_seconds]': '0'}, {'limits[window_seconds]': '1441'},
+            {'limits[requests]': '257'}, {'limits[window_seconds]': '0'}, {'limits[window_seconds]': '1441'},
             {'limits[max_docs]': '2.5'}, {'limits[max_markdown_bytes]': '-1'},
             {'limits[max_memory_bytes]': '1'}, {'limits[max_concurrent][x]': '1'},
             {'pdf_export_enabled[x]': '1'}, {'pdf_export_trusted_proxies': '0.0.0.0/0'},
@@ -118,16 +121,21 @@ class PdfExportTests:
         output = Path(__file__).resolve().parents[1] / '.test-output'
         output.mkdir(exist_ok=True)
         subprocess.run(['node', str(Path(__file__).with_name('pdf-browser.cjs')), self.base + '/s/' + share['slug'], str(output)],
-                       input=json.dumps({'apiKey': self.key, 'shareId': share['id'], 'docIds': [doc['docId'] for doc in docs]}), text=True, check=True, timeout=180)
+                       input=json.dumps({'apiKey': self.key, 'shareId': share['id'], 'docIds': [doc['docId'] for doc in docs], 'visitorCookie': self.pdf_worker_cookie}), text=True, check=True, timeout=240)
 
     def pdf_visitor(self, share, password=None):
         self.rows('DELETE FROM pdf_export_events')
         self.rows('DELETE FROM pdf_export_leases')
+        self.rows('DELETE FROM pdf_export_fingerprints')
+        self.rows('DELETE FROM pdf_export_clearance')
+        self.rows('DELETE FROM pdf_export_challenges')
+        self.rows('DELETE FROM pdf_export_captcha_limits')
         client = type(self.client)(self.base)
         path = '/s/' + share['slug']
         if password:
             self.assertEqual(client.request(path, {'share_password': password})[0], 302)
         token = self.csrf(client, path + '/export')
+        self.pdf_worker_cookie = next(cookie.value for cookie in client.cookies if cookie.name == 'sps_pdf_visitor')
         return client, path + '/export', token
 
     def pdf_post(self, client, path, token, headers=None, **overrides):
@@ -225,61 +233,6 @@ class PdfExportTests:
         self.assertEqual(self.pdf_post(client, path, csrf, **{'scope[0]': 'all'})[0], 400)
         self.assertEqual(self.pdf_post(client, path, csrf, scope='selected', **{'doc_ids[0][0]': self.name})[0], 400)
         self.assertEqual(self.rows('SELECT COUNT(*) AS n FROM pdf_export_leases')[0]['n'], 0)
-
-    def test_pdf_combined_quota_requires_changing_both_ip_and_browser(self):
-        share = self.share()
-        client, path, csrf = self.pdf_visitor(share)
-        before = self.rows("SELECT key, value FROM settings WHERE key IN ('pdf_export_trusted_proxies', 'pdf_export_ip_header')")
-        peers = ['127.0.0.1']
-        if self.container:
-            # Published Docker ports reach Nginx from the bridge gateway, not
-            # 127.0.0.1. Trust only the disposable fixture's actual gateways.
-            networks = json.loads(subprocess.check_output(['docker', 'inspect', '--format', '{{json .NetworkSettings.Networks}}', self.container], text=True))
-            peers.extend(network['Gateway'] for network in networks.values() if network.get('Gateway'))
-        trusted = json.dumps(peers)
-        self.rows(f"UPDATE settings SET value = '{trusted}' WHERE key = 'pdf_export_trusted_proxies'")
-        self.rows("UPDATE settings SET value = 'HTTP_X_REAL_IP' WHERE key = 'pdf_export_ip_header'")
-        try:
-            original_ip, other_ip = '203.0.113.10', '203.0.113.20'
-            for _ in range(5):
-                status, _, body = self.pdf_post(client, path, csrf, headers={'X-Real-IP': original_ip})
-                self.assertEqual(status, 200, body)
-                client.request(path + '/release', {'csrf': csrf, 'lease': self.pdf_lease(body)})
-            for ip, fingerprint in [(original_ip, 'b' * 64), (other_ip, 'a' * 64)]:
-                new_client = type(self.client)(self.base)
-                token = self.csrf(new_client, path)
-                status, headers, body = self.pdf_post(new_client, path, token, fingerprint=fingerprint, headers={'X-Real-IP': ip})
-                self.assertEqual(status, 429, (ip, fingerprint, body))
-                self.assertEqual(int(headers['Retry-After']), 3600)
-            new_client = type(self.client)(self.base)
-            token = self.csrf(new_client, path)
-            status, _, body = self.pdf_post(new_client, path, token, fingerprint='b' * 64, headers={'X-Real-IP': other_ip})
-            self.assertEqual(status, 200, body)
-            new_client.request(path + '/release', {'csrf': token, 'lease': self.pdf_lease(body)})
-            self.rows(f'UPDATE pdf_export_events SET created_at = {int(time.time()) - 3601}')
-            self.assertEqual(self.pdf_post(client, path, csrf, headers={'X-Real-IP': original_ip})[0], 200)
-        finally:
-            for row in before:
-                value = row['value'].replace("'", "''")
-                self.rows(f"UPDATE settings SET value = '{value}' WHERE key = '{row['key']}'")
-            self.rows('DELETE FROM pdf_export_leases')
-            self.rows('DELETE FROM pdf_export_events')
-
-    def test_pdf_limits_survive_sessions_and_spoofed_proxy_headers(self):
-        from run import Client
-        share = self.share()
-        client, path, csrf = self.pdf_visitor(share)
-        for _ in range(5):
-            status, _, body = self.pdf_post(client, path, csrf)
-            self.assertEqual(status, 200, body)
-            client.request(path + '/release', {'csrf': csrf, 'lease': self.pdf_lease(body)})
-        replacement = Client(self.base)
-        csrf = self.csrf(replacement, path)
-        status, _, _ = replacement.request(path, {'csrf': csrf, 'fingerprint': 'f' * 64, 'scope': 'all'},
-                                            {'X-Real-IP': '203.0.113.7', 'X-Forwarded-For': '203.0.113.8', 'CF-Connecting-IP': '203.0.113.9'})
-        self.assertEqual(status, 429)
-        self.rows('UPDATE pdf_export_events SET created_at = 1')
-        self.assertEqual(self.pdf_post(replacement, path, csrf, fingerprint='f' * 64)[0], 200)
 
     def test_pdf_concurrency_lease_ownership_and_timeout(self):
         from run import Client

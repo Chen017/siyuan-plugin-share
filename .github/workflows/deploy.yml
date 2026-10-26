@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      apply_pdf_limits:
+        description: 'Explicitly apply 60 minutes / 120 documents per visitor; ordinary deployment preserves saved settings'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -48,5 +54,8 @@ jobs:
             test "$health" = healthy
             test "$(curl --max-time 15 -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8081/login)" = 200
             docker exec siyuan-share-web php -r 'if (PHP_MAJOR_VERSION !== 8 || PHP_MINOR_VERSION !== 3 || PHP_VERSION_ID < 80336) exit(1); echo "Running PHP ", PHP_VERSION, "\n";'
+            if [ '${{ github.event_name == 'workflow_dispatch' && inputs.apply_pdf_limits && 'yes' || 'no' }}' = yes ]; then
+              docker exec --user www-data -i siyuan-share-web php /dev/stdin /var/www/html 60 120 < scripts/configure-pdf-limits.php
+            fi
             docker image prune -f
             echo 'VPS updated; container healthy and login HTTP 200.'

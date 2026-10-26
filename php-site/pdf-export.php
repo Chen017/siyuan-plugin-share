@@ -1,11 +1,12 @@
 <?php
 declare(strict_types=1);
+require_once __DIR__ . '/pdf-visitor.php';
 
 // PDF composition is bounded here; the visitor's browser does the PDF rendering.
 function pdf_export_fields(): array {
     return [
         'window_seconds' => ['min' => 60, 'max' => 86400, 'default' => 3600, 'scale' => 60, 'whole' => true, 'label' => '统计时长（分钟）'],
-        'requests' => ['max' => 10, 'default' => 5, 'label' => '允许导出次数'],
+        'requests' => ['max' => 256, 'default' => 120, 'label' => '每位访客允许导出篇数'],
         'max_concurrent' => ['max' => 4, 'label' => '全站同时导出数量'],
         'lease_seconds' => ['max' => 180, 'label' => '导出预览有效期（秒）'],
         'max_docs' => ['max' => 30, 'label' => '单次批量文档数'],
@@ -26,6 +27,7 @@ function pdf_export_initial_settings(): array {
         'pdf_export_enabled' => ($config['pdf_export_enabled'] ?? true) === true ? '1' : '0',
         'pdf_export_trusted_proxies' => json_encode($config['pdf_export_trusted_proxies'] ?? []),
         'pdf_export_ip_header' => (string)($config['pdf_export_ip_header'] ?? 'HTTP_X_REAL_IP'),
+        'pdf_export_cookie_key' => '',
     ];
     foreach (pdf_export_fields() as $key => $field) {
         $default = $field['default'] ?? $field['max'];
@@ -37,7 +39,8 @@ function pdf_export_initial_settings(): array {
 function seed_pdf_export_settings(PDO $pdo): void {
     $existing = $pdo->query("SELECT key, value FROM settings WHERE key LIKE 'pdf_export_%'")->fetchAll(PDO::FETCH_KEY_PAIR);
     $initial = pdf_export_initial_settings();
-    if (!array_diff_key($initial, $existing) && !isset($existing['pdf_export_ip_requests']) && !isset($existing['pdf_export_fingerprint_requests'])) return;
+    if (!array_diff_key($initial, $existing) && !isset($existing['pdf_export_ip_requests']) && !isset($existing['pdf_export_fingerprint_requests'])
+        && preg_match('/^[a-f0-9]{64}$/D', $existing['pdf_export_cookie_key'] ?? '')) return;
     $ownTransaction = !$pdo->inTransaction();
     if ($ownTransaction) $pdo->exec('BEGIN IMMEDIATE');
     try {
@@ -53,6 +56,7 @@ function seed_pdf_export_settings(PDO $pdo): void {
             }
         }
         foreach ($initial as $key => $value) ensure_setting($pdo, $key, $value);
+        $pdo->prepare("UPDATE settings SET value = ? WHERE key = 'pdf_export_cookie_key' AND value = ''")->execute([bin2hex(random_bytes(32))]);
         $pdo->exec("DELETE FROM settings WHERE key IN ('pdf_export_ip_requests', 'pdf_export_fingerprint_requests')");
         if ($ownTransaction) $pdo->exec('COMMIT');
     } catch (Throwable $error) {
@@ -109,7 +113,8 @@ function render_pdf_export_settings(): string {
     $html .= render_hidden_inputs(['csrf' => csrf_token()]);
     $html .= '<label><input type="checkbox" name="pdf_export_enabled" value="1"' . ($settings['enabled'] ? ' checked' : '') . '> 允许访客导出 PDF</label>';
     $html .= render_pdf_export_limit_inputs(['window_seconds', 'requests'], $settings['limits']);
-    $html .= '<p class="muted">IP 与浏览器共同使用这里设置的次数上限，任一达到上限就暂停导出。例如 60 分钟内允许 5 次：用完后，只更换 IP 或只更换浏览器都不能继续；两者都更换后才会按新访客计算。次数按导出预览请求计算。</p>';
+    $html .= '<p class="muted">这是每个访客 Cookie 的独立篇数额度，不是全站共享额度。同一校园网或公司网络下的访客互不占用额度。例如 60 分钟 120 篇表示每位访客滚动一小时最多开始导出 120 篇，不另加每分钟 2 篇限制。批量中的每篇计 1 篇；同一任务重试该篇不重复计数。匿名 Cookie 只能近似识别浏览器访客，不能可靠识别自然人。</p>';
+    $html .= '<p class="muted">不同 Cookie 在统计时长内出现完全相同的指纹时，要求一次验证码。通过后新 Cookie 使用自己的额度，在该 Cookie 有效期内不重复验证；指纹不直接用于共享或封禁个人额度。</p>';
     $html .= '<details data-pdf-advanced style="margin-top:16px"><summary>高级设置（已预设，通常无需修改）</summary><p class="muted">以下参数用于保护服务器，可保持默认值。容量单位为 MiB，1 MiB = 1024 KiB；已有更低内存限制时继续遵守。</p>';
     $html .= render_pdf_export_limit_inputs(array_values(array_diff(array_keys(pdf_export_fields()), ['window_seconds', 'requests'])), $settings['limits']);
     $html .= '<details data-pdf-proxy-settings style="margin-top:16px"><summary>反向代理真实 IP</summary><p class="muted">仅信任这里明确填写的代理地址。代理必须覆盖写入真实 IP 请求头，不能直接转发访客传入的同名头。留空时按直连地址限流，经过同一代理的访客会共用 IP 配额。</p>';
@@ -176,6 +181,7 @@ function pdf_export_migrate(PDO $pdo): void {
         ip_hash TEXT NOT NULL, fingerprint_hash TEXT NOT NULL, expires_at INTEGER NOT NULL,
         FOREIGN KEY(share_id) REFERENCES shares(id) ON DELETE CASCADE
     )');
+    pdf_visitor_migrate($pdo);
 }
 
 function pdf_export_fail(int $status, string $message): never {
@@ -235,35 +241,29 @@ function pdf_export_client_ip(): string {
     }
     $packed = @inet_pton($peer);
     if ($packed === false) return 'unknown';
-    // IPv6 privacy addresses within one /64 share an allowance.
+    // Normalize IPv6 diagnostic metadata; visitor quotas are owned by Cookie.
     if (strlen($packed) === 16) $packed = substr($packed, 0, 8) . str_repeat("\0", 8);
     return bin2hex($packed);
 }
 
-function pdf_export_admit(int $shareId, string $fingerprint): string {
+function pdf_export_admit(int $shareId, string $fingerprint, int $documentCount = 1): string {
     $limits = pdf_export_limits();
     $pdo = db();
+    $visitor = pdf_visitor_id(true);
     $ip = hash('sha256', pdf_export_client_ip());
-    $fp = hash('sha256', $fingerprint . '|' . substr((string)($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 512));
+    $fp = pdf_visitor_fingerprint($fingerprint);
+    pdf_visitor_quota($visitor, $limits, $documentCount);
+    if (pdf_visitor_needs_captcha($visitor, $fp)) throw new RuntimeException('导出过于频繁，请先完成一次验证码。', 428);
     $now = time();
     $pdo->exec('PRAGMA busy_timeout = 3000');
     $pdo->exec('BEGIN IMMEDIATE');
     try {
         $pdo->prepare('DELETE FROM pdf_export_events WHERE created_at <= ?')->execute([$now - $limits['window_seconds']]);
         $pdo->prepare('DELETE FROM pdf_export_leases WHERE expires_at <= ?')->execute([$now]);
-        $stmt = $pdo->prepare('SELECT
-            SUM(CASE WHEN ip_hash = ? THEN 1 ELSE 0 END) AS ip_count,
-            SUM(CASE WHEN fingerprint_hash = ? THEN 1 ELSE 0 END) AS fp_count, COUNT(*) AS total
-            FROM pdf_export_events');
-        $stmt->execute([$ip, $fp]);
-        $counts = $stmt->fetch(PDO::FETCH_ASSOC);
-        if ((int)$counts['ip_count'] >= $limits['requests'] || (int)$counts['fp_count'] >= $limits['requests']
-            || (int)$counts['total'] >= $limits['max_window_events']) {
-            throw new RuntimeException('导出次数已达上限，请稍后再试。', 429);
-        }
+        pdf_visitor_quota($visitor, $limits, $documentCount);
         $stmt = $pdo->prepare('SELECT COUNT(*) AS total,
-            SUM(CASE WHEN ip_hash = ? OR fingerprint_hash = ? THEN 1 ELSE 0 END) AS own FROM pdf_export_leases');
-        $stmt->execute([$ip, $fp]);
+            SUM(CASE WHEN visitor_hash = ? THEN 1 ELSE 0 END) AS own FROM pdf_export_leases');
+        $stmt->execute([$visitor]);
         $counts = $stmt->fetch(PDO::FETCH_ASSOC);
         if ((int)$counts['total'] >= $limits['max_concurrent'] || (int)$counts['own'] > 0) {
             throw new RuntimeException('已有导出正在进行，请关闭预览或稍后再试。', 429);
@@ -275,10 +275,10 @@ function pdf_export_admit(int $shareId, string $fingerprint): string {
         if (share_is_expired($share)) throw new RuntimeException('分享已过期。', 410);
         if (share_visitor_limit_reached($share)) throw new RuntimeException('访客数已达上限。', 403);
         if (share_visitor_limit($share) > 0) register_share_visitor($shareId, get_visitor_id());
-        $pdo->prepare('INSERT INTO pdf_export_events(ip_hash, fingerprint_hash, created_at) VALUES (?, ?, ?)')->execute([$ip, $fp, $now]);
         $token = bin2hex(random_bytes(24));
-        $pdo->prepare('INSERT INTO pdf_export_leases VALUES (?, ?, ?, ?, ?, ?)')->execute([
-            $token, $shareId, hash('sha256', session_id()), $ip, $fp, $now + $limits['lease_seconds'],
+        $pdo->prepare('INSERT INTO pdf_export_events(ip_hash, fingerprint_hash, created_at, visitor_hash, doc_count, job_token) VALUES (?, ?, ?, ?, 0, ?)')->execute([$ip, $fp, $now, $visitor, $token]);
+        $pdo->prepare('INSERT INTO pdf_export_leases(token, share_id, session_hash, ip_hash, fingerprint_hash, expires_at, visitor_hash, document_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')->execute([
+            $token, $shareId, hash('sha256', session_id()), $ip, $fp, $now + $limits['lease_seconds'], $visitor, $documentCount, $now,
         ]);
         $pdo->exec('COMMIT');
         return $token;
@@ -379,12 +379,50 @@ function route_pdf_export(string $slug, string $action = ''): never {
     }
     $share = pdf_export_share($slug);
     $shareId = (int)$share['id'];
+    try {
+        $visitor = pdf_visitor_id($method !== 'GET');
+        if ($action === 'claim' && $method === 'POST') {
+            $token = $_POST['lease'] ?? '';
+            $index = $_POST['index'] ?? '';
+            if (!is_string($token) || !is_string($index) || !preg_match('/^[0-9]{1,3}$/D', $index)) throw new RuntimeException('无效的文档编号。', 400);
+            pdf_visitor_claim($shareId, $token, (int)$index);
+            header('Content-Type: application/json; charset=utf-8');
+            echo '{"ok":true}';
+            exit;
+        }
+        if (in_array($action, ['check', 'captcha', 'captcha-verify'], true) && $method === 'POST') {
+            $fp = pdf_visitor_fingerprint($_POST['fingerprint'] ?? null);
+            pdf_visitor_quota($visitor, pdf_export_limits());
+            $required = pdf_visitor_needs_captcha($visitor, $fp);
+            header('Content-Type: application/json; charset=utf-8');
+            if ($action === 'captcha-verify') {
+                pdf_visitor_verify_captcha($visitor, $fp, $_POST['token'] ?? null, $_POST['answer'] ?? null);
+                echo '{"ok":true}';
+            } elseif (!$required) {
+                echo '{"ok":true}';
+            } elseif ($action === 'captcha') {
+                echo json_encode(pdf_visitor_challenge($visitor, $fp));
+            } else {
+                http_response_code(428);
+                echo json_encode(['captcha_required' => true, 'error' => '导出过于频繁，请完成一次验证码后继续。'], JSON_UNESCAPED_UNICODE);
+            }
+            exit;
+        }
+    } catch (RuntimeException $error) {
+        if ($error->getCode() === 429) header('Retry-After: 300');
+        pdf_export_fail(in_array($error->getCode(), [400, 409, 410, 428, 429, 503], true) ? $error->getCode() : 503, $error->getMessage());
+    }
     if ($action === 'verify' && $method === 'POST') {
         $token = $_POST['lease'] ?? '';
         if (!is_string($token)) pdf_export_fail(400, '无效的导出凭据。');
-        $stmt = db()->prepare('SELECT 1 FROM pdf_export_leases WHERE token = ? AND share_id = ? AND session_hash = ? AND expires_at > ?');
-        $stmt->execute([$token, $shareId, hash('sha256', session_id()), time()]);
+        $stmt = db()->prepare('SELECT 1 FROM pdf_export_leases WHERE token = ? AND share_id = ? AND session_hash = ? AND visitor_hash = ? AND expires_at > ?');
+        $stmt->execute([$token, $shareId, hash('sha256', session_id()), $visitor, time()]);
         if (!$stmt->fetchColumn()) pdf_export_fail(410, '导出预览已失效，请返回分享页重新导出。');
+        if (($_POST['renew'] ?? '') === '1') {
+            $renew = db()->prepare('UPDATE pdf_export_leases SET expires_at = MIN(created_at + 1800, CAST(? AS INTEGER)) WHERE token = ? AND share_id = ? AND session_hash = ? AND visitor_hash = ? AND expires_at > ? AND created_at + 1800 > CAST(? AS INTEGER)');
+            $renew->execute([time() + pdf_export_limits()['lease_seconds'], $token, $shareId, hash('sha256', session_id()), $visitor, time(), time()]);
+            if ($renew->rowCount() !== 1) pdf_export_fail(410, '导出任务已失效，请重新打开预览。');
+        }
         header('Content-Type: application/json; charset=utf-8');
         echo '{"ok":true}';
         exit;
@@ -406,7 +444,7 @@ function route_pdf_export(string $slug, string $action = ''): never {
             if ($activeDoc) array_unshift($docs, $activeDoc);
         }
         $active = in_array($active, array_column($docs, 'doc_id'), true) ? $active : (string)($docs[0]['doc_id'] ?? '');
-        $content = '<main class="pdf-export-panel"><h1>导出 PDF</h1><p>选择范围后打开预览，再在打印窗口选择“另存为 PDF”。批量文档合并为一份 PDF，每篇从新页开始。</p>';
+        $content = '<main class="pdf-export-panel"><h1>导出 PDF</h1><p>选择范围后打开预览，点击保存即可逐篇下载。每篇文档是一个独立 PDF 文件，不会合并。</p>';
         $content .= '<p>每批最多 ' . $limits['max_docs'] . ' 篇；较大的笔记本请分批勾选。</p>';
         $content .= '<form method="post" action="' . htmlspecialchars($url) . '" target="_blank" rel="noopener" data-pdf-export-form>';
         $content .= render_hidden_inputs(['csrf' => csrf_token(), 'fingerprint' => '']);
@@ -421,6 +459,7 @@ function route_pdf_export(string $slug, string $action = ''): never {
         }
         $content .= '</fieldset>';
         if (count($docs) > 2000) $content .= '<p>仅列出前 2000 篇；其余文档请从分享页打开后导出。</p>';
+        $content .= '<fieldset data-pdf-challenge hidden><legend>安全验证（此 Cookie 只需一次）</legend><p>导出过于频繁，请输入图片中的验证码。</p><img data-pdf-captcha-image alt="安全验证码"><button class="button ghost" type="button" data-pdf-captcha-refresh>换一张</button><label>验证码 <input class="input" name="captcha_answer" autocomplete="off" maxlength="8"></label></fieldset>';
         $content .= '<button class="button primary" type="submit">打开导出预览</button><p data-pdf-form-status role="status"></p></form>';
         $content .= '<a href="' . htmlspecialchars(base_path() . '/s/' . rawurlencode($slug)) . '">返回分享页</a></main>';
         render_page('导出 PDF', $content, null, '', ['layout' => 'share', 'pdf_export' => true]);
@@ -436,19 +475,19 @@ function route_pdf_export(string $slug, string $action = ''): never {
         if ($lease !== '' && !$complete) pdf_export_release($lease);
     });
     try {
-        $lease = pdf_export_admit($shareId, $fingerprint);
+        $docs = pdf_export_select_docs($shareId, $_POST);
+        $lease = pdf_export_admit($shareId, $fingerprint, count($docs));
         set_time_limit($limits['max_execution_seconds']);
         $memory = ini_parse_quantity((string)ini_get('memory_limit'));
         ini_set('memory_limit', (string)($memory > 0 ? min($memory, $limits['max_memory_bytes']) : $limits['max_memory_bytes']));
-        $docs = pdf_export_select_docs($shareId, $_POST);
         $docIds = array_column($docs, 'doc_id');
         $stmt = db()->prepare('SELECT COALESCE(SUM(size_bytes), 0) FROM share_assets WHERE share_id = ? AND
             (doc_id IS NULL OR doc_id = \'\' OR doc_id IN (' . implode(',', array_fill(0, count($docs), '?')) . '))');
         $stmt->execute(array_merge([$shareId], $docIds));
         if ((int)$stmt->fetchColumn() > $limits['max_asset_bytes']) throw new RuntimeException('关联附件过大，请减少单次导出篇数。', 413);
         $stmt = db()->prepare('SELECT substr(CAST(markdown AS BLOB), 1, ?) FROM share_docs WHERE share_id = ? AND id = ?');
-        $content = '<div class="pdf-print-toolbar" data-pdf-preview data-export-url="' . htmlspecialchars($url) . '" data-lease="' . $lease . '" data-csrf="' . csrf_token() . '">';
-        $content .= '<p data-pdf-status role="status">正在准备公式、字体和图片…</p><button class="button primary" type="button" data-pdf-print disabled>保存为 PDF</button><p>在打印窗口选择“另存为 PDF”。预览有效期 ' . $limits['lease_seconds'] . ' 秒，关闭预览可释放导出名额。</p></div><main class="pdf-document">';
+        $content = '<div class="pdf-print-toolbar" data-pdf-preview data-pdf-library="' . htmlspecialchars(site_asset_url('vendor/html2pdf.bundle.min.js')) . '" data-export-url="' . htmlspecialchars($url) . '" data-lease="' . $lease . '" data-csrf="' . csrf_token() . '">';
+        $content .= '<p data-pdf-status role="status">正在准备公式、字体和图片…</p><button class="button primary" type="button" data-pdf-download disabled>' . (count($docs) > 1 ? '保存全部 PDF（逐篇下载）' : '保存 PDF') . '</button><p>每篇分别下载。若浏览器询问，请允许连续下载多个文件。直接下载优先保留视觉排版；需要可选中文字时，可使用每篇的“打印此篇”。</p><p>关闭预览释放任务；同一访客跨标签页也只能同时导出一个任务。</p></div><main class="pdf-document">';
         $images = 0;
         $sourceBytes = 0;
         foreach ($docs as $index => $doc) {
@@ -465,7 +504,7 @@ function route_pdf_export(string $slug, string $action = ''): never {
             $markdown = insert_adjacent_emoji_image_spacing($markdown);
             $html = render_markdown($markdown);
             $images += substr_count($html, '<img');
-            $content .= '<section class="pdf-doc" data-pdf-doc="' . htmlspecialchars((string)$doc['doc_id']) . '"><h1>' . htmlspecialchars($title) . '</h1>';
+            $content .= '<section class="pdf-doc" data-pdf-doc="' . htmlspecialchars((string)$doc['doc_id']) . '" data-pdf-title="' . htmlspecialchars($title) . '"><h1>' . htmlspecialchars($title) . '</h1><button class="button ghost pdf-doc-print" type="button" data-pdf-native-print>打印此篇</button>';
             $content .= '<div class="markdown-body" data-md-id="pdf-' . $index . '">' . $html . '</div><textarea class="markdown-source" data-md-id="pdf-' . $index . '" hidden>' . htmlspecialchars($markdown) . '</textarea></section>';
             if (strlen($content) > $limits['max_html_bytes'] || $images > $limits['max_images']) throw new RuntimeException('排版内容或图片过多，请分批导出。', 413);
         }
@@ -477,7 +516,7 @@ function route_pdf_export(string $slug, string $action = ''): never {
         render_page(count($docs) === 1 ? (string)$docs[0]['title'] : (string)$share['title'], $content, null, '', ['layout' => 'share', 'markdown' => true, 'pdf_export' => true]);
     } catch (Throwable $error) {
         if ($error->getCode() === 429) header('Retry-After: ' . $limits['window_seconds']);
-        $status = in_array($error->getCode(), [400, 403, 404, 410, 413, 429], true) ? $error->getCode() : 503;
+        $status = in_array($error->getCode(), [400, 403, 404, 409, 410, 413, 428, 429], true) ? $error->getCode() : 503;
         pdf_export_fail($status, $status === 503 ? '导出服务繁忙，请稍后重试。' : $error->getMessage());
     }
 }

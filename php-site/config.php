@@ -10,7 +10,7 @@ return [
     'pdf_export_enabled' => true,
     'pdf_export' => [
         'window_seconds' => 3600,
-        'requests' => 5,
+        'requests' => 120,
         'max_concurrent' => 4,
         'lease_seconds' => 180,
         'max_docs' => 30,

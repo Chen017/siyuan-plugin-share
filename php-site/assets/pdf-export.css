@@ -13,6 +13,20 @@
 .pdf-document .markdown-body img { max-width: 100%; }
 .pdf-document .markdown-body pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .pdf-document .markdown-body table { max-width: 100%; }
+.pdf-doc-print { margin: 0 0 16px; }
+.pdf-download-document { width: 182mm !important; max-width: none !important; padding: 0 !important; margin: 0 !important; background: white; }
+.pdf-download-document .pdf-doc { margin: 0; padding: 0; border: 0; }
+.pdf-download-document .markdown-body { display: flow-root; font-size: 11pt; line-height: 1.65; }
+/* Canvas cloning materializes clearfix pseudo-elements, changing first/last
+   child margins and cutting off the final paragraph. flow-root clears floats. */
+.pdf-download-document .markdown-body::before,
+.pdf-download-document .markdown-body::after { content: none !important; display: none !important; }
+.pdf-download-document :is(.code-header, .pdf-doc-print, .markdown-source) { display: none !important; }
+.pdf-download-document :is(.media-scroll, .code-body, .code-block, pre, .katex-display) { overflow: visible !important; max-height: none !important; }
+.pdf-download-document :is(pre, code) { white-space: pre-wrap !important; overflow-wrap: anywhere !important; }
+.pdf-download-document table { display: table !important; width: 100%; table-layout: fixed; }
+.pdf-download-document :is(th, td) { overflow-wrap: anywhere; }
+.pdf-download-document :is(img, svg, canvas) { max-width: 100% !important; height: auto; }
 /* Export uses a fixed light palette, including when the reader prefers dark. */
 body.layout-share.pdf-export-preview {
   color-scheme: light;
@@ -52,7 +66,9 @@ body.layout-share.pdf-export-preview .hljs :is(.hljs-title, .hljs-section) { col
   html, body.layout-share { background: white !important; color: #1f2328 !important; margin: 0 !important; padding: 0 !important; height: auto !important; min-height: 0 !important; }
   body.layout-share .share-page { display: block !important; padding: 0 !important; margin: 0 !important; max-width: none !important; height: auto !important; min-height: 0 !important; }
   .pdf-print-toolbar, .share-document-actions, .share-footer, .share-side-trigger, .share-side-backdrop, .scroll-top,
-  .image-viewer, .code-header, .code-block__toolbar, .code-toolbar, .code-copy, [data-code-copy], .md-iframe-fullscreen-btn { display: none !important; }
+  .image-viewer, .code-header, .code-block__toolbar, .code-toolbar, .code-copy, [data-code-copy], .md-iframe-fullscreen-btn, .pdf-doc-print { display: none !important; }
+  .pdf-print-one > .pdf-doc:not(.pdf-print-selected) { display: none !important; }
+  .pdf-print-one > .pdf-print-selected { break-before: auto !important; page-break-before: auto !important; }
   .pdf-document { display: block !important; max-width: none; width: auto; margin: 0; padding: 0; font-size: 11pt; }
   .pdf-doc { margin: 0 !important; padding: 0 !important; border: 0 !important; }
   .pdf-doc + .pdf-doc { break-before: page; page-break-before: always; }
