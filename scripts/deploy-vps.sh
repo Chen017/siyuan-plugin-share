@@ -40,11 +40,7 @@ git merge --ff-only "$expected_sha"
 docker compose build --pull --no-cache web
 # Resolve the configured build tag rather than the still-running old container.
 new_image=$(docker image inspect siyuan-share-web:latest --format '{{.Id}}')
-if [[ -f php-site/config.php ]]; then
-    config_gid=$(docker run --rm --network none --entrypoint id "$new_image" -g www-data)
-    chgrp "$config_gid" php-site/config.php
-    chmod 640 php-site/config.php
-fi
+bash "$ops_dir/prepare-config.sh" "$new_image"
 docker run --rm --network none --entrypoint php "$new_image" -r 'if (PHP_MAJOR_VERSION !== 8 || PHP_MINOR_VERSION !== 3 || PHP_VERSION_ID < 80336) exit(1); echo "Built PHP ", PHP_VERSION, "\n";'
 printf '%s\n' "$expected_sha" > "$backup_dir/source-after.txt"
 printf '%s\n' "$new_image" > "$backup_dir/image-after.txt"

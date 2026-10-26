@@ -537,7 +537,9 @@ def main():
         try:
             if args.php:
                 php = str(Path(args.php).resolve())
-                php_args = [php, '-d', 'error_reporting=32767', '-d', 'log_errors=1', '-d', 'display_errors=0', '-d', 'error_log=' + str(php_log)]
+                sessions = work / 'sessions'
+                sessions.mkdir()
+                php_args = [php, '-d', 'error_reporting=32767', '-d', 'log_errors=1', '-d', 'display_errors=0', '-d', 'error_log=' + str(php_log), '-d', 'session.save_path=' + str(sessions)]
                 for path in app.rglob('*.php'):
                     command([*php_args, '-l', str(path)], stdout=subprocess.DEVNULL)
                 command([*php_args, str(ROOT / 'tests/runtime.php'), str(app / 'bootstrap.php')])

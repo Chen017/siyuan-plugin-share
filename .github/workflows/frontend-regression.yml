@@ -2,10 +2,20 @@ name: Reader frontend regression
 
 on:
   push:
-    branches: [main, 'beta/**']
-    paths: ['php-site/**', 'tests/frontend.cjs', 'tests/reader-ui.cjs', 'tests/pdf-text-layer.*', '.github/workflows/frontend-regression.yml']
+    branches: ['beta/**']
+    paths:
+      - 'php-site/**'
+      - 'index.js'
+      - 'index.css'
+      - 'plugin.json'
+      - 'i18n/**'
+      - 'tests/frontend.cjs'
+      - 'tests/reader-ui.cjs'
+      - 'tests/pdf-text-layer.*'
+      - '.github/workflows/frontend-regression.yml'
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -20,6 +30,10 @@ jobs:
           node-version: '24'
       - name: Install isolated DOM test runtime
         run: npm install --prefix "$RUNNER_TEMP/reader-test" --no-save jsdom@26.1.0 jspdf@4.0.0
+      - name: Check plugin and reader syntax and JSON manifests
+        run: |
+          for file in index.js php-site/assets/*.js; do node --check "$file"; done
+          node -e "for (const path of ['plugin.json', 'i18n/en_US.json', 'i18n/zh_CN.json']) JSON.parse(require('node:fs').readFileSync(path, 'utf8'))"
       - name: Verify Markdown, accessibility and lazy diagram loading
         run: |
           NODE_PATH="$RUNNER_TEMP/reader-test/node_modules" node tests/frontend.cjs

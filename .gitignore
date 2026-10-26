@@ -1,2 +1,5 @@
 .test-output/
 tests/__pycache__/
+php-site/storage/
+php-site/uploads/
+backups/

@@ -1,5 +1,7 @@
 # 思源笔记分享服务 - Docker Compose 部署指南（直拉镜像）
 
+> 此指南展示上游预构建 Docker Hub 镜像的安装方式，不代表本 fork 当前的管理员专用代码。部署本 fork 请使用[源码构建指南](README_DOCKER_BUILD.md)。上游镜像配置与功能以所选标签为准。
+
 本文档使用 `docker compose` 直接拉取并运行镜像，不需要本地构建镜像。
 
 ## 前置要求

@@ -6,6 +6,14 @@
 # IDE
 .vscode
 .idea
+.test-output/
+.codex-remote-attachments/
+.github/
+tests/
+scripts/
+docs/
+backups/
+**/__pycache__/
 *.swp
 *.swo
 *~
@@ -36,6 +44,7 @@ Dockerfile
 php-site/storage/
 php-site/uploads/
 php-site/config.php
+php-site/Injection.md
 
 # Temporary files
 *.log

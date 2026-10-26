@@ -138,15 +138,17 @@ docker-compose -f docker-compose.nas.yml restart
 2. 添加任务
 3. 脚本: `cd /share/Container/siyuan-plugin-share && ./backup-volumes.sh`
 
+备份入口 `backup-volumes.sh` 现统一调用可恢复性校验脚本，短暂停止写入后恢复服务，不再自动删除旧备份。手动打包或恢复数据库时也应先停止容器。
+
 ## 快速部署步骤
 
 ```bash
 # 1. 从仓库拉取源码。如果不使用 Git，也可以直接下载仓库的压缩包，解压后放到当前目录，效果是一样的。
-git clone https://github.com/b8l8u8e8/siyuan-plugin-share.git
+git clone https://github.com/Chen017/siyuan-plugin-share.git
 
-# 2. 准备配置文件(必须复制)
+# 2. 检查仓库已附带的配置文件
 cd siyuan-plugin-share
-cp php-site/config.example.php php-site/config.php
+# 按需编辑 php-site/config.php；不需要复制不存在的示例文件。
 
 # 3. 使用 NAS 配置启动
 docker-compose -f docker-compose.nas.yml up -d

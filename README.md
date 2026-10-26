@@ -22,6 +22,7 @@ This is **[Chen017](https://github.com/Chen017)'s personal fork** of [b8l8u8e8/s
 | PDF export | Single/batch downloads in a dialog, selectable text, hidden attribution and visitor quota indicators. [Details](docs/GUEST_PDF_EXPORT.md). |
 | Accessibility & SEO | Clearer links, correct button states and TOC focus, main landmarks, working image-download controls, page descriptions, robots.txt and real 404 responses. |
 | Deployment | Local-only `127.0.0.1:8081`, versioned static assets, GitHub Actions deployment and isolated regression tests. Backup and restore-verification scripts are included. |
+| Maintenance | PHP modules with unchanged routes/API contracts, obsolete style/helper cleanup, one verified backup entry point, consistent rendered-page health checks, private configuration permissions and CI before deployment. [Maintenance guide](docs/MAINTENANCE.md). |
 
 Earlier changes and commit references: [Fork changes](CUSTOM_FEATURES.md) · [PHP upgrade record](docs/PHP83_BETA.md).
 

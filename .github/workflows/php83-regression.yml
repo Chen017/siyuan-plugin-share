@@ -2,7 +2,7 @@ name: PHP 8.3 regression
 
 on:
   push:
-    branches: [main, 'beta/**']
+    branches: ['beta/**']
     paths:
       - 'php-site/**'
       - 'tests/**'
@@ -10,8 +10,10 @@ on:
       - '.dockerignore'
       - 'docker-compose*.yml'
       - '.github/workflows/php83-regression.yml'
+      - '.github/workflows/deploy.yml'
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -27,11 +29,13 @@ jobs:
           python-version: '3.11'
       - name: Build current PHP 8.3 image
         run: docker build --pull --no-cache -f php-site/Dockerfile -t siyuan-share:php83-test .
+      - name: Verify plugin and server archives without publishing
+        run: python tests/package.py
       - name: Test PHP runtime, database, HTTP APIs and Nginx rules
         run: python3 tests/run.py --docker siyuan-share:php83-test
       - name: Verify consistent backup and restoration using disposable data
         run: |
-          bash -n scripts/backup-data.sh scripts/deploy-vps.sh tests/backup-fixture.sh
+          bash -n scripts/*.sh backup-volumes.sh tests/backup-fixture.sh
           python tests/deploy-guard.py
           php_file=scripts/data-snapshot.php
           docker run --rm --entrypoint php -v "$PWD/scripts:/ops:ro" siyuan-share:php83-test -l "/ops/$(basename "$php_file")"

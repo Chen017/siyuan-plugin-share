@@ -57,6 +57,10 @@ jobs:
             echo "Invalid tag format: ${VERSION}"
             exit 1
           fi
+          if [[ ! "$VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]]; then
+            echo "Version must be a plain filename component."
+            exit 1
+          fi
 
           echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
 
@@ -123,62 +127,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          ROOT_ITEMS=(
-            i18n
-            CHANGELOG.md
-            LICENSE
-            README.md
-            README_zh_CN.md
-            icon.png
-            index.css
-            index.js
-            plugin.json
-            preview.png
-          )
-
-          PHP_SITE_ITEMS=(
-            assets
-            vendor
-            config.example.php
-            index.php
-          )
-
-          for item in "${ROOT_ITEMS[@]}"; do
-            if [ ! -e "${item}" ]; then
-              echo "Missing required path: ${item}"
-              exit 1
-            fi
-          done
-
-          for item in "${PHP_SITE_ITEMS[@]}"; do
-            if [ ! -e "php-site/${item}" ]; then
-              echo "Missing required path: php-site/${item}"
-              exit 1
-            fi
-          done
-
-          rm -f package.zip "php-site-${VERSION}.zip"
-
-          zip -r package.zip \
-            i18n \
-            CHANGELOG.md \
-            LICENSE \
-            README.md \
-            README_zh_CN.md \
-            icon.png \
-            index.css \
-            index.js \
-            plugin.json \
-            preview.png
-
-          (
-            cd php-site
-            zip -r "../php-site-${VERSION}.zip" \
-              assets \
-              vendor \
-              config.example.php \
-              index.php
-          )
+          python3 scripts/package.py --output . --version "$VERSION"
 
       - name: Create release and upload assets
         uses: actions/github-script@v7

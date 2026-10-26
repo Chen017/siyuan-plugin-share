@@ -2,6 +2,7 @@
 declare(strict_types=1);
 // Isolated bootstrap only, provided by tests/run.py. One fresh visitor per process.
 $_SERVER['SCRIPT_NAME'] = '/index.php';
+ini_set('session.save_path', dirname($argv[1]) . '/storage');
 $rateRace = ($argv[5] ?? '') === 'rate';
 $_SERVER['REMOTE_ADDR'] = $rateRace ? '192.0.2.1' : '192.0.2.' . (int)$argv[3];
 session_id('pdfrace' . bin2hex(random_bytes(12)));

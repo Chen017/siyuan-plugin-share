@@ -15,7 +15,6 @@ if ($path === '/login') {
     if ($_SERVER['REQUEST_METHOD'] === 'POST') check_csrf();
     if (current_user()) redirect('/dashboard');
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-        check_csrf();
         $stmt = db()->prepare('SELECT * FROM users WHERE username = ? AND role = "admin" AND disabled = 0 LIMIT 1');
         $stmt->execute([trim((string)($_POST['username'] ?? ''))]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);

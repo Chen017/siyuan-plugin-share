@@ -69,6 +69,6 @@ docker run --rm --network none --read-only --volumes-from "$container:ro" \
     '
 docker start "$container" >/dev/null
 restart_needed=0
-docker exec "$container" curl --retry 20 --retry-connrefused --retry-delay 1 --fail --silent --output /dev/null http://127.0.0.1/login
+docker exec "$container" curl --retry 20 --retry-connrefused --retry-delay 1 --fail --silent http://127.0.0.1/login | grep -F '<h1>Sign in</h1>' >/dev/null
 echo 'Backup restoration and SQLite integrity verified; detailed snapshot retained privately.'
 printf 'BACKUP_DIR=%s\n' "$backup_dir"

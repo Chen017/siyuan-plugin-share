@@ -39,8 +39,6 @@ check((int)$pdo->query('PRAGMA foreign_keys')->fetchColumn() === 1, 'Foreign key
 check(password_verify('123456', $pdo->query('SELECT password_hash FROM users')->fetchColumn()), 'Seed password hashing');
 
 check(mb_strlen('思源笔记') === 4, 'UTF-8 mbstring');
-check(string_len('思源笔记') === 4, 'UTF-8 app string length');
-check(string_sub('思源笔记', 1, 2) === '源笔', 'UTF-8 app substring');
 check(compute_doc_content_hash('笔记') === hash('sha256', '笔记'), 'Content hashing');
 check(sanitize_asset_path('../private.db') === '', 'Reject traversal');
 check(sanitize_asset_path('assets/image.png') === 'assets/image.png', 'Allow normal asset path');

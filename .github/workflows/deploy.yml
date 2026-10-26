@@ -24,7 +24,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  php-regression:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/php83-regression.yml
+  reader-regression:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/frontend-regression.yml
   deploy:
+    needs: [php-regression, reader-regression]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -47,15 +54,11 @@ jobs:
             git diff --quiet
             git diff --cached --quiet
             git fetch origin main
+            test "$(git rev-parse origin/main)" = '${{ github.sha }}' || { echo 'Main changed after regression; refusing an untested deployment.' >&2; exit 1; }
             git merge --ff-only origin/main
             docker compose build --pull web
             docker run --rm --network none --entrypoint php siyuan-share-web:latest -r 'if (PHP_MAJOR_VERSION !== 8 || PHP_MINOR_VERSION !== 3 || PHP_VERSION_ID < 80336) exit(1); echo "Built PHP ", PHP_VERSION, "\n";'
-            # Git checkout respects umask 077. The bind-mounted configuration must remain readable by FPM.
-            if [ -f php-site/config.php ]; then
-              config_gid=$(docker run --rm --network none --entrypoint id siyuan-share-web:latest -g www-data)
-              chgrp "$config_gid" php-site/config.php
-              chmod 640 php-site/config.php
-            fi
+            bash scripts/prepare-config.sh siyuan-share-web:latest
             migration_backup=
             # This schema retirement gets one verified backup; routine upgrades keep the existing policy.
             if [ -s /core-before.json ] || ! docker exec siyuan-share-web php -r '$c = is_file("/var/www/html/config.php") ? require "/var/www/html/config.php" : []; $p = new PDO("sqlite:" . ($c["db_path"] ?? "/var/www/html/storage/app.db")); $p->exec("PRAGMA query_only=ON"); $s=$p->prepare("SELECT value FROM settings WHERE key=?"); $s->execute(["admin_only_schema_v1"]); exit($s->fetchColumn() === "1" ? 0 : 1);'; then

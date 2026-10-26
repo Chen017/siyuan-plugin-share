@@ -160,7 +160,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # 同时探测 nginx 和 PHP-FPM，login 是 PHP 路由，200 表示 FPM 正常
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -sf http://127.0.0.1/login -o /dev/null
+    CMD curl -fsS http://127.0.0.1/login | grep -F '<h1>Sign in</h1>' >/dev/null
 
 EXPOSE 80
 
