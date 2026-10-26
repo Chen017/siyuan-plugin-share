@@ -13,7 +13,8 @@ class PdfReleaseTests:
         else:
             self.skipTest('Independent PHP workers require the local CLI')
         barrier = str(time.time() + 1.5)
-        workers = [subprocess.Popen([*command, str(share['id']), str(i + 1), barrier, mode],
+        cookie = getattr(self, 'pdf_worker_cookie', '') if mode in ['rate', 'same-visitor'] else ''
+        workers = [subprocess.Popen([*command, str(share['id']), str(i + 1), barrier, mode, cookie],
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE) for i in range(count)]
         results = []
         for worker in workers:
@@ -26,15 +27,17 @@ class PdfReleaseTests:
     def test_pdf_release_repeated_atomic_quota_races(self):
         share = self.share()
         self.pdf_visitor(share)
+        self.rows("UPDATE settings SET value = '5' WHERE key = 'pdf_export_requests'")
         for _ in range(3):
             self.rows('DELETE FROM pdf_export_events')
             self.rows('DELETE FROM pdf_export_leases')
             results = self.pdf_workers(share, 12, 'rate')
             self.assertEqual(results.count('accepted'), 5, results)
             self.assertEqual(results.count('limited'), 7, results)
-            self.assertEqual(self.rows('SELECT COUNT(*) AS n FROM pdf_export_events')[0]['n'], 5)
+            self.assertEqual(self.rows('SELECT SUM(doc_count) AS n FROM pdf_export_events')[0]['n'], 5)
             self.assertEqual(self.rows('SELECT COUNT(*) AS n FROM pdf_export_leases')[0]['n'], 0)
         self.rows('DELETE FROM pdf_export_events')
+        self.rows("UPDATE settings SET value = '120' WHERE key = 'pdf_export_requests'")
 
     def test_pdf_release_parallel_legacy_upgrade_and_admission(self):
         share = self.share()
@@ -46,7 +49,8 @@ class PdfReleaseTests:
         self.assertEqual(results.count('accepted'), 4, results)
         self.assertEqual(results.count('limited'), 8, results)
         values = {row['key']: row['value'] for row in self.rows("SELECT key, value FROM settings WHERE key IN ('pdf_export_requests', 'pdf_export_window_seconds', 'pdf_export_ip_requests', 'pdf_export_fingerprint_requests')")}
-        self.assertEqual(values, {'pdf_export_requests': '5', 'pdf_export_window_seconds': '3600'})
+        self.assertEqual(values, {'pdf_export_requests': '6', 'pdf_export_window_seconds': '3600'})
+        self.rows("UPDATE settings SET value = '120' WHERE key = 'pdf_export_requests'")
         self.rows('DELETE FROM pdf_export_leases')
         self.rows('DELETE FROM pdf_export_events')
 

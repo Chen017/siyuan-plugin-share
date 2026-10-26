@@ -56,10 +56,12 @@ Chen017 also contributed [dark-mode code highlighting #38](https://github.com/b8
 
 Original project by **b8l8u8e8 and contributors**. Personal fork maintained by **Chen017**. [MIT License](LICENSE).
 
-## Guest PDF and batch export
+## Guest PDF and individual batch downloads
 
-Guests can export a document, subtree, entire shared scope or selected documents after satisfying the share's password, expiration and visitor restrictions. Batch export combines documents into one PDF with a new page per document; choose **Save as PDF** in the browser print dialog.
+After opening a shared document, guests can use the PDF action beside Source. Export a document, subtree, shared scope or selected documents: Save triggers sequential browser downloads, **one independent PDF per document, without merging**. Light, dark and mobile exports always use white backgrounds.
 
-PDFs always use a white background and print-friendly text, tables and code colors, including when reading in dark mode. Math, images and supported diagrams reuse the site's rendering. The server prepares bounded authorized content; the visitor's browser renders the PDF.
+Each server-issued visitor Cookie has its own rolling allowance, defaulting to 120 documents per 60 minutes; administrators may configure up to 256. Visitors sharing a campus or office IP do not share personal quotas. A new Cookie with an exactly matching recent fingerprint requires one server-verified CAPTCHA, then uses its own allowance without repeated verification during that Cookie's lifetime. CAPTCHA never refills an exhausted Cookie's quota. Anonymous Cookies and fingerprints cannot reliably identify natural persons.
 
-Manage export under **Admin → Site settings → Guest PDF export**. Common controls are the export switch, time window and one allowance, defaulting to **5 exports per hour**. Either an exhausted IP or browser fingerprint blocks export; changing only one does not reset the allowance. Resource limits are preset and collapsed under advanced settings. See [export configuration and limits](docs/GUEST_PDF_EXPORT.md).
+A server-side transaction permits only one active export task per visitor Cookie, including across tabs, windows and website sessions. Existing access/password/expiry checks and preset concurrency, batch and resource limits remain in place.
+
+Direct downloads preserve visual layout as page images, so text is generally not selectable. Native Print this document remains available for selectable text. Browsers may ask permission for multiple downloads. See [configuration, limitations and tests](docs/GUEST_PDF_EXPORT.md).

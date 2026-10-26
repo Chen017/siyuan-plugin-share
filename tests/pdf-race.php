@@ -6,12 +6,14 @@ $rateRace = ($argv[5] ?? '') === 'rate';
 $_SERVER['REMOTE_ADDR'] = $rateRace ? '192.0.2.1' : '192.0.2.' . (int)$argv[3];
 session_id('pdfrace' . bin2hex(random_bytes(12)));
 require $argv[1];
+if (($argv[6] ?? '') !== '') $_COOKIE['sps_pdf_visitor'] = $argv[6];
+pdf_visitor_id();
 while (microtime(true) < (float)$argv[4]) usleep(1000);
 $deadline = microtime(true) + 5;
 while (true) {
     try {
         $lease = pdf_export_admit((int)$argv[2], hash('sha256', $argv[3]));
-        if ($rateRace) pdf_export_release($lease);
+        if ($rateRace) { pdf_visitor_claim((int)$argv[2], $lease, 0); pdf_export_release($lease); }
         echo 'accepted';
         break;
     } catch (RuntimeException $error) {

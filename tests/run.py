@@ -24,6 +24,7 @@ import urllib.request
 import uuid
 from pdf_export import PdfExportTests
 from pdf_release import PdfReleaseTests
+from pdf_cookie import PdfCookieTests
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = """<?php
@@ -46,9 +47,10 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 class Client:
     def __init__(self, base):
         self.base = base
+        self.cookies = http.cookiejar.CookieJar()
         self.opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}), NoRedirect(),
-            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+            urllib.request.HTTPCookieProcessor(self.cookies))
 
     def request(self, path, data=None, headers=None, method=None, files=None):
         headers = dict(headers or {})
@@ -82,7 +84,7 @@ class Client:
         return self.request(path, {'csrf': match[1].decode(), **fields})
 
 
-class Regression(PdfReleaseTests, PdfExportTests, unittest.TestCase):
+class Regression(PdfCookieTests, PdfReleaseTests, PdfExportTests, unittest.TestCase):
     base = ''
     docker = False
     container = None

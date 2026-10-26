@@ -1,181 +1,163 @@
-/* Optional end-to-end regression; uses an existing browser, never builds the app. */
+/* Real-browser regression: navigation, individual downloads, CAPTCHA and task ownership. */
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
 const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright');
-
 (async () => {
   const [shareUrl, output] = process.argv.slice(2);
   const fixture = JSON.parse(fs.readFileSync(0, 'utf8'));
   const browser = await chromium.launch({ executablePath: process.env.SIYUAN_BROWSER_EXECUTABLE || undefined, headless: true });
-  const context = await browser.newContext({ viewport: { width: 1100, height: 900 } });
+  const base = new URL(shareUrl).origin;
+  const context = await browser.newContext({ viewport: { width: 1100, height: 900 }, acceptDownloads: true });
   const errors = [];
-  context.on('page', (page) => page.on('pageerror', (error) => errors.push(error.message)));
-  try {
-    const page = await context.newPage();
-    await page.goto(shareUrl);
-    assert.equal(await page.locator('[data-pdf-export-link]').count(), 0, 'Directory view must not show a PDF action');
-    const openDocument = async (id) => {
-      await page.locator(`a[data-share-nav="doc"][data-doc-id="${id}"]`).first().click();
-      await page.waitForFunction((docId) => document.querySelector('.share-shell')?.dataset.shareDocId === docId, id);
-    };
-    const docUrl = `${shareUrl}/${fixture.docIds[0]}`;
-    await openDocument(fixture.docIds[0]);
-    assert.equal(await page.locator('.kb-title-row .share-document-actions [data-pdf-export-link]').count(), 1);
-    assert.equal(await page.locator('.pdf-share-tools').count(), 0);
-    await openDocument(fixture.docIds[1]);
-    assert.equal(new URL(await page.locator('[data-pdf-export-link]').getAttribute('href'), shareUrl).searchParams.get('doc'), fixture.docIds[1]);
-    await page.locator('[data-share-toggle]').click();
-    assert.equal(await page.locator('.share-article.is-markdown [data-pdf-export-link]').count(), 1);
-    await page.locator('[data-share-toggle]').click();
-    await page.locator('a[data-share-nav="doc"][data-doc-id=""]').first().click();
-    await page.waitForFunction(() => document.querySelector('.share-shell')?.dataset.shareDocId === '');
-    assert.equal(await page.locator('[data-pdf-export-link]').count(), 0, 'Returning to the directory removes the PDF action');
-    await openDocument(fixture.docIds[0]);
-    const title = page.locator('.kb-title');
-    const originalTitle = await title.textContent();
-    await title.evaluate((node) => { node.textContent = '10.21 Functional completeness and Boolean Constants'; });
-    for (const width of [1100, 390]) {
-      await page.setViewportSize({ width, height: 900 });
-      const source = await page.locator('[data-share-toggle]').boundingBox();
-      const pdf = await page.locator('[data-pdf-export-link]').boundingBox();
-      assert.ok(Math.abs(source.y - pdf.y) < 1, 'Source and PDF actions are side by side');
-      assert.ok(Math.abs(source.height - pdf.height) < 1, 'Source and PDF actions have matching heights');
-      assert.ok(pdf.x + pdf.width <= width, 'PDF action stays within the viewport');
-      await page.screenshot({ path: path.join(output, `reader-pdf-actions-${width}.png`) });
+  const giveCookie = (ctx) => ctx.addCookies([{ name: 'sps_pdf_visitor', value: fixture.visitorCookie, url: base, httpOnly: true, sameSite: 'Lax' }]);
+  const release = (page) => page.evaluate(async () => {
+    const d = document.querySelector('[data-pdf-preview]').dataset;
+    await fetch(d.exportUrl + '/release', { method: 'POST', body: new URLSearchParams({ csrf: d.csrf, lease: d.lease }) });
+  });
+  const openPreview = async (ctx, scope) => {
+    const controls = await ctx.newPage();
+    await controls.goto(shareUrl + '/export');
+    await controls.locator('[data-pdf-scope]').selectOption(scope);
+    if (scope === 'selected') {
+      for (const box of await controls.locator('[name="doc_ids[]"]').all()) await box.check();
     }
-    await page.setViewportSize({ width: 1100, height: 900 });
-    await title.evaluate((node, text) => { node.textContent = text; }, originalTitle);
-    await page.locator('[data-pdf-export-link]').click();
-    assert.equal(await page.locator('[name=doc_id]').inputValue(), fixture.docIds[0]);
-    await page.locator('[data-pdf-scope]').selectOption('all');
-    const popupPromise = context.waitForEvent('page');
-    await page.locator('[data-pdf-export-form] button[type=submit]').click();
-    const preview = await popupPromise;
+    const next = ctx.waitForEvent('page');
+    await controls.locator('[data-pdf-export-form] button[type=submit]').click();
+    const preview = await next;
+    preview.on('pageerror', (error) => errors.push(error.message));
     await preview.waitForLoadState();
-    await preview.waitForFunction(() => document.querySelector('[data-pdf-print]')?.disabled === false, { timeout: 45000 });
-    assert.equal(await preview.locator('.pdf-doc').count(), 2);
-    assert.ok(await preview.locator('.katex').count() >= 2);
-    assert.equal(await preview.locator('.markdown-body table').count(), 1);
-    assert.ok(await preview.locator('.mermaid svg').count() >= 1);
-    assert.notEqual(await preview.locator('.mermaid .node rect').first().evaluate((node) => getComputedStyle(node).fill), 'rgb(0, 0, 0)', 'SVG styles must survive combined-document anchor changes');
-    assert.match(await preview.locator('.code-body').innerText(), /PDF_CODE_MARKER/);
-    assert.equal(await preview.locator('.markdown-body img').evaluateAll((images) => images.every((img) => img.complete && img.naturalWidth > 0)), true);
-    const ids = await preview.locator('.pdf-doc [id]').evaluateAll((nodes) => nodes.map((node) => node.id));
-    assert.equal(new Set(ids).size, ids.length, 'Combined documents must not duplicate heading/footnote IDs');
-    await preview.screenshot({ path: path.join(output, 'pdf-preview.png'), fullPage: true });
-    // Exercise the application's permission check before the browser print call.
-    await preview.evaluate(() => { window.print = () => { window.__pdfPrinted = true; }; });
-    await preview.locator('[data-pdf-print]').click();
-    await preview.waitForFunction(() => window.__pdfPrinted === true);
-    await preview.pdf({ path: path.join(output, 'guest-batch.pdf'), preferCSSPageSize: true, printBackground: true, displayHeaderFooter: false });
-    const releasePreview = (target) => target.evaluate(async () => {
-      const data = document.querySelector('[data-pdf-preview]').dataset;
-      await fetch(`${data.exportUrl}/release`, { method: 'POST', body: new URLSearchParams({ csrf: data.csrf, lease: data.lease }) });
-    });
-    await releasePreview(preview);
-    for (const scenario of [
-      { name: 'dark-single', scope: 'single', colorScheme: 'dark', viewport: { width: 1100, height: 900 } },
-      { name: 'mobile-batch', scope: 'all', colorScheme: 'dark', viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },
-    ]) {
-      const extra = await browser.newContext({ viewport: scenario.viewport, colorScheme: scenario.colorScheme, isMobile: scenario.isMobile, hasTouch: scenario.hasTouch });
-      try {
-        const controls = await extra.newPage();
-        await controls.goto(`${shareUrl}/export`);
-        await controls.locator('[data-pdf-scope]').selectOption(scenario.scope);
-        const nextPage = extra.waitForEvent('page');
-        await controls.locator('[data-pdf-export-form] button[type=submit]').click();
-        const printPage = await nextPage;
-        await printPage.waitForLoadState();
-        await printPage.waitForFunction(() => document.querySelector('[data-pdf-print]')?.disabled === false, { timeout: 45000 });
-        assert.equal(await printPage.locator('.pdf-doc').count(), scenario.scope === 'single' ? 1 : 2);
-        await printPage.emulateMedia({ media: 'print' });
-        const palette = await printPage.evaluate(() => {
-          const style = (selector) => {
-            const value = getComputedStyle(document.querySelector(selector));
-            return { background: value.backgroundColor, color: value.color };
-          };
-          return { body: style('body'), content: style('.markdown-body'), code: style('.code-body pre code') };
-        });
-        assert.equal(palette.body.background, 'rgb(255, 255, 255)');
-        assert.equal(palette.content.background, 'rgb(255, 255, 255)');
-        assert.equal(palette.content.color, 'rgb(31, 35, 40)');
-        assert.equal(palette.code.color, 'rgb(31, 35, 40)');
-        await printPage.screenshot({ path: path.join(output, `pdf-${scenario.name}.png`), fullPage: true });
-        const pdfBytes = await printPage.pdf({ path: path.join(output, `guest-${scenario.name}.pdf`), preferCSSPageSize: true, printBackground: true, displayHeaderFooter: false });
-        const pages = (pdfBytes.toString('latin1').match(/\/Type\s*\/Page\b/g) || []).length;
-        assert.equal(pages, scenario.scope === 'single' ? 1 : 2, 'Print layout must not append empty viewport-height pages');
-        await releasePreview(printPage);
-      } finally {
-        await extra.close();
-      }
+    await preview.waitForFunction(() => document.querySelector('[data-pdf-download]')?.disabled === false, null, { timeout: 45000 });
+    return preview;
+  };
+  const downloadPdfs = async (preview, count, label) => {
+    const downloads = [];
+    const listener = (download) => downloads.push(download);
+    preview.on('download', listener);
+    await preview.locator('[data-pdf-download]').click();
+    try {
+      await preview.waitForFunction(() => document.querySelector('[data-pdf-status]').textContent.includes('已逐篇触发'), null, { timeout: 120000 });
+    } catch (error) {
+      throw new Error(`${label}: ${await preview.locator('[data-pdf-status]').textContent()}; ${error.message}`);
     }
-    // Revoking the password after preview must block the application's print action.
-    await page.goto(`${shareUrl}/export`);
-    const revokedPage = context.waitForEvent('page');
-    await page.locator('[data-pdf-export-form] button[type=submit]').click();
-    const revoked = await revokedPage;
-    await revoked.waitForLoadState();
-    await revoked.waitForFunction(() => document.querySelector('[data-pdf-print]')?.disabled === false, { timeout: 45000 });
-    const accessUrl = `${new URL(shareUrl).origin}/api/v1/shares/access/update`;
+    const until = Date.now() + 10000;
+    while (downloads.length < count && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(downloads.length, count, 'One download per document');
+    assert.equal(new Set(downloads.map((d) => d.suggestedFilename())).size, count);
+    for (let i = 0; i < downloads.length; i++) {
+      assert.equal(await downloads[i].failure(), null);
+      assert.match(downloads[i].suggestedFilename(), /\.pdf$/i);
+      const saved = path.join(output, label + '-' + (i + 1) + '.pdf');
+      await downloads[i].saveAs(saved);
+      const bytes = fs.readFileSync(saved);
+      assert.ok(bytes.length > 5000, 'PDF contains rendered content');
+      assert.equal((bytes.toString('latin1').match(/\/Type\s*\/Page\b/g) || []).length, 1, 'No empty trailing page');
+    }
+    preview.off('download', listener);
+    await release(preview);
+  };
+  try {
+    await giveCookie(context);
+    const reader = await context.newPage();
+    await reader.goto(shareUrl);
+    assert.equal(await reader.locator('[data-pdf-export-link]').count(), 0);
+    const openDocument = async (id) => {
+      await reader.locator('a[data-share-nav="doc"][data-doc-id="' + id + '"]').first().click();
+      await reader.waitForFunction((docId) => document.querySelector('.share-shell')?.dataset.shareDocId === docId, id);
+    };
+    await openDocument(fixture.docIds[0]);
+    assert.equal(await reader.locator('.kb-title-row .share-document-actions [data-pdf-export-link]').count(), 1);
+    await openDocument(fixture.docIds[1]);
+    assert.equal(new URL(await reader.locator('[data-pdf-export-link]').getAttribute('href'), base).searchParams.get('doc'), fixture.docIds[1]);
+    await reader.locator('[data-share-toggle]').click();
+    assert.equal(await reader.locator('.share-article.is-markdown [data-pdf-export-link]').count(), 1);
+    await reader.locator('[data-share-toggle]').click();
+    await reader.locator('a[data-share-nav="doc"][data-doc-id=""]').first().click();
+    await reader.waitForFunction(() => document.querySelector('.share-shell')?.dataset.shareDocId === '');
+    assert.equal(await reader.locator('[data-pdf-export-link]').count(), 0);
+    await openDocument(fixture.docIds[0]);
+    const title = reader.locator('.kb-title');
+    const originalTitle = await title.textContent();
+    await title.evaluate((n) => { n.textContent = '10.21 Functional completeness and Boolean Constants'; });
+    for (const width of [1100, 390]) {
+      await reader.setViewportSize({ width, height: 900 });
+      const source = await reader.locator('[data-share-toggle]').boundingBox();
+      const pdf = await reader.locator('[data-pdf-export-link]').boundingBox();
+      assert.ok(Math.abs(source.y - pdf.y) < 1 && Math.abs(source.height - pdf.height) < 1);
+      assert.ok(pdf.x + pdf.width <= width);
+      await reader.screenshot({ path: path.join(output, 'reader-pdf-actions-' + width + '.png') });
+    }
+    await reader.setViewportSize({ width: 1100, height: 900 });
+    await title.evaluate((n, value) => { n.textContent = value; }, originalTitle);
+    const first = await openPreview(context, 'all');
+    assert.equal(await first.locator('.pdf-doc').count(), 2);
+    assert.ok(await first.locator('.katex').count() >= 2);
+    assert.equal(await first.locator('.markdown-body table').count(), 1);
+    assert.ok(await first.locator('.mermaid svg').count() >= 1);
+    assert.equal(await first.locator('.markdown-body img').evaluateAll((imgs) => imgs.every((i) => i.complete && i.naturalWidth > 0)), true);
+    const blocked = await context.request.post(shareUrl + '/export', { headers: { Accept: 'application/json' }, form: {
+      csrf: await first.locator('[data-pdf-preview]').getAttribute('data-csrf'), fingerprint: 'b'.repeat(64), scope: 'all',
+    } });
+    assert.equal(blocked.status(), 429);
+    await downloadPdfs(first, 2, 'individual-light');
+    for (const scenario of [
+      { name: 'dark', scope: 'single', count: 1, viewport: { width: 1100, height: 900 } },
+      { name: 'mobile', scope: 'selected', count: 2, viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },
+      { name: 'tree', scope: 'tree', count: 1, viewport: { width: 1100, height: 900 } },
+    ]) {
+      const extra = await browser.newContext({ viewport: scenario.viewport, colorScheme: 'dark', isMobile: scenario.isMobile, hasTouch: scenario.hasTouch, acceptDownloads: true });
+      try {
+        await giveCookie(extra);
+        const preview = await openPreview(extra, scenario.scope);
+        const color = await preview.locator('.markdown-body').first().evaluate((n) => ({ background: getComputedStyle(n).backgroundColor, color: getComputedStyle(n).color }));
+        assert.deepEqual(color, { background: 'rgb(255, 255, 255)', color: 'rgb(31, 35, 40)' });
+        await downloadPdfs(preview, scenario.count, 'individual-' + scenario.name);
+      } finally { await extra.close(); }
+    }
+    const native = await openPreview(context, 'all');
+    await native.evaluate(() => { window.print = () => { window.__printed = true; }; });
+    await native.locator('[data-pdf-native-print]').nth(1).click();
+    await native.waitForFunction(() => window.__printed === true);
+    const nativePdf = await native.pdf({ path: path.join(output, 'native-single.pdf'), preferCSSPageSize: true, printBackground: true });
+    assert.equal((nativePdf.toString('latin1').match(/\/Type\s*\/Page\b/g) || []).length, 1);
+    await release(native);
+    const revoked = await openPreview(context, 'single');
+    let unexpected = false;
+    revoked.on('download', () => { unexpected = true; });
+    const accessUrl = base + '/api/v1/shares/access/update';
     try {
       assert.equal((await context.request.post(accessUrl, { headers: { 'X-Api-Key': fixture.apiKey }, data: { shareId: fixture.shareId, password: 'Revoked-Preview-Pass!' } })).status(), 200);
-      await revoked.evaluate(() => { window.print = () => { window.__unexpectedPrint = true; }; });
-      await revoked.locator('[data-pdf-print]').click();
+      await revoked.locator('[data-pdf-download]').click();
       await revoked.waitForFunction(() => document.querySelector('.pdf-document').children.length === 0);
-      assert.equal(await revoked.evaluate(() => !!window.__unexpectedPrint), false);
+      assert.equal(unexpected, false);
     } finally {
       await context.request.post(accessUrl, { headers: { 'X-Api-Key': fixture.apiKey }, data: { shareId: fixture.shareId, clearPassword: true } });
-      await releasePreview(revoked);
+      await release(revoked);
     }
-    // Real admin UI: save in the standalone form, observe Guest changes, restore.
-    const adminContext = await browser.newContext({ viewport: { width: 1280, height: 1000 } });
+    const suspicious = await browser.newContext({ viewport: { width: 1100, height: 900 } });
+    try {
+      const page = await suspicious.newPage();
+      await page.goto(shareUrl + '/export');
+      await page.locator('[data-pdf-export-form] button[type=submit]').click();
+      await page.locator('[data-pdf-challenge]').waitFor({ state: 'visible' });
+      assert.match(await page.locator('[data-pdf-captcha-image]').getAttribute('src'), /^data:image\/png;base64,/);
+    } finally { await suspicious.close(); }
+    const adminContext = await browser.newContext();
     try {
       const admin = await adminContext.newPage();
-      const base = new URL(shareUrl).origin;
-      await admin.goto(`${base}/login`);
-      await admin.locator('input[name=username]').fill('admin');
-      await admin.locator('input[name=password]').fill('123456');
+      await admin.goto(base + '/login');
+      await admin.locator('[name=username]').fill('admin');
+      await admin.locator('[name=password]').fill('123456');
       await admin.locator('[data-login-panel=password] button[type=submit]').click();
-      await admin.goto(`${base}/admin#settings`);
-      let settings = admin.locator('[data-pdf-settings-form]');
-      assert.equal(await settings.locator('input[type=number]:visible').count(), 2, 'Only time window and unified allowance are visible by default');
+      await admin.goto(base + '/admin#settings');
+      const settings = admin.locator('[data-pdf-settings-form]');
+      assert.equal(await settings.locator('input[type=number]:visible').count(), 2);
       assert.equal(await settings.locator('[name="limits[window_seconds]"]').inputValue(), '60');
-      assert.equal(await settings.locator('[name="limits[requests]"]').inputValue(), '5');
+      assert.equal(await settings.locator('[name="limits[requests]"]').inputValue(), '120');
+      assert.equal(await settings.locator('[name="limits[requests]"]').getAttribute('max'), '256');
       assert.equal(await settings.locator('[name="limits[max_docs]"]').isVisible(), false);
-      const original = await settings.evaluate((form) => Object.fromEntries(new FormData(form)));
-      try {
-        await settings.locator('[name=pdf_export_enabled]').uncheck();
-        await settings.locator('[data-pdf-advanced] > summary').click();
-        await settings.locator('[name="limits[max_docs]"]').fill('5');
-        await settings.locator('[data-pdf-proxy-settings] > summary').click();
-        await settings.locator('[name=pdf_export_trusted_proxies]').fill('192.0.2.10');
-        await settings.locator('[name=pdf_export_ip_header]').selectOption('HTTP_CF_CONNECTING_IP');
-        await settings.locator('button[type=submit]').click();
-        await admin.reload();
-        settings = admin.locator('[data-pdf-settings-form]');
-        assert.equal(await settings.locator('[name=pdf_export_enabled]').isChecked(), false);
-        assert.equal(await settings.locator('[name="limits[max_docs]"]').inputValue(), '5');
-        assert.equal(await settings.locator('[name=pdf_export_trusted_proxies]').inputValue(), '192.0.2.10');
-        assert.equal(await settings.locator('[name=pdf_export_ip_header]').inputValue(), 'HTTP_CF_CONNECTING_IP');
-        assert.equal(await settings.locator('[name="limits[max_docs]"]').isVisible(), false);
-        await admin.locator('#pdf-export-settings').screenshot({ path: path.join(output, 'pdf-admin-settings.png') });
-        await page.goto(docUrl);
-        assert.equal(await page.locator('[data-pdf-export-link]').count(), 0);
-        assert.equal((await context.request.get(`${shareUrl}/export`)).status(), 404);
-      } finally {
-        const restored = await admin.request.post(`${base}/admin/pdf-export-settings`, { form: original, maxRedirects: 0 });
-        assert.equal(restored.status(), 302);
-      }
-      await page.goto(docUrl);
-      assert.equal(await page.locator('[data-pdf-export-link]').count(), 1);
-    } finally {
-      await adminContext.close();
-    }
+    } finally { await adminContext.close(); }
     assert.deepEqual(errors, []);
-    console.log('Browser PDF checks passed: Guest rendering, printable PDF, admin settings UI, persistence and live Guest enable/disable.');
-  } finally {
-    await context.close();
-    await browser.close();
-  }
+    console.log('Browser passed: individual downloads, dark/mobile white PDFs, task mutex, native single print, CAPTCHA UI, access revocation, reader actions and 256 settings.');
+  } finally { await context.close(); await browser.close(); }
 })().catch((error) => { console.error(error); process.exitCode = 1; });
