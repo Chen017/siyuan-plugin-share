@@ -8900,7 +8900,7 @@ if (strpos($path, '/api/v1/') === 0) {
     handle_api($path);
 }
 
-if (preg_match('#^/s/([a-zA-Z0-9_-]+)/export(?:/(verify|release|claim|check|quota|captcha|captcha-verify))?$#', $path, $matches)) {
+if (preg_match('#^/s/([a-zA-Z0-9_-]+)/export(?:/(verify|release|claim|document|check|quota|captcha|captcha-verify))?$#', $path, $matches)) {
     route_pdf_export($matches[1], $matches[2] ?? '');
 }
 

@@ -13,6 +13,13 @@ function pdf_visitor_migrate(PDO $pdo): void {
     $pdo->exec('CREATE TABLE IF NOT EXISTS pdf_export_claims (
         job_token TEXT NOT NULL, doc_index INTEGER NOT NULL, PRIMARY KEY(job_token, doc_index),
         FOREIGN KEY(job_token) REFERENCES pdf_export_leases(token) ON DELETE CASCADE)');
+    $pdo->exec('CREATE TABLE IF NOT EXISTS pdf_export_documents (
+        job_token TEXT NOT NULL, doc_index INTEGER NOT NULL, document_id INTEGER NOT NULL, doc_id TEXT NOT NULL,
+        title TEXT NOT NULL, source_bytes INTEGER NOT NULL, html_bytes INTEGER NOT NULL DEFAULT 0,
+        image_count INTEGER NOT NULL DEFAULT 0, prepare_millis INTEGER NOT NULL DEFAULT 0,
+        active INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY(job_token, doc_index),
+        FOREIGN KEY(job_token) REFERENCES pdf_export_leases(token) ON DELETE CASCADE)');
     $pdo->exec('CREATE INDEX IF NOT EXISTS pdf_export_events_visitor ON pdf_export_events(visitor_hash, created_at)');
     $pdo->exec('CREATE TABLE IF NOT EXISTS pdf_export_fingerprints (
         fingerprint_hash TEXT NOT NULL, visitor_hash TEXT NOT NULL, seen_at INTEGER NOT NULL, needs_captcha INTEGER NOT NULL DEFAULT 0,

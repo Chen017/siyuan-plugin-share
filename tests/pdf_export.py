@@ -188,6 +188,17 @@ class PdfExportTests:
         self.assertIsNotNone(token, body[:200])
         return token[1].decode()
 
+    def pdf_manifest(self, body):
+        manifest = re.search(rb'<script type="application/json" data-pdf-manifest>(.*?)</script>', body, re.S)
+        self.assertIsNotNone(manifest, body[:200])
+        return json.loads(manifest[1])
+
+    def pdf_document(self, client, path, csrf, lease, index=0):
+        result = client.request(path + '/document', {'csrf': csrf, 'lease': lease, 'index': str(index)})
+        if result[0] == 200:
+            self.assertEqual(client.request(path + '/verify', {'csrf': csrf, 'lease': lease, 'finish': str(index)})[0], 200)
+        return result
+
     def pdf_notebook(self, count=4):
         docs = []
         for index in range(count):
@@ -205,10 +216,13 @@ class PdfExportTests:
         status, headers, body = self.pdf_post(client, path, csrf, scope='single', doc_id=self.name)
         self.assertEqual(status, 200, body)
         self.assertIn('no-store', headers['Cache-Control'])
-        for fragment in [b'PDF_GUEST_MARKER', b'x^2', b'<table>', b'<code', b'/res/assets/example.png', b'data-pdf-preview']:
-            self.assertIn(fragment, body)
-        self.assertNotIn(b'<script>alert(1)</script>', body)
+        self.assertNotIn(b'PDF_GUEST_MARKER', body)  # admission returns a manifest, not all rendered content
         lease = self.pdf_lease(body)
+        status, _, rendered = self.pdf_document(client, path, csrf, lease)
+        self.assertEqual(status, 200, rendered)
+        for fragment in [b'PDF_GUEST_MARKER', b'x^2', b'<table>', b'<code', b'/res/assets/example.png', b'data-pdf-preview']:
+            self.assertIn(fragment, rendered)
+        self.assertNotIn(b'<script>alert(1)</script>', rendered)
         self.assertEqual(client.request(path + '/verify', {'csrf': csrf, 'lease': lease})[0], 200)
         self.assertEqual(client.request('/dashboard')[0], 302)  # still an unauthenticated Guest
         self.assertEqual(client.request(path + '/release', {'csrf': csrf, 'lease': lease})[0], 204)
@@ -225,8 +239,11 @@ class PdfExportTests:
         ]:
             status, _, body = self.pdf_post(client, path, csrf, scope=scope, **extra)
             self.assertEqual(status, 200, body)
+            self.assertEqual(len(self.pdf_manifest(body)), len(expected))
+            lease = self.pdf_lease(body)
+            rendered = b''.join(self.pdf_document(client, path, csrf, lease, index)[2] for index in range(len(expected)))
             for i in range(4):
-                self.assertEqual(('PDF_MARKER_' + str(i)).encode() in body, i in expected, (scope, i))
+                self.assertEqual(('PDF_MARKER_' + str(i)).encode() in rendered, i in expected, (scope, i))
             client.request(path + '/release', {'csrf': csrf, 'lease': self.pdf_lease(body)})
         other = self.share(markdown='PRIVATE_OTHER_SHARE')
         self.assertNotEqual(other['id'], share['id'])
@@ -238,7 +255,7 @@ class PdfExportTests:
         self.rows(f"UPDATE share_docs SET parent_id = '{docs[1]['docId']}' WHERE share_id = {int(share['id'])} AND doc_id = '{docs[0]['docId']}'")
         status, _, body = self.pdf_post(client, path, csrf, fingerprint='d' * 64, scope='tree', doc_id=docs[0]['docId'])
         self.assertEqual(status, 200, body)
-        self.assertEqual(body.count(b'data-pdf-doc='), 3)  # cycle terminates without duplicates
+        self.assertEqual(len(self.pdf_manifest(body)), 3)  # cycle terminates without duplicates
 
     def test_pdf_password_revocation_expiry_and_deletion(self):
         from run import Client
@@ -292,6 +309,27 @@ class PdfExportTests:
         self.assertEqual(client.request(path + '/verify', {'csrf': csrf, 'lease': lease})[0], 410)
         self.assertEqual(self.pdf_post(client, path, csrf)[0], 200)
 
+    def test_pdf_incremental_batch_slots_and_shared_lease(self):
+        share, docs = self.pdf_notebook(4)
+        client, path, csrf = self.pdf_visitor(share)
+        body = self.pdf_post(client, path, csrf)[2]
+        lease = self.pdf_lease(body)
+        fields = {'csrf': csrf, 'lease': lease}
+        self.assertEqual(client.request(path + '/document', {**fields, 'index': '4'})[0], 400)
+        for index in range(3):
+            response = client.request(path + '/document', {**fields, 'index': str(index)})
+            self.assertEqual(response[0], 200, response[2][:200])
+            self.assertIn(('PDF_MARKER_' + str(index)).encode(), response[2])
+        self.assertEqual(client.request(path + '/document', {**fields, 'index': '3'})[0], 409)
+        self.assertEqual(self.pdf_post(client, path, csrf)[0], 429)
+        self.assertEqual(client.request(path + '/verify', {**fields, 'finish': '0'})[0], 200)
+        self.assertEqual(client.request(path + '/document', {**fields, 'index': '3'})[0], 200)
+        self.assertEqual(client.request(path + '/verify', {**fields, 'abandon': '1'})[0], 200)
+        self.assertEqual(client.request(path + '/document', {**fields, 'index': '0'})[0], 200)
+        self.assertEqual(self.rows('SELECT SUM(doc_count) AS n FROM pdf_export_events')[0]['n'], 4)
+        client.request(path + '/release', fields)
+        self.assertEqual(self.rows('SELECT COUNT(*) AS n FROM pdf_export_documents')[0]['n'], 0)
+
     def test_pdf_resource_budgets_and_failed_job_cleanup(self):
         share, _ = self.pdf_notebook(121)
         client, path, csrf = self.pdf_visitor(share)
@@ -301,6 +339,8 @@ class PdfExportTests:
             share = self.share(markdown=markdown)
             client, path, csrf = self.pdf_visitor(share)
             status, _, body = self.pdf_post(client, path, csrf)
+            if status == 200:
+                status, _, body = self.pdf_document(client, path, csrf, self.pdf_lease(body))
             self.assertEqual(status, 413, body[:200])
             self.assertEqual(self.rows('SELECT COUNT(*) AS n FROM pdf_export_leases')[0]['n'], 0)
         share = self.share(markdown='Small content')

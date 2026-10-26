@@ -65,6 +65,21 @@
   });
   const form = document.querySelector("[data-pdf-export-form]");
   if (form) {
+    // Warm only static PDF resources while the visitor chooses the scope.
+    // This neither creates a task nor consumes quota or requests a CAPTCHA.
+    for (const source of [form.dataset.pdfLibrary, form.dataset.pdfTextLibrary]) {
+      const link = document.createElement('link');
+      link.rel = 'preload'; link.as = 'script'; link.href = source;
+      document.head.append(link);
+    }
+    let font;
+    window.SPSPdfFont = () => font || (font = fetch(form.dataset.pdfFont, { credentials: 'same-origin' }).then(async (response) => {
+      if (!response.ok) throw new Error('来源信息字体加载失败，请重试。');
+      let binary = '';
+      for (const byte of new Uint8Array(await response.arrayBuffer())) binary += String.fromCharCode(byte);
+      return btoa(binary);
+    }).catch((error) => { font = null; throw error; }));
+    window.SPSPdfFont().catch(() => {});
     const scope = form.querySelector("[data-pdf-scope]");
     const updateScope = () => {
       form.querySelector("[data-pdf-selection]").hidden = scope.value !== "selected";
@@ -183,14 +198,15 @@
           form.append(input);
         }
         input.value = await ready;
+        let check;
         if (!challenge.hidden) {
           const answer = form.querySelector('[name=captcha_answer]').value.trim();
           if (!answer) { formStatus.textContent = '请输入图片中的验证码。'; return; }
-          await request('captcha-verify', { token: challengeToken, answer });
+          check = await request('captcha-verify', { token: challengeToken, answer });
           challenge.hidden = true;
         }
-        await refreshQuota();
-        const check = await request('check');
+        check ||= await request('check');
+        if (check.quota) showQuota(check.quota);
         if (check.captcha_required) {
           formStatus.textContent = check.error;
           await refreshChallenge();
@@ -208,51 +224,219 @@
     });
   }
 
+  function runJob(panel) {
+    const docs = JSON.parse(document.querySelector('[data-pdf-manifest]').textContent);
+    const button = panel.querySelector('[data-pdf-download]');
+    const status = panel.querySelector('[data-pdf-status]');
+    const automatic = panel.dataset.pdfAuto === '1';
+    const url = panel.dataset.exportUrl;
+    const fields = (extra = {}) => new URLSearchParams({ csrf: panel.dataset.csrf, lease: panel.dataset.lease, ...extra });
+    const completed = new Set();
+    const names = new Map();
+    const filenames = docs.map((doc, index) => {
+      let title = Array.from((doc.title || `文档-${index + 1}`).normalize('NFKC').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')).slice(0, 100).join('').replace(/[. ]+$/, '').trim() || `文档-${index + 1}`;
+      if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i.test(title)) title = `文档_${title}`;
+      const count = (names.get(title.toLowerCase()) || 0) + 1;
+      names.set(title.toLowerCase(), count);
+      return `${title}${count > 1 ? ` (${count})` : ''}.pdf`;
+    });
+    if (parent !== window && typeof parent.SPSPdfFont === 'function') window.SPSPdfFont = () => parent.SPSPdfFont();
+    let released = false;
+    let busy = false;
+    let stopRun = () => {};
+    let renewAt = Date.now() + Number(panel.dataset.pdfRenewAfter) * 1000;
+    const report = (message, state = 'progress', retryable = false) => {
+      status.textContent = message;
+      if (automatic && parent !== window) parent.postMessage({ type: 'sps-pdf-export', state, message, retryable }, location.origin);
+    };
+    const release = () => {
+      if (released) return;
+      released = true;
+      stopRun(new Error('任务已取消。'));
+      button.disabled = true;
+      navigator.sendBeacon?.(`${url}/release`, fields());
+    };
+    window.addEventListener('pagehide', release);
+    const request = async (extra, signal) => {
+      const response = await fetch(`${url}/verify`, { method: 'POST', credentials: 'same-origin', cache: 'no-store', body: fields(extra), signal });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || '导出任务已失效，请重新打开弹窗。');
+      renewAt = Date.now() + result.renew_after * 1000;
+    };
+    const run = async () => {
+      if (busy || released) return;
+      busy = true;
+      button.disabled = true;
+      const controller = new AbortController();
+      const pending = new Map();
+      const ready = new Map();
+      let next = 0;
+      let downloadIndex = 0;
+      let draining = false;
+      let error;
+      let warning = '';
+      const abort = (reason) => {
+        if (error) return;
+        error = reason;
+        controller.abort();
+        for (const item of pending.values()) item.reject(reason);
+        for (const item of ready.values()) item.reject(reason);
+        ready.clear();
+      };
+      stopRun = abort;
+      const onMessage = (message) => {
+        if (message.origin !== location.origin || message.data?.type !== 'sps-pdf-document') return;
+        const item = pending.get(message.data.index);
+        if (!item || message.source !== item.frame.contentWindow) return;
+        if (message.data.error) item.reject(new Error(message.data.error));
+        else if (message.data.blob instanceof Blob) {
+          if (message.data.warning) warning = message.data.warning;
+          item.resolve(message.data.blob);
+        }
+      };
+      window.addEventListener('message', onMessage);
+      const render = async (index) => {
+        if (error) throw error;
+        const frame = document.createElement('iframe');
+        frame.className = 'pdf-export-worker';
+        frame.name = `sps-pdf-doc-${index}-${Math.random().toString(36).slice(2)}`;
+        frame.title = `PDF 文档 ${index + 1}`;
+        frame.tabIndex = -1;
+        frame.setAttribute('aria-hidden', 'true');
+        let timeout;
+        try {
+          return await new Promise((resolve, reject) => {
+            pending.set(index, { frame, resolve, reject });
+            timeout = setTimeout(() => reject(new Error('此篇生成耗时过长，请重试剩余文档。')), 1800000);
+            frame.addEventListener('load', () => {
+              if (frame.contentWindow.location.href === 'about:blank') return;
+              const page = frame.contentDocument;
+              if (page?.querySelector('[data-pdf-child]')) return;
+              reject(new Error(page?.querySelector('[role=alert]')?.textContent || '文档准备失败，请稍后重试。'));
+            });
+            document.body.append(frame);
+            // A real same-origin document preserves fonts, protected resources,
+            // location.origin and asynchronous diagram loaders in every frame.
+            const submission = document.createElement('form');
+            submission.method = 'POST';
+            submission.action = `${url}/document`;
+            submission.target = frame.name;
+            for (const [name, value] of fields({ index })) {
+              const input = document.createElement('input');
+              input.type = 'hidden'; input.name = name; input.value = value;
+              submission.append(input);
+            }
+            document.body.append(submission);
+            HTMLFormElement.prototype.submit.call(submission);
+            submission.remove();
+          });
+        } finally {
+          clearTimeout(timeout);
+          pending.delete(index);
+          // Dispose all DOM, canvases and component instances before the next doc.
+          frame.src = 'about:blank';
+          frame.remove();
+        }
+      };
+      const drain = async () => {
+        if (draining) return;
+        draining = true;
+        try {
+          while (!error && downloadIndex < docs.length) {
+            if (completed.has(downloadIndex)) { downloadIndex++; continue; }
+            const item = ready.get(downloadIndex);
+            if (!item) break;
+            // Final permission check and slot completion share one request.
+            await request({ finish: downloadIndex, renew: '1' }, controller.signal);
+            if (error || released) throw error || new Error('任务已取消。');
+            const blobUrl = URL.createObjectURL(item.blob);
+            const anchor = document.createElement('a');
+            anchor.href = blobUrl;
+            anchor.download = filenames[downloadIndex];
+            document.body.append(anchor);
+            anchor.click();
+            anchor.remove();
+            setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
+            completed.add(downloadIndex);
+            ready.delete(downloadIndex++);
+            item.resolve();
+            report(`已下载 ${completed.size} / ${docs.length} 篇，正在准备其余文档…`);
+          }
+        } catch (reason) { abort(reason); }
+        finally { draining = false; }
+      };
+      const worker = async () => {
+        try {
+          while (!error && !released) {
+            while (next < docs.length && completed.has(next)) next++;
+            if (next >= docs.length) return;
+            const index = next++;
+            report(`已下载 ${completed.size} / ${docs.length} 篇，正在生成：${filenames[index]}`);
+            const blob = await render(index);
+            if (error) throw error;
+            // Await ordered download before preparing another doc. At most three
+            // completed PDFs can wait in memory, even if the first doc is slow.
+            await new Promise((resolve, reject) => {
+              ready.set(index, { blob, resolve, reject });
+              void drain();
+            });
+          }
+        } catch (reason) { abort(reason); }
+      };
+      let ticking = false;
+      const heartbeat = setInterval(async () => {
+        if (ticking || error || Date.now() < renewAt) return;
+        ticking = true;
+        try { await request({ renew: '1' }, controller.signal); }
+        catch (reason) { abort(reason); }
+        finally { ticking = false; }
+      }, 1000);
+      try {
+        if (Date.now() >= renewAt) await request({ renew: '1' }, controller.signal);
+        await Promise.all(Array.from({ length: docs.length > 1 ? 3 : 1 }, worker));
+        if (error) throw error;
+        release();
+        report(`已逐篇触发 ${completed.size} 个独立 PDF 下载。${warning}若文件未全部出现，请允许浏览器连续下载多个文件。`, 'done');
+      } catch (reason) {
+        abort(reason);
+        let retryable = !released;
+        if (retryable) {
+          try { await request({ abandon: '1', renew: '1' }); }
+          catch { retryable = false; release(); }
+        }
+        report(`已下载 ${completed.size} / ${docs.length} 篇。${reason.message || '下载失败，请重试。'}`, 'error', retryable);
+      } finally {
+        clearInterval(heartbeat);
+        window.removeEventListener('message', onMessage);
+        busy = false;
+        button.disabled = released;
+        button.textContent = released ? '导出已结束' : '重试剩余文档';
+      }
+    };
+    button.addEventListener('click', run);
+    window.addEventListener('message', (message) => {
+      if (message.origin === location.origin && message.source === parent && message.data?.type === 'sps-pdf-retry') void run();
+    });
+    if (automatic) void run();
+  }
+
   const preview = document.querySelector("[data-pdf-preview]");
   if (!preview) return;
-  const button = preview.querySelector("[data-pdf-download]");
-  const status = preview.querySelector("[data-pdf-status]");
-  const automatic = preview.dataset.pdfAuto === '1';
-  const report = (message, state = 'progress', retryable = false) => {
-    status.textContent = message;
-    if (automatic && parent !== window) parent.postMessage({ type: 'sps-pdf-export', state, message, retryable }, location.origin);
-  };
-  const documentBody = document.querySelector(".pdf-document");
-  const url = preview.dataset.exportUrl;
-  const fields = () => new URLSearchParams({ csrf: preview.dataset.csrf, lease: preview.dataset.lease });
-  let released = false;
-  const release = () => {
-    if (released) return;
-    released = true;
-    updateControls();
-    navigator.sendBeacon?.(`${url}/release`, fields());
-  };
-  window.addEventListener("pagehide", release);
-  const verify = async (renew = false) => {
-    const body = fields();
-    if (renew) body.set('renew', '1');
-    const response = await fetch(`${url}/verify`, { method: "POST", body, credentials: "same-origin", cache: "no-store" });
-    if (!response.ok) {
-      const result = await response.json();
-      documentBody.replaceChildren();
-      throw new Error(result.error || "分享权限已失效，请重新打开分享页。");
-    }
-  };
-  const claim = async (index) => {
-    const body = fields();
-    body.set('index', String(index));
-    const response = await fetch(`${url}/claim`, { method: 'POST', body, credentials: 'same-origin', cache: 'no-store' });
-    if (!response.ok) throw new Error((await response.json()).error || '无法取得此篇的导出额度。');
-  };
-  const sections = Array.from(documentBody.querySelectorAll('.pdf-doc'));
-  const completed = new Set();
+  if (preview.dataset.pdfJob === '1') {
+    runJob(preview);
+    return;
+  }
+  if (preview.dataset.pdfChild !== '1') return;
+  const button = preview.querySelector('[data-pdf-download]');
+  const status = preview.querySelector('[data-pdf-status]');
+  const documentBody = document.querySelector('.pdf-document');
+  const section = documentBody.querySelector('.pdf-doc');
   let resourceWarning = '';
   let busy = false;
   let prepared = false;
-  function updateControls() {
-    const unavailable = !prepared || busy || released || !documentBody.children.length;
-    button.disabled = unavailable || completed.size === sections.length;
-  }
+  let finished = false;
+  const send = (result) => parent.postMessage({ type: 'sps-pdf-document', index: Number(preview.dataset.pdfIndex), ...result }, location.origin);
+  function updateControls() { button.disabled = !prepared || busy || finished; }
   updateControls();
   let library;
   const loadScript = (source) => new Promise((resolve, reject) => {
@@ -265,9 +449,9 @@
   const loadLibrary = () => library || (library = Promise.all([
     loadScript(preview.dataset.pdfLibrary), loadScript(preview.dataset.pdfTextLibrary),
   ]).catch((error) => { library = null; throw error; }));
-  const names = new Map();
   let provenanceFont;
   const loadProvenanceFont = () => provenanceFont || (provenanceFont = (async () => {
+    if (typeof parent.SPSPdfFont === 'function') return parent.SPSPdfFont();
     const response = await fetch(preview.dataset.pdfFont, { credentials: 'same-origin' });
     if (!response.ok) throw new Error('来源信息字体加载失败，请重试。');
     const bytes = new Uint8Array(await response.arrayBuffer());
@@ -293,14 +477,6 @@
       pdf.text(lines, 14, 6, { renderingMode: 'invisible' });
     }
   };
-  const filenames = sections.map((section, index) => {
-    let title = Array.from((section.dataset.pdfTitle || `文档-${index + 1}`).normalize('NFKC').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')).slice(0, 100).join('').replace(/[. ]+$/, '').trim() || `文档-${index + 1}`;
-    if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i.test(title)) title = `文档_${title}`;
-    const key = title.toLowerCase();
-    const count = (names.get(key) || 0) + 1;
-    names.set(key, count);
-    return `${title}${count > 1 ? ` (${count})` : ''}.pdf`;
-  });
   const makePdf = async (section) => {
     const root = document.createElement('div');
     root.className = 'pdf-document pdf-download-document';
@@ -352,7 +528,6 @@
           pdf.addImage(canvas.toDataURL('image/jpeg', .98), 'JPEG', 14, 16, size.inner.width, canvas.height * size.inner.width / canvas.width);
         }
         canvas.width = canvas.height = 0;
-        await verify(true);
       }
       SPSPdfTextLayer.write(pdf, text, { width: size.inner.width, pixelWidth: size.inner.px.width, pixelHeight: pageHeight }, await loadProvenanceFont());
       await addProvenance(pdf, section);
@@ -361,51 +536,23 @@
       worker.prop?.overlay?.remove();
     }
   };
-  button.addEventListener("click", async () => {
-    if (!prepared || busy || released) return;
+  button.addEventListener('click', async () => {
+    if (!prepared || busy || finished) return;
     busy = true;
     updateControls();
-    let heartbeatError;
-    let ticking = false;
-    const heartbeat = setInterval(async () => {
-      if (ticking) return;
-      ticking = true;
-      try { await verify(true); } catch (error) { heartbeatError = error; }
-      finally { ticking = false; }
-    }, 20000);
     try {
-      await verify(true);
-      await loadLibrary();
-      await loadProvenanceFont();
-      for (let index = 0; index < sections.length; index++) {
-        if (completed.has(index)) continue;
-        if (heartbeatError) throw heartbeatError;
-        report(`正在生成第 ${index + 1} / ${sections.length} 篇：${filenames[index]}`);
-        await claim(index);
-        const blob = await makePdf(sections[index]);
-        await verify(true);
-        if (heartbeatError) throw heartbeatError;
-        const blobUrl = URL.createObjectURL(blob);
-        const anchor = document.createElement('a');
-        anchor.href = blobUrl;
-        anchor.download = filenames[index];
-        document.body.append(anchor);
-        anchor.click();
-        anchor.remove();
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
-        completed.add(index);
-      }
-      release();
-      report(`已逐篇触发 ${completed.size} 个独立 PDF 下载。${resourceWarning}若文件未全部出现，请允许浏览器连续下载多个文件。`, 'done');
+      await Promise.all([loadLibrary(), loadProvenanceFont()]);
+      send({ blob: await makePdf(section), warning: resourceWarning });
     } catch (error) {
-      report(`已下载 ${completed.size} / ${sections.length} 篇。${error.message || '下载失败，请重试剩余文档。'}`, 'error', !released && !!documentBody.children.length);
+      send({ error: error.message || 'PDF 生成失败。' });
     } finally {
-      clearInterval(heartbeat);
+      finished = true;
       busy = false;
       updateControls();
     }
   });
   const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  Promise.all([loadLibrary(), loadProvenanceFont()]).catch(() => {});
   const prepare = async () => {
     const deadline = Date.now() + 25000;
     while (!Array.from(documentBody.querySelectorAll(".markdown-body")).every((node) => node.dataset.spsRendered === "1")) {
@@ -425,7 +572,8 @@
         const pending = images.some((img) => !img.complete);
         const diagrams = Array.from(documentBody.querySelectorAll(".mermaid")).some((node) => !node.querySelector("svg, img"))
           || !!documentBody.querySelector(".md-graphviz:empty");
-        if (!pending && !diagrams && Date.now() - lastChange > 1000) break;
+        const settle = documentBody.querySelector('.mermaid, .md-graphviz') ? 1000 : 100;
+        if (!pending && !diagrams && Date.now() - lastChange > settle) break;
         await pause(150);
       } while (Date.now() < deadline);
     } finally {
@@ -447,22 +595,17 @@
         if (ids.has(id)) anchor.setAttribute("href", `#${ids.get(id)}`);
       });
     });
-    await verify();
     const diagramPending = !!documentBody.querySelector(".md-graphviz:empty")
       || Array.from(documentBody.querySelectorAll(".mermaid")).some((node) => !node.querySelector("svg, img"));
     status.textContent = incomplete || diagramPending
-      ? "部分图片未能加载。请检查下方预览，必要时重新打开后再保存。"
-      : "预览已就绪。点击保存即可逐篇下载，每篇一个 PDF。";
+      ? "部分图片未能加载，请检查下载文件。"
+      : "排版已就绪，正在生成 PDF…";
     if (incomplete || diagramPending) resourceWarning = '部分图片或图表未能加载，请检查下载文件。';
     prepared = true;
     updateControls();
-    if (automatic) button.click();
+    button.click();
   };
-  window.addEventListener('message', (message) => {
-    if (message.origin === location.origin && message.source === parent && message.data?.type === 'sps-pdf-retry' && automatic) button.click();
-  });
   prepare().catch((error) => {
-    release();
-    report(error.message || '导出准备失败，请重新选择文档。', 'error');
+    send({ error: error.message || '排版准备失败。' });
   });
 })();

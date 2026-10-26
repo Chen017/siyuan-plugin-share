@@ -63,7 +63,7 @@ class PdfReleaseTests:
         selected = {f'doc_ids[{i}]': docs[i]['docId'] for i in range(120)}
         status, _, body = self.pdf_post(visitor, path, csrf, scope='selected', **selected)
         self.assertEqual(status, 200, body[:300])
-        self.assertEqual(body.count(b'data-pdf-doc='), 120)
+        self.assertEqual(len(self.pdf_manifest(body)), 120)
         self.assertNotIn(b'RELEASE_BOUNDARY_30', body)
         visitor.request(path + '/release', {'csrf': csrf, 'lease': self.pdf_lease(body)})
         self.assertEqual(self.pdf_post(visitor, path, csrf, scope='single', doc_id="' OR 1=1 --")[0], 404)
@@ -91,7 +91,9 @@ class PdfReleaseTests:
         try:
             changed = {**original, 'limits[max_html_bytes]': '0.0625'}
             self.assertEqual(admin.request('/admin/pdf-export-settings', changed)[0], 302)
-            self.assertEqual(self.pdf_post(visitor, path, csrf)[0], 413)
+            status, _, body = self.pdf_post(visitor, path, csrf)
+            self.assertEqual(status, 200)
+            self.assertEqual(self.pdf_document(visitor, path, csrf, self.pdf_lease(body))[0], 413)
             self.assertEqual(self.rows('SELECT COUNT(*) AS n FROM pdf_export_leases')[0]['n'], 0)
             form = self.pdf_admin_form(admin)
             self.assertEqual(form['limits[max_html_bytes]'], '0.0625')

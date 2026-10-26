@@ -41,7 +41,21 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     return preview;
   };
   const downloadPdfs = async (preview, count, label) => {
-    const sources = await preview.locator('[data-pdf-source]').evaluateAll((nodes) => nodes.map((node) => new URL(node.dataset.pdfSource, location.origin).href));
+    const sources = await preview.locator('[data-pdf-manifest]').evaluate((node) => JSON.parse(node.textContent).map((doc) => new URL(doc.source, location.origin).href));
+    await preview.evaluate(() => {
+      window.pdfLayouts = [];
+      window.pdfLayoutObserver = (event) => {
+        if (event.origin !== location.origin || event.data?.type !== 'sps-pdf-document' || !event.data.blob) return;
+        const doc = event.source.document;
+        const body = doc.querySelector('.markdown-body');
+        const style = event.source.getComputedStyle(body);
+        window.pdfLayouts.push({ background: style.backgroundColor, color: style.color,
+          katex: doc.querySelectorAll('.katex').length, tables: doc.querySelectorAll('.markdown-body table').length,
+          mermaid: doc.querySelectorAll('.mermaid svg').length,
+          imagesReady: Array.from(doc.querySelectorAll('.markdown-body img')).every((img) => img.complete && img.naturalWidth > 0) });
+      };
+      window.addEventListener('message', window.pdfLayoutObserver);
+    });
     const downloads = [];
     const listener = (download) => downloads.push(download);
     preview.on('download', listener);
@@ -54,6 +68,21 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     const until = Date.now() + 10000;
     while (downloads.length < count && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(downloads.length, count, 'One download per document');
+    const layouts = await preview.evaluate(() => {
+      window.removeEventListener('message', window.pdfLayoutObserver);
+      return window.pdfLayouts;
+    });
+    assert.equal(layouts.length, count);
+    for (const layout of layouts) {
+      assert.equal(layout.background, 'rgb(255, 255, 255)');
+      assert.equal(layout.color, 'rgb(31, 35, 40)');
+      assert.equal(layout.imagesReady, true);
+    }
+    if (label === 'individual-light') {
+      assert.ok(layouts.reduce((sum, layout) => sum + layout.katex, 0) >= 2);
+      assert.equal(layouts.reduce((sum, layout) => sum + layout.tables, 0), 1);
+      assert.ok(layouts.some((layout) => layout.mermaid >= 1));
+    }
     assert.equal(await preview.locator('[data-pdf-download]').isDisabled(), true, 'Completed task disables saving');
     assert.equal(new Set(downloads.map((d) => d.suggestedFilename())).size, count);
     for (let i = 0; i < downloads.length; i++) {
@@ -158,11 +187,8 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     await reader.waitForTimeout(150);
     assert.equal((await context.request.post(shareUrl + '/export/verify', { form: taskCredentials })).status(), 410, 'Closing the dialog releases an interrupted task');
     const first = await openPreview(context, 'all');
-    assert.equal(await first.locator('.pdf-doc').count(), 2);
-    assert.ok(await first.locator('.katex').count() >= 2);
-    assert.equal(await first.locator('.markdown-body table').count(), 1);
-    assert.ok(await first.locator('.mermaid svg').count() >= 1);
-    assert.equal(await first.locator('.markdown-body img').evaluateAll((imgs) => imgs.every((i) => i.complete && i.naturalWidth > 0)), true);
+    assert.equal(await first.locator('[data-pdf-manifest]').evaluate((node) => JSON.parse(node.textContent).length), 2);
+    assert.equal(await first.locator('.pdf-doc').count(), 0, 'Batch content is prepared incrementally');
     const blocked = await context.request.post(shareUrl + '/export', { headers: { Accept: 'application/json' }, form: {
       csrf: await first.locator('[data-pdf-preview]').getAttribute('data-csrf'), fingerprint: 'b'.repeat(64), scope: 'all',
     } });
@@ -177,8 +203,6 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
       try {
         await giveCookie(extra);
         const preview = await openPreview(extra, scenario.scope);
-        const color = await preview.locator('.markdown-body').first().evaluate((n) => ({ background: getComputedStyle(n).backgroundColor, color: getComputedStyle(n).color }));
-        assert.deepEqual(color, { background: 'rgb(255, 255, 255)', color: 'rgb(31, 35, 40)' });
         await downloadPdfs(preview, scenario.count, 'individual-' + scenario.name);
       } finally { await extra.close(); }
     }
@@ -189,7 +213,7 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     try {
       assert.equal((await context.request.post(accessUrl, { headers: { 'X-Api-Key': fixture.apiKey }, data: { shareId: fixture.shareId, password: 'Revoked-Preview-Pass!' } })).status(), 200);
       await revoked.locator('[data-pdf-download]').click();
-      await revoked.waitForFunction(() => document.querySelector('.pdf-document').children.length === 0);
+      await revoked.waitForFunction(() => /已下载 0/.test(document.querySelector('[data-pdf-status]').textContent));
       assert.equal(unexpected, false);
     } finally {
       await context.request.post(accessUrl, { headers: { 'X-Api-Key': fixture.apiKey }, data: { shareId: fixture.shareId, clearPassword: true } });
