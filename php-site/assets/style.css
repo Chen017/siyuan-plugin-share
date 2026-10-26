@@ -1481,15 +1481,6 @@ body.app-side-open {
   color: #6674a5;
 }
 
-.topbar-version.is-update {
-  color: #c44f2b;
-  text-decoration: none;
-}
-
-.topbar-version.is-update:hover {
-  text-decoration: underline;
-}
-
 .topbar-right {
   display: flex;
   align-items: center;
@@ -6181,7 +6172,6 @@ body.image-viewer-open {
   body.layout-app .range-toggle { background: var(--surface-muted); }
   body.layout-app .range-btn.is-active { background: var(--surface); }
   body.layout-app .topbar-version { color: var(--muted); }
-  body.layout-app .topbar-version.is-update { color: #ff6535; }
   body.layout-app .admin-governance__value { color: var(--text); }
   body.layout-app .admin-governance__meta { color: var(--muted); }
   body.layout-app input[type="checkbox"] { accent-color: var(--primary); }

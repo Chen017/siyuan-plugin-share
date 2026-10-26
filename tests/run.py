@@ -184,6 +184,54 @@ class Regression(PdfCookieTests, PdfReleaseTests, PdfExportTests, unittest.TestC
             self.assertNotIn('data-reader-pages', body.decode())
             self.assertNotIn('reader-subpages', body.decode())
 
+    def test_reader_home_setting_and_share_root_matching(self):
+        notebook = self.api('shares/notebook', {
+            'notebookId': self.name, 'title': 'Home notebook',
+            'docs': [
+                {'docId': self.name + '-parent', 'title': 'Parent', 'markdown': '# Parent content'},
+                {'docId': self.name + '-child', 'parentId': self.name + '-parent', 'title': 'Child', 'markdown': '# Child content'},
+            ],
+        })['share']
+        other = self.share(docId=self.name + '-other')
+        home_path = '/s/' + notebook['slug']
+        other_path = '/s/' + other['slug']
+        admin = self.admin()
+        original = self.rows('SELECT key, value FROM settings')
+        fields = {'csrf': self.csrf(admin, '/admin'), 'allow_registration': '1'}
+        visitor = Client(self.base)
+        saved_home = self.base + home_path + '/?view=read#section'
+        try:
+            self.assertNotIn(b'data-reader-home', visitor.request(other_path)[2])
+            self.assertIn(b'name="reader_home_url"', admin.request('/admin')[2])
+            self.assertEqual(self.client.request('/admin/settings', {'csrf': self.csrf(self.client, '/account'), 'reader_home_url': saved_home})[0], 403)
+            self.assertEqual(admin.request('/admin/settings', {**fields, 'reader_home_url': saved_home})[0], 302)
+            self.assertEqual(self.rows("SELECT value FROM settings WHERE key='reader_home_url'")[0]['value'], saved_home)
+            for suffix in ['', '?view=read', '/' + self.name + '-parent', '/' + self.name + '-child?partial=1']:
+                status, _, page = visitor.request(home_path + suffix)
+                self.assertEqual(status, 200)
+                self.assertNotIn(b'data-reader-home', page)
+            page = visitor.request(other_path)[2].decode()
+            self.assertIn('data-reader-home href="' + saved_home + '"', page)
+            self.assertIn('aria-label="Return to home">Home</a>', page)
+            self.assertNotRegex(page, r'data-reader-home[^>]*data-share-nav')
+            # An omitted field from an older form does not clear the saved home.
+            self.assertEqual(admin.request('/admin/settings', fields)[0], 302)
+            for invalid in ['javascript:alert(1)', '//example.com/s/home', 'https://user:pass@example.com/s/home', 'bad url']:
+                self.assertEqual(admin.request('/admin/settings', {**fields, 'reader_home_url': invalid})[0], 302)
+                self.assertEqual(self.rows("SELECT value FROM settings WHERE key='reader_home_url'")[0]['value'], saved_home)
+            # Exact root identity: a longer slug must not be treated as the same home.
+            for home in [self.base + home_path + '-different', 'https://other.example' + home_path]:
+                admin.request('/admin/settings', {**fields, 'reader_home_url': home})
+                self.assertIn(b'data-reader-home', visitor.request(home_path)[2])
+                self.assertIn(b'data-reader-home', visitor.request(home_path + '/' + self.name + '-child?partial=1')[2])
+            admin.request('/admin/settings', {**fields, 'reader_home_url': ''})
+            self.assertNotIn(b'data-reader-home', visitor.request(other_path)[2])
+        finally:
+            for row in original:
+                value = row['value'].replace("'", "''")
+                key = row['key'].replace("'", "''")
+                self.rows(f"UPDATE settings SET value='{value}' WHERE key='{key}'")
+
     def test_public_reader_controls_use_english(self):
         share = self.share(title='中文标题', markdown='# 正文\n\n原始中文内容不得翻译。')
         visitor = Client(self.base)
@@ -393,7 +441,9 @@ class Regression(PdfCookieTests, PdfReleaseTests, PdfExportTests, unittest.TestC
     def test_admin_pages_settings_and_captcha(self):
         admin = self.admin()
         for page in ['/admin', '/admin-home', '/admin?tab=users', '/admin?tab=shares', '/admin?tab=reports']:
-            self.assertEqual(admin.request(page)[0], 200)
+            status, _, body = admin.request(page)
+            self.assertEqual(status, 200)
+            self.assertNotIn(b'topbar-version is-update', body)
         token = self.csrf(admin, '/admin')
         settings = {'csrf': token, 'allow_registration': '1', 'default_storage_limit_mb': '1024', 'email_from': 'no-reply@example.com'}
         try:

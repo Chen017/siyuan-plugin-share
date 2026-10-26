@@ -477,6 +477,7 @@ function seed_default_settings(PDO $pdo): void {
     ensure_setting($pdo, 'site_icp', '');
     ensure_setting($pdo, 'site_contact_email', '');
     ensure_setting($pdo, 'site_base_url', '');
+    ensure_setting($pdo, 'reader_home_url', '');
     ensure_setting($pdo, 'site_head_html', '');
     ensure_setting($pdo, 'site_custom_css_enabled', '1');
     ensure_setting($pdo, 'site_custom_css', '');
@@ -1837,114 +1838,6 @@ function maybe_send_instance_heartbeat(): void {
     }
 }
 
-function fetch_latest_release_info(): ?array {
-    $cachePath = __DIR__ . '/storage/release_cache.json';
-    $ttl = 3600;
-    if (is_file($cachePath) && (time() - filemtime($cachePath) < $ttl)) {
-        $cached = json_decode((string)file_get_contents($cachePath), true);
-        if (is_array($cached)) {
-            return $cached;
-        }
-    }
-    $latest = [
-        'version' => '',
-        'url' => '',
-        'has_php_site' => false,
-        'fetched_at' => time(),
-    ];
-    $perPage = 30;
-    $page = 1;
-    while (true) {
-        $url = 'https://api.github.com/repos/b8l8u8e8/siyuan-plugin-share/releases?per_page=' . $perPage . '&page=' . $page;
-        $data = http_get_json($url);
-        if (!$data || !is_array($data)) {
-            if ($page === 1) {
-                return null;
-            }
-            break;
-        }
-        if (empty($data)) {
-            break;
-        }
-        $keys = array_keys($data);
-        if ($keys !== range(0, count($keys) - 1)) {
-            if ($page === 1) {
-                return null;
-            }
-            break;
-        }
-        foreach ($data as $release) {
-            if (!is_array($release)) {
-                continue;
-            }
-            $assets = is_array($release['assets'] ?? null) ? $release['assets'] : [];
-            $version = '';
-            $hasPhpSite = false;
-            foreach ($assets as $asset) {
-                $name = (string)($asset['name'] ?? '');
-                if ($name === '') {
-                    continue;
-                }
-                if (stripos($name, 'php-site') === false) {
-                    continue;
-                }
-                $hasPhpSite = true;
-                if (preg_match('/php-site-v(.+)\.zip/i', $name, $matches)) {
-                    $version = trim((string)($matches[1] ?? ''));
-                }
-                break;
-            }
-            if ($hasPhpSite) {
-                if ($version === '') {
-                    $version = trim((string)($release['tag_name'] ?? $release['name'] ?? ''));
-                }
-                $latest['version'] = $version;
-                $latest['url'] = (string)($release['html_url'] ?? '');
-                $latest['has_php_site'] = true;
-                $latest['fetched_at'] = time();
-                break 2;
-            }
-        }
-        if (count($data) < $perPage) {
-            break;
-        }
-        $page++;
-    }
-    try {
-        ensure_dir(dirname($cachePath));
-        file_put_contents($cachePath, json_encode($latest, JSON_UNESCAPED_SLASHES));
-    } catch (Throwable $e) {
-        // ignore cache failure
-    }
-    return $latest;
-}
-
-function site_update_info(): ?array {
-    $current = site_version();
-    maybe_send_instance_heartbeat();
-    $latest = fetch_latest_release_info();
-    if (!$latest || empty($latest['has_php_site']) || ($latest['version'] ?? '') === '') {
-        return null;
-    }
-    $latestVersion = trim((string)$latest['version']);
-    $currentVersion = trim((string)$current);
-    $latestComparable = ltrim($latestVersion, 'vV');
-    $currentComparable = ltrim($currentVersion, 'vV');
-    $isNewer = false;
-    if ($currentComparable === '') {
-        $isNewer = true;
-    } else {
-        $isNewer = version_compare($latestComparable, $currentComparable, '>');
-    }
-    if (!$isNewer) {
-        return null;
-    }
-    return [
-        'version' => $latestVersion,
-        'url' => (string)($latest['url'] ?? ''),
-    ];
-}
-
 function fetch_central_instance_stats(): ?array {
     $base = central_stats_url();
     if ($base === '') {
@@ -2085,22 +1978,6 @@ function build_topbar_title(string $title, ?array $user): string {
             $versionLabel = 'v' . $versionLabel;
         }
         $titleHtml .= ' <span class="topbar-version">' . htmlspecialchars($versionLabel) . '</span>';
-    }
-    if ($user && ($user['role'] ?? '') === 'admin') {
-        $update = site_update_info();
-        if ($update) {
-            $updateVersion = trim((string)($update['version'] ?? ''));
-            if ($updateVersion !== '' && stripos($updateVersion, 'v') !== 0) {
-                $updateVersion = 'v' . $updateVersion;
-            }
-            $updateLabel = htmlspecialchars('有新版 ' . $updateVersion);
-            $updateUrl = trim((string)($update['url'] ?? ''));
-            if ($updateUrl !== '') {
-                $titleHtml .= ' <a class="topbar-version is-update" href="' . htmlspecialchars($updateUrl) . '" target="_blank" rel="noopener noreferrer">' . $updateLabel . '</a>';
-            } else {
-                $titleHtml .= ' <span class="topbar-version is-update">' . $updateLabel . '</span>';
-            }
-        }
     }
     return $titleHtml;
 }
@@ -8487,17 +8364,36 @@ function is_share_partial_request(): bool {
     return false;
 }
 
+// Compare share roots rather than individual documents, query strings or fragments.
+function reader_home_url_key(string $url): string {
+    $parts = parse_url($url);
+    if (!is_array($parts) || empty($parts['host'])) return '';
+    $scheme = strtolower((string)($parts['scheme'] ?? ''));
+    if (!in_array($scheme, ['http', 'https'], true) || isset($parts['user']) || isset($parts['pass'])) return '';
+    $port = (int)($parts['port'] ?? ($scheme === 'https' ? 443 : 80));
+    $path = (string)($parts['path'] ?? '/');
+    if (preg_match('#^(.*?/s/[a-zA-Z0-9_-]+)(?:/|$)#', $path, $matches)) $path = $matches[1];
+    return $scheme . '://' . strtolower((string)$parts['host']) . ':' . $port . rtrim($path, '/');
+}
+
+function render_reader_home_link(string $slug): string {
+    $home = trim((string)get_setting('reader_home_url', ''));
+    $homeKey = reader_home_url_key($home);
+    if ($homeKey === '' || $homeKey === reader_home_url_key(base_url() . '/s/' . rawurlencode($slug))) return '';
+    return '<a class="button ghost reader-home-link" data-reader-home href="' . htmlspecialchars($home, ENT_QUOTES, 'UTF-8') . '" aria-label="Return to home">Home</a>';
+}
+
 function render_share_document_actions(string $slug, string $docId): string {
-    return '<div class="share-document-actions">'
+    return '<div class="share-document-actions">' . render_reader_home_link($slug)
         . '<button class="button ghost share-view-toggle" type="button" data-share-toggle aria-pressed="false">Source</button>'
         . render_pdf_export_link(['slug' => $slug, 'doc_id' => $docId]) . '</div>';
 }
 
-function render_notebook_welcome(string $title): string {
+function render_notebook_welcome(string $title, string $slug): string {
     $html = '<div class="kb-main" role="main"><section class="notebook-welcome" data-notebook-welcome>';
     $html .= '<p class="notebook-eyebrow">Notebook</p><h1 class="kb-title">' . htmlspecialchars($title) . '</h1>';
     $html .= '<p class="notebook-intro">Open the document tree to choose where to begin, or pick up where you left off.</p>';
-    $html .= '<div class="notebook-actions"><button class="button primary" type="button" data-reader-show-tree>Browse documents</button>';
+    $html .= '<div class="notebook-actions">' . render_reader_home_link($slug) . '<button class="button primary" type="button" data-reader-show-tree>Browse documents</button>';
     $html .= '<a class="button" data-reader-resume hidden>Continue reading: <span></span></a></div>';
     $html .= '<p class="notebook-reading-hint">Your reading position stays in this browser. On smaller screens, use Navigation to explore the notebook.</p>';
     return $html . '</section></div>';
@@ -8836,7 +8732,7 @@ function route_share(string $slug, ?string $docId = null): void {
 
         if (!$docId) {
             $touchShareAccess();
-            $mainHtml = render_notebook_welcome($shareTitleRaw);
+            $mainHtml = render_notebook_welcome($shareTitleRaw, $slug);
             if ($isPartial) {
                 api_response(200, [
                     'title' => $shareTitleRaw,
@@ -10804,6 +10700,7 @@ if ($path === '/admin') {
     $siteIcp = get_setting('site_icp', '');
     $siteContactEmail = get_setting('site_contact_email', '');
     $siteBaseUrl = get_setting('site_base_url', '');
+    $readerHomeUrl = get_setting('reader_home_url', '');
     $siteHeadHtml = get_setting('site_head_html', '');
     $siteCustomCssEnabled = get_bool_setting('site_custom_css_enabled', true);
     $siteCustomCss = get_setting('site_custom_css', '');
@@ -11000,6 +10897,7 @@ if ($path === '/admin') {
     $content .= '<div><label>ICP备案号</label><input class="input" name="site_icp" value="' . htmlspecialchars((string)$siteIcp) . '"></div>';
     $content .= '<div><label>联系邮箱</label><input class="input" name="site_contact_email" value="' . htmlspecialchars((string)$siteContactEmail) . '"></div>';
     $content .= '<div><label>网站地址（分享链接前缀）<button class="link-button" type="button" data-report-open data-report-target="site-base-url-help">说明</button></label><input class="input" name="site_base_url" placeholder="https://share.example.com" value="' . htmlspecialchars((string)$siteBaseUrl) . '"></div>';
+    $content .= '<div><label for="reader-home-url">阅读主页链接</label><input class="input" id="reader-home-url" type="url" name="reader_home_url" placeholder="https://note.example.com/s/home" value="' . htmlspecialchars((string)$readerHomeUrl, ENT_QUOTES, 'UTF-8') . '"><div class="muted">留空不显示返回主页。其他分享页显示 Home；主页所属分享内的文档、查询参数和锚点不影响判断。</div></div>';
     $content .= '</div>';
     $content .= '<div style="margin-top:12px">';
     $content .= '<label>违禁词（用 | 分隔）</label>';
@@ -11795,6 +11693,11 @@ if ($path === '/admin/settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $siteIcp = trim((string)($_POST['site_icp'] ?? ''));
     $siteContactEmail = trim((string)($_POST['site_contact_email'] ?? ''));
     $siteBaseUrl = trim((string)($_POST['site_base_url'] ?? ''));
+    $readerHomeUrl = trim((string)($_POST['reader_home_url'] ?? get_setting('reader_home_url', '')));
+    if ($readerHomeUrl !== '' && (strlen($readerHomeUrl) > 2048 || !filter_var($readerHomeUrl, FILTER_VALIDATE_URL) || reader_home_url_key($readerHomeUrl) === '')) {
+        flash('error', '阅读主页链接必须是有效的 HTTP 或 HTTPS 地址，且不能包含用户名或密码。');
+        redirect('/admin#settings');
+    }
     $siteHeadHtml = trim((string)($_POST['site_head_html'] ?? ''));
     $siteCustomCssEnabled = isset($_POST['site_custom_css_enabled']) ? '1' : '0';
     $siteCustomJsEnabled = isset($_POST['site_custom_js_enabled']) ? '1' : '0';
@@ -11826,6 +11729,7 @@ if ($path === '/admin/settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     set_setting('site_icp', $siteIcp);
     set_setting('site_contact_email', $siteContactEmail);
     set_setting('site_base_url', $siteBaseUrl);
+    set_setting('reader_home_url', $readerHomeUrl);
     set_setting('site_head_html', $siteHeadHtml);
     set_setting('site_custom_css_enabled', $siteCustomCssEnabled);
     set_setting('site_custom_css', $siteCustomCss);
