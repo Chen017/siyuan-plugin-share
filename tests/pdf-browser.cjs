@@ -61,7 +61,7 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     preview.on('download', listener);
     await preview.locator('[data-pdf-download]').click();
     try {
-      await preview.waitForFunction(() => document.querySelector('[data-pdf-status]').textContent.includes('已逐篇触发'), null, { timeout: 120000 });
+      await preview.waitForFunction(() => document.querySelector('[data-pdf-status]').textContent.includes('Started'), null, { timeout: 120000 });
     } catch (error) {
       throw new Error(`${label}: ${await preview.locator('[data-pdf-status]').textContent()}; ${error.message}`);
     }
@@ -146,9 +146,9 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     await modal.waitFor({ state: 'visible' });
     const options = reader.frameLocator('[data-pdf-dialog-frame]');
     await options.locator('[data-pdf-export-form]').waitFor();
-    assert.match(await options.locator('[data-pdf-quota]').innerText(), /剩余 120 篇.*60 分钟额度 120 篇/);
-    assert.match(await modal.evaluate((node) => getComputedStyle(node, '::backdrop').backdropFilter), /blur/);
-    await reader.waitForTimeout(250); // Let the requested opening/height animations settle.
+    assert.match(await options.locator('[data-pdf-quota]').innerText(), /120 documents remaining.*120 per 60 minutes/);
+    assert.equal(await modal.evaluate((node) => getComputedStyle(node, '::backdrop').backdropFilter), 'none');
+    await reader.waitForTimeout(250); // Let the opening animation settle.
     await reader.screenshot({ path: path.join(output, 'pdf-dialog-desktop.png'), animations: 'disabled' });
     await reader.setViewportSize({ width: 390, height: 844 });
     await reader.waitForTimeout(250);
@@ -158,15 +158,15 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     await options.locator('[data-pdf-scope]').selectOption('all');
     const automaticDownloads = [];
     reader.on('download', (download) => automaticDownloads.push(download));
-    await options.getByRole('button', { name: '确定导出', exact: true }).click();
-    await options.locator('[data-pdf-form-status]').filter({ hasText: '已逐篇触发 2 个独立 PDF 下载' }).waitFor({ timeout: 120000 });
+    await options.getByRole('button', { name: 'Export', exact: true }).click();
+    await options.locator('[data-pdf-form-status]').filter({ hasText: 'Started 2 individual PDF downloads' }).waitFor({ timeout: 120000 });
     assert.equal(automaticDownloads.length, 2);
     for (let index = 0; index < automaticDownloads.length; index++) await automaticDownloads[index].saveAs(path.join(output, `dialog-auto-${index + 1}.pdf`));
-    await options.locator('[data-pdf-quota]').filter({ hasText: '剩余 118 篇' }).waitFor();
-    assert.match(await options.locator('[data-pdf-quota]').innerText(), /下一次恢复/);
+    await options.locator('[data-pdf-quota]').filter({ hasText: '118 documents remaining' }).waitFor();
+    assert.match(await options.locator('[data-pdf-quota]').innerText(), /Next recovery/);
     assert.equal(applicationPages().length, pagesBefore, 'Dialog and automatic download open no extra application tabs');
     assert.equal(reader.url(), originalUrl, 'Reader stays on the document');
-    await reader.getByRole('button', { name: '关闭导出弹窗' }).click();
+    await reader.getByRole('button', { name: 'Close export dialog' }).click();
     await modal.waitFor({ state: 'hidden' });
     await reader.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' });
     await reader.locator('[data-pdf-export-link]').click();
@@ -178,11 +178,11 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     await reader.emulateMedia({ colorScheme: 'light', reducedMotion: 'no-preference' });
     await reader.route('**/assets/vendor/html2pdf.bundle.min.js*', (route) => route.abort(), { times: 1 });
     await reader.locator('[data-pdf-export-link]').click();
-    await options.getByRole('button', { name: '确定导出', exact: true }).click();
-    await options.getByRole('button', { name: '重试剩余文档', exact: true }).waitFor({ timeout: 45000 });
+    await options.getByRole('button', { name: 'Export', exact: true }).click();
+    await options.getByRole('button', { name: 'Retry remaining documents', exact: true }).waitFor({ timeout: 45000 });
     const task = reader.frames().find((frame) => frame.name() === 'sps-pdf-worker');
     const taskCredentials = await task.locator('[data-pdf-preview]').evaluate((node) => ({ csrf: node.dataset.csrf, lease: node.dataset.lease }));
-    await reader.getByRole('button', { name: '关闭导出弹窗' }).click();
+    await reader.getByRole('button', { name: 'Close export dialog' }).click();
     await modal.waitFor({ state: 'hidden' });
     await reader.waitForTimeout(150);
     assert.equal((await context.request.post(shareUrl + '/export/verify', { form: taskCredentials })).status(), 410, 'Closing the dialog releases an interrupted task');
@@ -213,7 +213,7 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     try {
       assert.equal((await context.request.post(accessUrl, { headers: { 'X-Api-Key': fixture.apiKey }, data: { shareId: fixture.shareId, password: 'Revoked-Preview-Pass!' } })).status(), 200);
       await revoked.locator('[data-pdf-download]').click();
-      await revoked.waitForFunction(() => /已下载 0/.test(document.querySelector('[data-pdf-status]').textContent));
+      await revoked.waitForFunction(() => /Downloaded 0/.test(document.querySelector('[data-pdf-status]').textContent));
       assert.equal(unexpected, false);
     } finally {
       await context.request.post(accessUrl, { headers: { 'X-Api-Key': fixture.apiKey }, data: { shareId: fixture.shareId, clearPassword: true } });

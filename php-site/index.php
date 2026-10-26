@@ -1208,7 +1208,8 @@ function render_page(string $title, string $content, ?array $user = null, string
         maybe_send_instance_heartbeat();
     }
     echo "<!doctype html>";
-    echo "<html lang='zh-CN'>";
+    $pageLanguage = in_array($layout, ['share', 'public', 'auth'], true) ? 'en' : 'zh-CN';
+    echo "<html lang='{$pageLanguage}'>";
     echo "<head>";
     echo "<meta charset='utf-8'>";
     echo "<meta name='viewport' content='width=device-width, initial-scale=1'>";
@@ -1253,12 +1254,14 @@ function render_page(string $title, string $content, ?array $user = null, string
     } elseif ($layout === 'share') {
         echo "<div class='share-page'>";
         echo render_share_icon_defs();
-        echo "<header class='reader-mobile-bar'><button class='reader-nav-button' type='button' data-share-drawer-open aria-label='打开导航' aria-expanded='false'><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='currentColor' d='M4 6h16v2H4zM4 11h16v2H4zM4 16h16v2H4z'/></svg><span>导航</span></button><span class='reader-mobile-title' data-reader-mobile-title>{$pageTitle}</span></header>";
+        if (empty($options['pdf_export'])) echo "<div class='reader-frame'>";
+        echo "<header class='reader-mobile-bar'><button class='reader-nav-button' type='button' data-share-drawer-open aria-label='Open navigation' aria-expanded='false'><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='currentColor' d='M4 6h16v2H4zM4 11h16v2H4zM4 16h16v2H4z'/></svg><span>Navigation</span></button><span class='reader-mobile-title' data-reader-mobile-title>{$pageTitle}</span></header>";
         echo $content;
-        echo "<footer class='share-footer'><span class='footer-credit'>由 <a class='footer-owner' href='https://github.com/Chen017/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Chen017</a> 维护</span><span class='footer-separator' aria-hidden='true'>·</span><span class='footer-credit'>上游：<a class='footer-upstream' href='https://github.com/b8l8u8e8/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Siyuan Share</a></span></footer>";
+        echo "<footer class='share-footer'><span class='footer-credit'>Maintained by <a class='footer-owner' href='https://github.com/Chen017/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Chen017</a></span><span class='footer-separator' aria-hidden='true'>·</span><span class='footer-credit'>Upstream: <a class='footer-upstream' href='https://github.com/b8l8u8e8/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Siyuan Share</a></span></footer>";
+        if (empty($options['pdf_export'])) echo "</div>";
         echo "<div class='share-side-backdrop' data-share-drawer-close></div>";
         echo "<p class='reader-status sr-only' data-reader-status role='status' aria-live='polite'></p>";
-        echo "<button class='scroll-top' type='button' data-scroll-top aria-label='回到顶部'><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='currentColor' d='M12 2c-2.76 0-5 2.24-5 5v2.5L4 13l4.5 1L12 22l3.5-8L20 13l-3-3.5V7c0-2.76-2.24-5-5-5zm0 3a2 2 0 0 1 2 2v1.5l-2 2-2-2V7a2 2 0 0 1 2-2z'/></svg></button>";
+        echo "<button class='scroll-top' type='button' data-scroll-top aria-label='Back to top'><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='currentColor' d='M12 2c-2.76 0-5 2.24-5 5v2.5L4 13l4.5 1L12 22l3.5-8L20 13l-3-3.5V7c0-2.76-2.24-5-5-5zm0 3a2 2 0 0 1 2 2v1.5l-2 2-2-2V7a2 2 0 0 1 2-2z'/></svg></button>";
         echo "</div>";
     } elseif ($user) {
         $navItems = [
@@ -1428,7 +1431,7 @@ function render_404_page(): void {
     $content .= '<p class="error-page__desc">你访问的页面不存在，可能已被移除或者地址有误。</p>';
     $content .= '<a class="error-page__back" href="' . $base . '/">';
     $content .= '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>';
-    $content .= '返回首页</a>';
+    $content .= 'Home</a>';
     $content .= '</div>';
     render_page('页面未找到', $content, null);
 }
@@ -1444,7 +1447,7 @@ function render_share_not_found_page(): void {
     $content .= '<p class="error-page__desc">该分享链接不存在或已被创建者删除。</p>';
     $content .= '<a class="error-page__back" href="' . $base . '/">';
     $content .= '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>';
-    $content .= '返回首页</a>';
+    $content .= 'Home</a>';
     $content .= '</div>';
     render_page('分享不存在', $content, null);
 }
@@ -2809,10 +2812,10 @@ function render_comment_emoji_picker(): string {
 function render_comment_editor_fields(string $content = '', string $textareaName = 'content'): string {
     $html = '<div class="comment-editor" data-comment-editor>';
     $html .= '<div class="comment-toolbar">';
-    $html .= '<button class="comment-tool" type="button" data-emoji-toggle aria-label="表情" title="表情">';
+    $html .= '<button class="comment-tool" type="button" data-emoji-toggle aria-label="Emoji" title="Emoji">';
     $html .= '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"></circle><circle cx="9" cy="10" r="1.2" fill="currentColor"></circle><circle cx="15" cy="10" r="1.2" fill="currentColor"></circle><path d="M8 14c1.2 1.2 2.5 1.8 4 1.8 1.5 0 2.8-.6 4-1.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg>';
     $html .= '</button>';
-    $html .= '<button class="comment-tool" type="button" data-image-insert aria-label="图片" title="图片">';
+    $html .= '<button class="comment-tool" type="button" data-image-insert aria-label="Insert image" title="Insert image">';
     $html .= '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="2"></rect><circle cx="9" cy="11" r="2" fill="currentColor"></circle><path d="M21 16l-5-5-4 4-2-2-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>';
     $html .= '</button>';
     $html .= '<input class="comment-image-input" type="file" accept="image/*" data-image-input hidden>';
@@ -2883,16 +2886,16 @@ function render_comment_node(array $comment, array $share, ?array $user, string 
         $html .= '<span class="comment-time">' . htmlspecialchars($metaLabel) . '</span>';
     }
     $html .= '<details class="comment-menu">';
-    $html .= '<summary class="comment-menu-trigger" aria-label="更多操作">...</summary>';
+    $html .= '<summary class="comment-menu-trigger" aria-label="More actions">...</summary>';
     $html .= '<div class="comment-menu-list">';
-    $html .= '<button class="comment-menu-item" type="button" data-comment-action="edit" data-comment-id="' . $commentId . '" data-comment-content="' . htmlspecialchars($rawContent, ENT_QUOTES) . '" data-comment-email="' . htmlspecialchars($authorLabel, ENT_QUOTES) . '">编辑</button>';
-    $html .= '<button class="comment-menu-item" type="button" data-comment-action="delete" data-comment-id="' . $commentId . '" data-comment-email="' . htmlspecialchars($authorLabel, ENT_QUOTES) . '" data-comment-owner="' . ($viewerIsOwner ? '1' : '0') . '">删除</button>';
+    $html .= '<button class="comment-menu-item" type="button" data-comment-action="edit" data-comment-id="' . $commentId . '" data-comment-content="' . htmlspecialchars($rawContent, ENT_QUOTES) . '" data-comment-email="' . htmlspecialchars($authorLabel, ENT_QUOTES) . '">Edit</button>';
+    $html .= '<button class="comment-menu-item" type="button" data-comment-action="delete" data-comment-id="' . $commentId . '" data-comment-email="' . htmlspecialchars($authorLabel, ENT_QUOTES) . '" data-comment-owner="' . ($viewerIsOwner ? '1' : '0') . '">Delete</button>';
     $html .= '</div>';
     $html .= '</details>';
     $html .= '</div>';
     $html .= '<div class="comment-content">' . $content . '</div>';
     $html .= '<div class="comment-footer">';
-    $html .= '<button class="comment-reply-btn" type="button" data-comment-action="reply" data-comment-parent-id="' . $commentId . '" data-comment-email="' . htmlspecialchars($authorLabel, ENT_QUOTES) . '" data-comment-author="' . htmlspecialchars($authorLabel, ENT_QUOTES) . '">回复</button>';
+    $html .= '<button class="comment-reply-btn" type="button" data-comment-action="reply" data-comment-parent-id="' . $commentId . '" data-comment-email="' . htmlspecialchars($authorLabel, ENT_QUOTES) . '" data-comment-author="' . htmlspecialchars($authorLabel, ENT_QUOTES) . '">Reply</button>';
     $html .= '</div>';
     $html .= '</div>';
     $html .= '</div>';
@@ -2987,7 +2990,7 @@ function render_share_comments(array $share, ?array $user, ?string $docId = null
         }
         $html .= '</div>';
     }
-    $html .= render_comment_form($actionBase . '/comment', $docId, $commentFormEmail, null, '发表评论', $commentFormContent);
+    $html .= render_comment_form($actionBase . '/comment', $docId, $commentFormEmail, null, 'Post comment', $commentFormContent);
     $html .= '<div class="modal comment-modal" data-comment-modal data-comment-action-base="' . htmlspecialchars($actionBase) . '" data-comment-doc-id="' . htmlspecialchars($docValue) . '" data-comment-owner="' . ($viewerIsOwner ? '1' : '0') . '" data-comment-default-email="' . htmlspecialchars($emailValue) . '" data-comment-reopen="' . ($modalReopen ? '1' : '0') . '" data-comment-reopen-mode="reply" data-comment-reopen-parent="' . (int)$modalParentId . '" data-comment-reopen-email="' . htmlspecialchars($modalEmail, ENT_QUOTES) . '" data-comment-reopen-content="' . htmlspecialchars($modalContent, ENT_QUOTES) . '" data-comment-reopen-note="' . htmlspecialchars($modalNote, ENT_QUOTES) . '" hidden>';
     $html .= '<div class="modal-backdrop" data-modal-close></div>';
     $html .= '<div class="modal-card">';
@@ -3012,8 +3015,8 @@ function render_share_comments(array $share, ?array $user, ?string $docId = null
     $html .= render_comment_editor_fields($modalContent, 'content');
     $html .= '</div>';
     $html .= '<div class="modal-actions">';
-    $html .= '<button class="button ghost" type="button" data-modal-close>取消</button>';
-    $html .= '<button class="button primary" type="submit" data-comment-submit>提交</button>';
+    $html .= '<button class="button ghost" type="button" data-modal-close>Cancel</button>';
+    $html .= '<button class="button primary" type="submit" data-comment-submit>Submit</button>';
     $html .= '</div>';
     $html .= '</form>';
     $html .= '</div>';
@@ -3051,7 +3054,7 @@ function render_share_report_trigger(array $share): string {
         return '';
     }
     $modalId = share_report_modal_id($slug);
-    return '<button class="kb-chip report-trigger" id="report" type="button" data-report-open data-report-target="' . htmlspecialchars($modalId) . '">举报</button>';
+    return '<button class="kb-chip report-trigger" id="report" type="button" data-report-open data-report-target="' . htmlspecialchars($modalId) . '">Report</button>';
 }
 
 function render_share_report_form(array $share, ?array $user, ?string $docId = null): string {
@@ -3117,8 +3120,8 @@ function render_share_report_form(array $share, ?array $user, ?string $docId = n
     }
     $html .= '</div>';
     $html .= '<div class="modal-actions">';
-    $html .= '<button class="button ghost" type="button" data-modal-close>取消</button>';
-    $html .= '<button class="button primary" type="submit">提交举报</button>';
+    $html .= '<button class="button ghost" type="button" data-modal-close>Cancel</button>';
+    $html .= '<button class="button primary" type="submit">Submit report</button>';
     $html .= '</div>';
     $html .= '</form>';
     $html .= '</div>';
@@ -4133,7 +4136,7 @@ function render_announcement_modal(array $items): string {
     $html .= '</div>';
     $html .= '<div class="modal-footer">';
     $html .= '<label class="checkbox"><input type="checkbox" data-announcement-hide> 今天不再弹出</label>';
-    $html .= '<button class="button primary" data-modal-close="1">知道了</button>';
+    $html .= '<button class="button primary" data-modal-close="1">Got it</button>';
     $html .= '</div></div></div>';
     return $html;
 }
@@ -8407,8 +8410,8 @@ function render_share_search_box(string $slug): string {
     $html  = '<div class="kb-search" data-share-search>';
     $html .= '<div class="kb-search-input-wrap">';
     $html .= '<svg class="kb-search-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.35-4.35"/></svg>';
-    $html .= '<input class="kb-search-input" type="search" placeholder="搜索..." data-share-search-input autocomplete="off" spellcheck="false">';
-    $html .= '<button class="kb-search-clear" type="button" data-share-search-clear hidden aria-label="清除搜索">&times;</button>';
+    $html .= '<input class="kb-search-input" type="search" placeholder="Search…" data-share-search-input autocomplete="off" spellcheck="false">';
+    $html .= '<button class="kb-search-clear" type="button" data-share-search-clear hidden aria-label="Clear search">&times;</button>';
     $html .= '</div>';
     $html .= '<div class="kb-search-results" data-share-search-results hidden></div>';
     $html .= '</div>';
@@ -8435,7 +8438,7 @@ function render_doc_tree(array $nodes, string $slug, ?string $activeId = null, i
         $html .= '<li class="' . $nodeClass . '" data-tree-key="' . htmlspecialchars($nodeKey) . '">';
         $html .= '<div class="kb-tree-row">';
         if ($hasChildren) {
-            $html .= '<button class="kb-tree-toggle" type="button" aria-label="展开或收起 ' . htmlspecialchars((string)$node['title'], ENT_QUOTES, 'UTF-8') . '" aria-expanded="' . ($shouldOpen ? 'true' : 'false') . '">';
+            $html .= '<button class="kb-tree-toggle" type="button" aria-label="Expand or collapse ' . htmlspecialchars((string)$node['title'], ENT_QUOTES, 'UTF-8') . '" aria-expanded="' . ($shouldOpen ? 'true' : 'false') . '">';
             $html .= '<svg class="kb-tree-toggle-icon kb-tree-toggle-icon--collapsed" viewBox="0 0 24 24" aria-hidden="true"><use href="#sps-tree-arrow-collapsed"></use></svg>';
             $html .= '<svg class="kb-tree-toggle-icon kb-tree-toggle-icon--open" viewBox="0 0 24 24" aria-hidden="true"><use href="#sps-tree-arrow-expanded"></use></svg>';
             $html .= '</button>';
@@ -8486,32 +8489,18 @@ function is_share_partial_request(): bool {
 
 function render_share_document_actions(string $slug, string $docId): string {
     return '<div class="share-document-actions">'
-        . '<button class="button ghost share-view-toggle" type="button" data-share-toggle aria-pressed="false">源码</button>'
+        . '<button class="button ghost share-view-toggle" type="button" data-share-toggle aria-pressed="false">Source</button>'
         . render_pdf_export_link(['slug' => $slug, 'doc_id' => $docId]) . '</div>';
 }
 
-function render_notebook_welcome(array $nodes, string $slug, string $title): string {
+function render_notebook_welcome(string $title): string {
     $html = '<div class="kb-main" role="main"><section class="notebook-welcome" data-notebook-welcome>';
-    $html .= '<p class="notebook-eyebrow">笔记本</p><h1 class="kb-title">' . htmlspecialchars($title) . '</h1>';
-    $html .= '<p class="notebook-intro">选择课程开始阅读，或展开左侧导航栏中的文档树。手机上可点击顶部「导航」。</p>';
-    $html .= '<div class="notebook-actions"><button class="button primary" type="button" data-reader-show-tree>展开文档树</button>';
-    $html .= '<a class="button" data-reader-resume hidden>继续阅读：<span></span></a></div>';
-    $html .= '<h2 class="notebook-section-title">课程与文档</h2><ul class="notebook-course-list">';
-    foreach ($nodes as $node) {
-        $label = htmlspecialchars((string)$node['title']);
-        $doc = $node['doc'] ?? null;
-        $html .= '<li>';
-        if ($doc) {
-            $href = base_path() . '/s/' . rawurlencode($slug) . '/' . rawurlencode((string)$doc['doc_id']);
-            $html .= '<a class="notebook-course" href="' . htmlspecialchars($href, ENT_QUOTES, 'UTF-8') . '" data-share-nav="doc"><span>' . $label . '</span><span aria-hidden="true">↗</span></a>';
-        } else {
-            $key = 'folder:' . trim((string)$node['title'], '/');
-            $html .= '<button class="notebook-course" type="button" data-reader-branch="' . htmlspecialchars($key, ENT_QUOTES, 'UTF-8') . '"><span>' . $label . '</span><span aria-hidden="true">›</span></button>';
-        }
-        $html .= '</li>';
-    }
-    if (!$nodes) $html .= '<li class="muted">还没有可阅读的文档。</li>';
-    return $html . '</ul></section></div>';
+    $html .= '<p class="notebook-eyebrow">Notebook</p><h1 class="kb-title">' . htmlspecialchars($title) . '</h1>';
+    $html .= '<p class="notebook-intro">Open the document tree to choose where to begin, or pick up where you left off.</p>';
+    $html .= '<div class="notebook-actions"><button class="button primary" type="button" data-reader-show-tree>Browse documents</button>';
+    $html .= '<a class="button" data-reader-resume hidden>Continue reading: <span></span></a></div>';
+    $html .= '<p class="notebook-reading-hint">Your reading position stays in this browser. On smaller screens, use Navigation to explore the notebook.</p>';
+    return $html . '</section></div>';
 }
 
 function route_share(string $slug, ?string $docId = null): void {
@@ -8532,7 +8521,7 @@ function route_share(string $slug, ?string $docId = null): void {
         $content = '<div class="share-shell share-shell--single">';
         $content .= '<div class="share-content" role="main">';
         $content .= '<div class="share-header"><h1>' . $shareTitle . '</h1></div>';
-        $content .= '<div class="share-empty">该分享已过期，内容不可见。</div>';
+        $content .= '<div class="share-empty">This share has expired.</div>';
         $content .= '</div></div>';
         render_page($shareTitleRaw, $content, null, '', ['layout' => 'share']);
         return;
@@ -8542,7 +8531,7 @@ function route_share(string $slug, ?string $docId = null): void {
         $content = '<div class="share-shell share-shell--single">';
         $content .= '<div class="share-content" role="main">';
         $content .= '<div class="share-header"><h1>' . $shareTitle . '</h1></div>';
-        $content .= '<div class="share-empty">访客数已达上限，分享已关闭。</div>';
+        $content .= '<div class="share-empty">This share has reached its visitor limit.</div>';
         $content .= '</div></div>';
         render_page($shareTitleRaw, $content, null, '', ['layout' => 'share']);
         return;
@@ -8559,19 +8548,19 @@ function route_share(string $slug, ?string $docId = null): void {
                 }
                 redirect($redirectPath);
             }
-            $error = '访问密码错误';
+            $error = 'Incorrect share password.';
         }
         $content = '<div class="share-shell share-shell--single">';
         $content .= '<div class="share-content" role="main">';
         $content .= '<div class="share-header"><h1>' . $shareTitle . '</h1></div>';
         $content .= '<div class="share-gate">';
-        $content .= '<div class="share-gate-note">该分享设置了访问密码</div>';
+        $content .= '<div class="share-gate-note">This share is password protected.</div>';
         if ($error) {
             $content .= '<div class="alert error">' . htmlspecialchars($error) . '</div>';
         }
         $content .= '<form method="post" class="share-gate-form">';
-        $content .= '<input class="input" type="password" name="share_password" placeholder="请输入访问密码" required>';
-        $content .= '<button class="button primary" type="submit">验证</button>';
+        $content .= '<input class="input" type="password" name="share_password" placeholder="Enter the share password" required>';
+        $content .= '<button class="button primary" type="submit">Unlock</button>';
         $content .= '</form></div></div></div>';
         render_page($shareTitleRaw, $content, null, '', ['layout' => 'share']);
         return;
@@ -8646,15 +8635,16 @@ function route_share(string $slug, ?string $docId = null): void {
             record_share_access($share, (string)($doc['doc_id'] ?? ''), $docTitleRaw);
             $commentHtml = render_share_comments($share, $viewer, (string)$activeDocId);
             $reportModalHtml = render_share_report_form($share, $viewer, (string)$activeDocId);
-            $treeHtml = render_doc_tree(build_doc_tree($docs, $activeDocId), $slug, $activeDocId, 0, '', $assetBasePath);
+            $documentTree = build_doc_tree($docs, $activeDocId);
+            $treeHtml = render_doc_tree($documentTree, $slug, $activeDocId, 0, '', $assetBasePath);
             $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
             $sidebar .= render_share_search_box($slug);
             $sidebar .= '<div class="kb-side-tabs" data-share-tabs data-share-default="tree">';
-            $sidebar .= '<button class="kb-side-tab is-active" type="button" data-share-tab="tree">文档树</button>';
-            $sidebar .= '<button class="kb-side-tab" type="button" data-share-tab="toc">目录</button>';
+            $sidebar .= '<button class="kb-side-tab is-active" type="button" data-share-tab="tree">Documents</button>';
+            $sidebar .= '<button class="kb-side-tab" type="button" data-share-tab="toc">Contents</button>';
             $sidebar .= '<div class="kb-side-actions" data-share-tree-actions>';
-            $sidebar .= '<button class="kb-side-action" type="button" data-tree-collapse title="折叠所有" aria-label="折叠所有"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#sps-tree-collapse-all"></use></svg></button>';
-            $sidebar .= '<button class="kb-side-action" type="button" data-tree-expand title="展开所有" aria-label="展开所有"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#sps-tree-expand-all"></use></svg></button>';
+            $sidebar .= '<button class="kb-side-action" type="button" data-tree-collapse title="Collapse all" aria-label="Collapse all"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#sps-tree-collapse-all"></use></svg></button>';
+            $sidebar .= '<button class="kb-side-action" type="button" data-tree-expand title="Expand all" aria-label="Expand all"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#sps-tree-expand-all"></use></svg></button>';
             $sidebar .= '</div>';
             $sidebar .= '</div>';
             $sidebar .= '<div class="kb-side-panel" data-share-panel="tree">';
@@ -8699,7 +8689,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $mainHtml .= $shareMetaHtml;
             $mainHtml .= '</div>';
             $mainHtml .= '<div class="markdown-body" data-md-id="doc">' . render_markdown($markdown) . '</div>';
-            $mainHtml .= '<textarea class="markdown-source" data-md-id="doc" readonly spellcheck="false" aria-label="Markdown 源码">' . htmlspecialchars($markdown) . '</textarea>';
+            $mainHtml .= '<textarea class="markdown-source" data-md-id="doc" readonly spellcheck="false" aria-label="Markdown source">' . htmlspecialchars($markdown) . '</textarea>';
             $mainHtml .= $commentHtml;
             $mainHtml .= $reportModalHtml;
             $mainHtml .= '</div></div>';
@@ -8735,7 +8725,7 @@ function route_share(string $slug, ?string $docId = null): void {
         $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
         $sidebar .= render_share_search_box($slug);
         $sidebar .= '<div class="kb-side-tabs" data-share-tabs data-share-default="toc">';
-        $sidebar .= '<button class="kb-side-tab is-active" type="button" data-share-tab="toc">目录</button>';
+        $sidebar .= '<button class="kb-side-tab is-active" type="button" data-share-tab="toc">Contents</button>';
         $sidebar .= '</div>';
         $sidebar .= '<div class="kb-side-panel" data-share-panel="toc" data-share-toc="doc">';
         $sidebar .= '<div class="kb-side-body share-toc-body"></div>';
@@ -8753,7 +8743,7 @@ function route_share(string $slug, ?string $docId = null): void {
         $content .= $shareMetaHtml;
         $content .= '</div>';
         $content .= '<div class="markdown-body" data-md-id="doc">' . render_markdown($markdown) . '</div>';
-        $content .= '<textarea class="markdown-source" data-md-id="doc" readonly spellcheck="false" aria-label="Markdown 源码">' . htmlspecialchars($markdown) . '</textarea>';
+        $content .= '<textarea class="markdown-source" data-md-id="doc" readonly spellcheck="false" aria-label="Markdown source">' . htmlspecialchars($markdown) . '</textarea>';
         $content .= $commentHtml;
         $content .= $reportModalHtml;
         $content .= '</div></div></div>';
@@ -8766,11 +8756,11 @@ function route_share(string $slug, ?string $docId = null): void {
         $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
         $sidebar .= render_share_search_box($slug);
         $sidebar .= '<div class="kb-side-tabs" data-share-tabs data-share-default="tree">';
-        $sidebar .= '<button class="kb-side-tab is-active" type="button" data-share-tab="tree">文档树</button>';
-        $sidebar .= '<button class="kb-side-tab" type="button" data-share-tab="toc">目录</button>';
+        $sidebar .= '<button class="kb-side-tab is-active" type="button" data-share-tab="tree">Documents</button>';
+        $sidebar .= '<button class="kb-side-tab" type="button" data-share-tab="toc">Contents</button>';
         $sidebar .= '<div class="kb-side-actions" data-share-tree-actions>';
-        $sidebar .= '<button class="kb-side-action" type="button" data-tree-collapse title="折叠所有" aria-label="折叠所有"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#sps-tree-collapse-all"></use></svg></button>';
-        $sidebar .= '<button class="kb-side-action" type="button" data-tree-expand title="展开所有" aria-label="展开所有"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#sps-tree-expand-all"></use></svg></button>';
+        $sidebar .= '<button class="kb-side-action" type="button" data-tree-collapse title="Collapse all" aria-label="Collapse all"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#sps-tree-collapse-all"></use></svg></button>';
+        $sidebar .= '<button class="kb-side-action" type="button" data-tree-expand title="Expand all" aria-label="Expand all"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#sps-tree-expand-all"></use></svg></button>';
         $sidebar .= '</div>';
         $sidebar .= '</div>';
         $sidebar .= '<div class="kb-side-panel" data-share-panel="tree">';
@@ -8811,7 +8801,7 @@ function route_share(string $slug, ?string $docId = null): void {
             if (!empty($crumbs)) {
                 array_pop($crumbs);
             }
-            $breadcrumbsHtml = '<div class="kb-breadcrumbs"><a class="kb-back" href="' . $base . '/s/' . $slug . '" data-doc-id="" data-share-nav="doc">目录</a>';
+            $breadcrumbsHtml = '<div class="kb-breadcrumbs"><a class="kb-back" href="' . $base . '/s/' . $slug . '" data-doc-id="" data-share-nav="doc">Contents</a>';
             foreach ($crumbs as $crumb) {
                 $breadcrumbsHtml .= '<span>' . htmlspecialchars($crumb) . '</span>';
             }
@@ -8826,7 +8816,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $mainHtml .= $shareMetaHtml;
             $mainHtml .= '</div>';
             $mainHtml .= '<div class="markdown-body" data-md-id="doc">' . render_markdown($markdown) . '</div>';
-            $mainHtml .= '<textarea class="markdown-source" data-md-id="doc" readonly spellcheck="false" aria-label="Markdown 源码">' . htmlspecialchars($markdown) . '</textarea>';
+            $mainHtml .= '<textarea class="markdown-source" data-md-id="doc" readonly spellcheck="false" aria-label="Markdown source">' . htmlspecialchars($markdown) . '</textarea>';
             $mainHtml .= $commentHtml;
             $mainHtml .= $reportModalHtml;
             $mainHtml .= '</div></div>';
@@ -8846,7 +8836,7 @@ function route_share(string $slug, ?string $docId = null): void {
 
         if (!$docId) {
             $touchShareAccess();
-            $mainHtml = render_notebook_welcome($notebookTree, $slug, $shareTitleRaw);
+            $mainHtml = render_notebook_welcome($shareTitleRaw);
             if ($isPartial) {
                 api_response(200, [
                     'title' => $shareTitleRaw,
@@ -8880,7 +8870,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $rows .= '</a>';
         }
         if ($rows === '') {
-            $rows = '<div class="share-empty">暂无文档。</div>';
+            $rows = '<div class="share-empty">No documents yet.</div>';
         } else {
             $rows = '<div class="kb-directory"><div class="kb-dir-head"><div>标题</div><div>路径</div><div>更新</div></div>' . $rows . '</div>';
         }
@@ -8890,7 +8880,7 @@ function route_share(string $slug, ?string $docId = null): void {
         $content .= $sidebar;
         $content .= '<div class="kb-main" role="main">';
         $content .= '<div class="kb-header">';
-        $content .= '<div class="kb-breadcrumbs"><span>目录</span></div>';
+        $content .= '<div class="kb-breadcrumbs"><span>Contents</span></div>';
         $content .= '<div class="kb-title-row">';
         $content .= '<h1 class="kb-title">' . $shareTitle . '</h1>';
         $content .= '</div>';
@@ -9215,8 +9205,8 @@ if ($path === '/login') {
     }
     if (email_verification_available()) {
         $content .= '<div class="auth-tabs" data-login-tabs data-login-default="' . $loginTab . '">';
-        $content .= '<button class="auth-tab" type="button" data-login-tab="password">密码登录</button>';
-        $content .= '<button class="auth-tab" type="button" data-login-tab="email">邮箱登录</button>';
+        $content .= '<button class="auth-tab" type="button" data-login-tab="password">Password</button>';
+        $content .= '<button class="auth-tab" type="button" data-login-tab="email">Email</button>';
         $content .= '</div>';
     }
     $content .= '<form method="post" class="auth-form" data-login-panel="password"' . ($loginTab === 'password' ? '' : ' hidden') . '>';
@@ -9228,7 +9218,7 @@ if ($path === '/login') {
         $content .= '<img class="captcha-img" src="' . htmlspecialchars(captcha_url()) . '" alt="验证码" data-captcha></div>';
     }
     $content .= '<div class="auth-actions"><a class="link" href="' . base_path() . '/forgot">找回密码</a></div>';
-    $content .= '<button class="button primary w-full" type="submit">登录</button>';
+    $content .= '<button class="button primary w-full" type="submit">Sign in</button>';
     $content .= '</form>';
     if (email_verification_available()) {
         if ($loginEmailStep === 'verify') {
@@ -9237,10 +9227,10 @@ if ($path === '/login') {
             $content .= '<div class="auth-field"><span class="auth-icon">' . $iconMail . '</span><input class="auth-input" name="email" placeholder="邮箱" value="' . htmlspecialchars((string)$prefillLoginEmail) . '" readonly></div>';
             $content .= '<div class="auth-field"><span class="auth-icon">' . $iconMail . '</span><input class="auth-input" name="email_code" placeholder="邮箱验证码" required></div>';
             $content .= '<div class="auth-actions">';
-            $content .= '<button class="button ghost" type="submit" formaction="' . base_path() . '/login/email-code" formnovalidate' . $nextLoginAttr . '>发送邮箱验证码</button>';
+            $content .= '<button class="button ghost" type="submit" formaction="' . base_path() . '/login/email-code" formnovalidate' . $nextLoginAttr . '>Send email code</button>';
             $content .= '<a class="link" href="' . base_path() . '/login?tab=email&step=prepare">修改邮箱</a>';
             $content .= '</div>';
-            $content .= '<button class="button primary w-full" type="submit">登录</button>';
+            $content .= '<button class="button primary w-full" type="submit">Sign in</button>';
             $content .= '</form>';
         } else {
             $content .= '<form method="post" class="auth-form" action="' . base_path() . '/login/email/prepare" data-login-panel="email"' . ($loginTab === 'email' ? '' : ' hidden') . '>';
@@ -9250,7 +9240,7 @@ if ($path === '/login') {
                 $content .= '<div class="auth-field auth-field-captcha"><span class="auth-icon">' . $iconShield . '</span><input class="auth-input" name="captcha" placeholder="验证码" required>';
                 $content .= '<img class="captcha-img" src="' . htmlspecialchars(captcha_url()) . '" alt="验证码" data-captcha></div>';
             }
-            $content .= '<button class="button primary w-full" type="submit">下一步</button>';
+            $content .= '<button class="button primary w-full" type="submit">Next</button>';
             $content .= '</form>';
         }
     }
@@ -9454,11 +9444,11 @@ if ($path === '/register') {
         $content .= '<div class="auth-field"><span class="auth-icon">' . $iconMail . '</span><input class="auth-input" name="email" placeholder="邮箱" value="' . htmlspecialchars((string)$prefillEmail) . '" readonly></div>';
         $content .= '<div class="auth-field"><span class="auth-icon">' . $iconMail . '</span><input class="auth-input" name="email_code" placeholder="邮箱验证码" required></div>';
         $content .= '<div class="auth-actions">';
-        $content .= '<button class="button ghost" type="submit" formaction="' . base_path() . '/email-code" formnovalidate' . $nextCodeAttr . '>发送邮箱验证码</button>';
+        $content .= '<button class="button ghost" type="submit" formaction="' . base_path() . '/email-code" formnovalidate' . $nextCodeAttr . '>Send email code</button>';
         $content .= '<a class="link" href="' . base_path() . '/register?step=info">修改信息</a>';
         $content .= '</div>';
-        $content .= '<button class="button primary w-full" type="submit">注册</button>';
-        $content .= '<div class="auth-footer">已有账号？ <a class="link" href="' . base_path() . '/login">立即登录</a></div>';
+        $content .= '<button class="button primary w-full" type="submit">Create account</button>';
+        $content .= '<div class="auth-footer">已有账号？ <a class="link" href="' . base_path() . '/login">Sign in</a></div>';
         $content .= '</form>';
     } else {
         $content .= '<form method="post" class="auth-form">';
@@ -9471,8 +9461,8 @@ if ($path === '/register') {
             $content .= '<div class="auth-field auth-field-captcha"><span class="auth-icon">' . $iconShield . '</span><input class="auth-input" name="captcha" placeholder="验证码" required>';
             $content .= '<img class="captcha-img" src="' . htmlspecialchars(captcha_url()) . '" alt="验证码" data-captcha></div>';
         }
-        $content .= '<button class="button primary w-full" type="submit">' . (email_verification_available() ? '下一步' : '注册') . '</button>';
-        $content .= '<div class="auth-footer">已有账号？ <a class="link" href="' . base_path() . '/login">立即登录</a></div>';
+        $content .= '<button class="button primary w-full" type="submit">' . (email_verification_available() ? 'Next' : 'Create account') . '</button>';
+        $content .= '<div class="auth-footer">已有账号？ <a class="link" href="' . base_path() . '/login">Sign in</a></div>';
         $content .= '</form>';
     }
     $content .= '</div>';
@@ -9538,8 +9528,8 @@ if ($path === '/forgot') {
         $content .= '<div class="auth-field auth-field-captcha"><span class="auth-icon">' . $iconShield . '</span><input class="auth-input" name="captcha" placeholder="验证码" required>';
         $content .= '<img class="captcha-img" src="' . htmlspecialchars(captcha_url()) . '" alt="验证码" data-captcha></div>';
     }
-    $content .= '<button class="button primary w-full" type="submit">发送重置码</button>';
-    $content .= '<div class="auth-footer"><a class="link" href="' . base_path() . '/login">返回登录</a></div>';
+    $content .= '<button class="button primary w-full" type="submit">Send reset code</button>';
+    $content .= '<div class="auth-footer"><a class="link" href="' . base_path() . '/login">Back to sign in</a></div>';
     $content .= '</form></div>';
     render_page('找回密码', $content, null, '', ['layout' => 'auth']);
 }
@@ -9611,8 +9601,8 @@ if ($path === '/reset') {
     $content .= '<div class="auth-field"><span class="auth-icon">' . $iconMail . '</span><input class="auth-input" name="code" placeholder="邮箱验证码" required></div>';
     $content .= '<div class="auth-field"><span class="auth-icon">' . $iconLock . '</span><input class="auth-input" type="password" name="password" placeholder="新密码" required></div>';
     $content .= '<div class="auth-field"><span class="auth-icon">' . $iconLock . '</span><input class="auth-input" type="password" name="confirm_password" placeholder="确认密码" required></div>';
-    $content .= '<button class="button primary w-full" type="submit">重置密码</button>';
-    $content .= '<div class="auth-footer"><a class="link" href="' . base_path() . '/login">返回登录</a></div>';
+    $content .= '<button class="button primary w-full" type="submit">Reset password</button>';
+    $content .= '<div class="auth-footer"><a class="link" href="' . base_path() . '/login">Back to sign in</a></div>';
     $content .= '</form></div>';
     render_page('重置密码', $content, null, '', ['layout' => 'auth']);
 }
@@ -12726,9 +12716,9 @@ if ($path === '/') {
     $content .= '<h1 class="home-title">' . $appName . $versionHtml . '</h1>';
     $content .= '<p class="home-lead">让文档与笔记本以可控的外链分享：自动同步、密码与到期控制、统一链接管理。</p>';
     $content .= '<div class="home-actions">';
-    $content .= '<a class="button primary" href="' . $loginUrl . '">立即登录</a>';
+    $content .= '<a class="button primary" href="' . $loginUrl . '">Sign in</a>';
     if ($allowRegistration) {
-        $content .= '<a class="button" href="' . $registerUrl . '">注册账号</a>';
+        $content .= '<a class="button" href="' . $registerUrl . '">Create account</a>';
     }
     $content .= '</div>';
     $content .= '<div class="home-hero__meta">支持文档 / 笔记本 · 权限可控 · 多用户协作</div>';

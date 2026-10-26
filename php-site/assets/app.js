@@ -502,7 +502,7 @@
 
         const linkText = document.createElement("span");
         linkText.className = "share-toc-text";
-        linkText.textContent = node.heading.textContent || "未命名";
+        linkText.textContent = node.heading.textContent || "Untitled";
 
         if (section === "footnotes" && footnoteMeta) {
           const meta = footnoteMeta.get(node.heading);
@@ -600,7 +600,7 @@
       if (!allHeadings.length) {
         const empty = document.createElement("div");
         empty.className = "share-toc-empty";
-        empty.textContent = "暂无目录";
+        empty.textContent = "No headings yet.";
         body.appendChild(empty);
         return;
       }
@@ -636,7 +636,7 @@
       if (!headings.length) {
         const empty = document.createElement("div");
         empty.className = "share-toc-empty";
-        empty.textContent = "暂无目录";
+        empty.textContent = "No headings yet.";
         body.appendChild(empty);
         return;
       }
@@ -1785,7 +1785,7 @@
   };
 
   const openFootnoteInNewTab = (index, contentHtml) => {
-    const title = index ? `\u811A\u6CE8 ${index}` : "\u811A\u6CE8";
+    const title = index ? `Footnote ${index}` : "Footnote";
     const tab = window.open("", "_blank");
     if (!tab || !tab.document) return;
     const assetsBaseUrl = getShareAssetsBaseUrl();
@@ -1815,7 +1815,7 @@
     const safeTitle = escapeHtml(title);
     const baseHref = escapeHtml(currentUrl.toString());
     const headerTitle = escapeHtml(title);
-    const rawContent = contentHtml || "<p>\u6682\u65E0\u5185\u5BB9</p>";
+    const rawContent = contentHtml || "<p>No content</p>";
     const footnotePayload = buildFootnoteRegistryPayload(rawContent, index);
     const renderedContent = footnotePayload.contentHtml || rawContent;
     const registryHtml = footnotePayload.registryHtml || "";
@@ -1850,7 +1850,7 @@
     const doc = tab.document;
     doc.open();
     doc.write(
-      `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">` +
+      `<!doctype html><html lang="en"><head><meta charset="utf-8">` +
         `<meta name="viewport" content="width=device-width, initial-scale=1">` +
         `<base href="${baseHref}">` +
         `<title>${safeTitle}</title>` +
@@ -1858,11 +1858,12 @@
         footnoteTabStyle +
         `</head><body class="layout-share sps-footnote-tab">` +
         `<div class="share-page">` +
-        `<header class="reader-mobile-bar"><button class="reader-nav-button" type="button" data-share-drawer-open aria-label="打开导航" aria-expanded="false">导航</button><span class="reader-mobile-title">${headerTitle}</span></header>` +
+        `<div class="reader-frame">` +
+        `<header class="reader-mobile-bar"><button class="reader-nav-button" type="button" data-share-drawer-open aria-label="Open navigation" aria-expanded="false">Navigation</button><span class="reader-mobile-title">${headerTitle}</span></header>` +
         `<div class="share-shell share-shell--notebook">` +
         `<aside class="kb-sidebar" data-share-sidebar data-share-slug="">` +
         `<div class="kb-side-tabs" data-share-tabs data-share-default="toc">` +
-        `<button class="kb-side-tab is-active" type="button" data-share-tab="toc">\u76EE\u5F55</button>` +
+        `<button class="kb-side-tab is-active" type="button" data-share-tab="toc">Contents</button>` +
         `</div>` +
         `<div class="kb-side-panel" data-share-panel="toc" data-share-toc="doc" data-sps-hide-footnotes="1">` +
         `<div class="kb-side-body share-toc-body"></div>` +
@@ -1874,13 +1875,14 @@
         `<div class="kb-title-row"><h1 class="kb-title">${headerTitle}</h1></div>` +
         `</div>` +
         `<div class="markdown-body" data-md-id="doc">${initialHtml}</div>` +
-        `<textarea class="markdown-source" data-md-id="doc" readonly spellcheck="false" aria-label="Markdown 源码">${sourceValue}</textarea>` +
+        `<textarea class="markdown-source" data-md-id="doc" readonly spellcheck="false" aria-label="Markdown source">${sourceValue}</textarea>` +
         `</div>` +
         `</div>` +
         `</div>` +
-        `<footer class="share-footer">\u7531 <a href="https://github.com/b8l8u8e8/siyuan-plugin-share" target="_blank" rel="noopener noreferrer">b8l8u8e8</a> \u63d0\u4F9B\u652F\u6301</footer>` +
+        `<footer class="share-footer">Maintained by <a href="https://github.com/Chen017/siyuan-plugin-share" target="_blank" rel="noopener noreferrer">Chen017</a> · Upstream: <a href="https://github.com/b8l8u8e8/siyuan-plugin-share" target="_blank" rel="noopener noreferrer">Siyuan Share</a></footer>` +
+        `</div>` +
         `<div class="share-side-backdrop" data-share-drawer-close></div>` +
-        `<button class="scroll-top" type="button" data-scroll-top aria-label="\u56DE\u5230\u9876\u90E8"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2c-2.76 0-5 2.24-5 5v2.5L4 13l4.5 1L12 22l3.5-8L20 13l-3-3.5V7c0-2.76-2.24-5-5-5zm0 3a2 2 0 0 1 2 2v1.5l-2 2-2-2V7a2 2 0 0 1 2-2z"/></svg></button>` +
+        `<button class="scroll-top" type="button" data-scroll-top aria-label="Back to top"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2c-2.76 0-5 2.24-5 5v2.5L4 13l4.5 1L12 22l3.5-8L20 13l-3-3.5V7c0-2.76-2.24-5-5-5zm0 3a2 2 0 0 1 2 2v1.5l-2 2-2-2V7a2 2 0 0 1 2-2z"/></svg></button>` +
         `</div>` +
         scriptTags +
         `</body></html>`,
@@ -1924,7 +1926,7 @@
     windowEl.dataset.footnoteIndex = String(index || "");
     windowEl.dataset.pinned = "0";
     windowEl.setAttribute("role", "dialog");
-    windowEl.setAttribute("aria-label", index ? `脚注 ${index}` : "脚注");
+    windowEl.setAttribute("aria-label", index ? `Footnote ${index}` : "Footnote");
     bringFootnoteWindowToFront(windowEl);
 
     const header = document.createElement("div");
@@ -1932,7 +1934,7 @@
 
     const title = document.createElement("div");
     title.className = "sps-footnote-window__title";
-    title.textContent = index ? `脚注 ${index}` : "脚注";
+    title.textContent = index ? `Footnote ${index}` : "Footnote";
 
     const actions = document.createElement("div");
     actions.className = "sps-footnote-window__actions";
@@ -1942,31 +1944,31 @@
     btnOpen.className = "sps-footnote-window__btn";
     btnOpen.innerHTML =
       '<svg class="sps-footnote-line-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3h7v7"></path><path d="M10 14L21 3"></path><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"></path></svg>';
-    btnOpen.setAttribute("title", "在新标签页打开");
-    btnOpen.setAttribute("aria-label", "在新标签页打开");
+    btnOpen.setAttribute("title", "Open in new tab");
+    btnOpen.setAttribute("aria-label", "Open in new tab");
 
     const btnPin = document.createElement("button");
     btnPin.type = "button";
     btnPin.className = "sps-footnote-window__btn";
     btnPin.innerHTML =
       '<svg class="sps-footnote-pin-icon" viewBox="0 0 1024 1024" aria-hidden="true"><path d="M916.8 380.8L645 109.4c-7.2-7.2-16.5-10.7-25.9-10.7-9.4 0-18.8 3.5-25.9 10.7L415.5 286.9c-13.5-1.5-27-2.2-40.6-2.2-80.7 0-161.5 26.5-227.8 79.6-17 13.5-18.4 39-3 54.4l200.4 200.1L106.9 856c-2.9 2.9-4.7 6.7-5.1 10.8l-3.7 41c-1 10.4 7.3 19.2 17.5 19.2 0.6 0 1.1 0 1.7-0.1l41-3.7c4.1-0.3 7.9-2.2 10.8-5.1l237.6-237.3 200.4 200.1c7.2 7.2 16.5 10.7 25.9 10.7 10.7 0 21.3-4.6 28.6-13.7 62.1-77.4 87.9-174.4 77.4-268.1l177.7-177.4c14.4-14.2 14.4-37.3 0.1-51.6zM682.9 553.9l-27 27 4.2 37.9c4.1 37.1 1.1 74-9 109.8-6 20.9-14.1 40.9-24.5 59.7L237 399.2c14.2-7.8 29-14.4 44.5-19.7 30-10.4 61.4-15.5 93.4-15.5 10.6 0 21.3 0.5 31.9 1.8l37.9 4.2 174.5-174.3 211.2 210.9-147.5 147.3z m0 0" fill="currentColor"></path></svg>';
-    btnPin.setAttribute("title", "置顶");
-    btnPin.setAttribute("aria-label", "置顶");
+    btnPin.setAttribute("title", "Pin");
+    btnPin.setAttribute("aria-label", "Pin");
 
     const btnClose = document.createElement("button");
     btnClose.type = "button";
     btnClose.className = "sps-footnote-window__btn";
     btnClose.innerHTML =
       '<svg class="sps-footnote-line-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg>';
-    btnClose.setAttribute("title", "关闭");
-    btnClose.setAttribute("aria-label", "关闭");
+    btnClose.setAttribute("title", "Close");
+    btnClose.setAttribute("aria-label", "Close");
 
     actions.append(btnOpen, btnPin, btnClose);
     header.append(title, actions);
 
     const body = document.createElement("div");
     body.className = "sps-footnote-window__body markdown-body";
-    body.innerHTML = contentHtml || "<p>暂无内容</p>";
+    body.innerHTML = contentHtml || "<p>No content</p>";
     applyFootnotePreviewToContainer(body);
 
     windowEl.style.visibility = "hidden";
@@ -1979,7 +1981,7 @@
       windowEl.dataset.pinned = pinned ? "1" : "0";
       btnPin.classList.toggle("is-pinned", pinned);
       btnPin.setAttribute("aria-pressed", pinned ? "true" : "false");
-      const label = pinned ? "取消置顶" : "置顶";
+      const label = pinned ? "Unpin" : "Pin";
       btnPin.setAttribute("title", label);
       btnPin.setAttribute("aria-label", label);
       if (pinned) bringFootnoteWindowToFront(windowEl);
@@ -2402,8 +2404,8 @@
       action.dataset.spsFootnoteAction = "1";
       action.dataset.footnoteTarget = href.slice(1);
       action.dataset.footnoteIndex = String(index || "");
-      action.setAttribute("aria-label", "脚注预览");
-      action.setAttribute("title", "脚注预览");
+      action.setAttribute("aria-label", "Preview footnote");
+      action.setAttribute("title", "Preview footnote");
       sup.parentNode?.insertBefore(action, sup);
     });
   };
@@ -2526,7 +2528,7 @@
     const mq = window.matchMedia("(max-width: 960px)");
     const heading = document.createElement("div");
     heading.className = "reader-drawer-heading";
-    heading.innerHTML = '<span>阅读导航</span><button class="reader-drawer-close" type="button" aria-label="关闭导航">关闭</button>';
+    heading.innerHTML = '<span>Reading navigation</span><button class="reader-drawer-close" type="button" aria-label="Close navigation">Close</button>';
     sidebar.prepend(heading);
     sidebar.id ||= "reader-navigation";
     openBtn?.setAttribute("aria-controls", sidebar.id);
@@ -2538,14 +2540,14 @@
       if (modal) {
         sidebar.setAttribute("role", "dialog");
         sidebar.setAttribute("aria-modal", "true");
-        sidebar.setAttribute("aria-label", "阅读导航");
+        sidebar.setAttribute("aria-label", "Reading navigation");
       } else {
         sidebar.removeAttribute("role");
         sidebar.removeAttribute("aria-modal");
       }
       document.querySelectorAll(".kb-main, .share-footer").forEach((node) => { node.inert = modal; });
       openBtn?.setAttribute("aria-expanded", String(modal));
-      openBtn?.setAttribute("aria-label", modal ? "关闭导航" : "打开导航");
+      openBtn?.setAttribute("aria-label", modal ? "Close navigation" : "Open navigation");
     };
     const setOpen = (open, restoreFocus = true) => {
       const wasOpen = document.body.classList.contains("share-side-open");
@@ -2583,20 +2585,12 @@
     document.addEventListener("click", (event) => {
       const target = event.target;
       if (target.closest(".kb-sidebar a, .share-toc a") && !event.ctrlKey && !event.metaKey && !event.shiftKey) setOpen(false, false);
-      const branch = target.closest("[data-reader-branch]");
-      if (target.closest("[data-reader-show-tree]") || branch) {
+      if (target.closest("[data-reader-show-tree]")) {
         document.querySelector('[data-share-tab="tree"]')?.click();
         setOpen(true);
-        let node = sidebar;
-        if (branch) {
-          node = Array.from(sidebar.querySelectorAll("[data-tree-key]")).find((item) => item.dataset.treeKey === branch.dataset.readerBranch) || sidebar;
-          const toggle = node.querySelector(".kb-tree-toggle");
-          if (toggle?.getAttribute("aria-expanded") === "false") toggle.click();
-        } else {
-          const toggle = sidebar.querySelector('.kb-tree-toggle[aria-expanded="false"]');
-          toggle?.click();
-        }
-        (node.querySelector(".kb-tree-toggle, .kb-tree-item, [data-share-search-input]") || heading.querySelector("button")).focus({preventScroll: true});
+        const toggle = sidebar.querySelector('.kb-tree-toggle[aria-expanded="false"]');
+        toggle?.click();
+        (sidebar.querySelector(".kb-tree-toggle, .kb-tree-item, [data-share-search-input]") || heading.querySelector("button")).focus({preventScroll: true});
       }
     });
     if (openBtn && sidebar) {
@@ -2676,7 +2670,7 @@
       readerRevealDocument(payload?.docId || "");
       const heading = document.querySelector(".kb-main .kb-title");
       if (heading) { heading.tabIndex = -1; heading.focus({preventScroll: true}); }
-      readerAnnounce(payload?.docId ? `已打开：${payload.title || "文档"}` : "已返回笔记本");
+      readerAnnounce(payload?.docId ? `Opened: ${payload.title || "Document"}` : "Returned to notebook");
       initReaderWelcome();
       const hash = url.includes("#") ? url.slice(url.indexOf("#")) : "";
       if (hash) {
@@ -2702,7 +2696,7 @@
       if (main) { main.classList.add("is-loading"); main.setAttribute("aria-busy", "true"); }
       pending?.classList.add("is-pending");
       const pendingTimer = window.setTimeout(() => {
-        if (currentId === requestId) readerAnnounce("正在打开文档…");
+        if (currentId === requestId) readerAnnounce("Opening document…");
       }, 250);
       try {
         const targetUrl = new URL(url, window.location.href);
@@ -2772,7 +2766,7 @@
         if (!container) return;
         const isMarkdown = container.classList.toggle("is-markdown");
         container.setAttribute("data-share-view", isMarkdown ? "markdown" : "preview");
-        btn.textContent = isMarkdown ? "预览" : "源码";
+        btn.textContent = isMarkdown ? "Preview" : "Source";
         btn.setAttribute("aria-pressed", isMarkdown ? "true" : "false");
       });
     });
@@ -3676,7 +3670,7 @@
       const uploadImage = async (file) => {
         if (!file) return;
         if (!uploadUrl) {
-          showToast("无法上传图片", "error");
+          showToast("Unable to upload image", "error");
           return;
         }
         const csrf = form?.querySelector("input[name='csrf']")?.value || "";
@@ -3688,15 +3682,15 @@
           const resp = await fetch(uploadUrl, {method: "POST", body});
           const json = await resp.json().catch(() => null);
           if (!resp.ok || !json || json.code !== 0) {
-            throw new Error(json?.msg || "图片上传失败");
+            throw new Error(json?.msg || "Image upload failed");
           }
           const url = json?.data?.url || "";
           if (!url) {
-            throw new Error("图片上传失败");
+            throw new Error("Image upload failed");
           }
           insertAtCursor(textarea, `![](${url})`);
         } catch (err) {
-          showToast(err?.message || "图片上传失败", "error");
+          showToast(err?.message || "Image upload failed", "error");
         } finally {
           if (imageBtn) imageBtn.disabled = false;
           if (imageInput) imageInput.value = "";
@@ -3755,10 +3749,10 @@
       refreshModalCaptcha();
       const maskedEmail = dataset.commentEmail || "";
       if (mode === "reply") {
-        if (titleEl) titleEl.textContent = "回复评论";
+        if (titleEl) titleEl.textContent = "Reply to comment";
         if (noteEl)
-          noteEl.textContent = maskedEmail ? `回复 ${maskedEmail}` : "回复评论";
-        if (submitBtn) submitBtn.textContent = "发布回复";
+          noteEl.textContent = maskedEmail ? `Reply to ${maskedEmail}` : "Reply to comment";
+        if (submitBtn) submitBtn.textContent = "Post reply";
         form.action = `${actionBase}/comment`;
         if (commentIdInput) commentIdInput.value = "";
         if (parentIdInput) parentIdInput.value = dataset.commentParentId || "";
@@ -3771,12 +3765,12 @@
         setRequired(emailInput, true);
         setRequired(captchaInput, true);
       } else if (mode === "edit") {
-        if (titleEl) titleEl.textContent = "编辑评论";
+        if (titleEl) titleEl.textContent = "Edit comment";
         if (noteEl)
           noteEl.textContent = maskedEmail
-            ? `邮箱验证：${maskedEmail}`
-            : "邮箱验证";
-        if (submitBtn) submitBtn.textContent = "保存修改";
+            ? `Email verification: ${maskedEmail}`
+            : "Email verification";
+        if (submitBtn) submitBtn.textContent = "Save changes";
         form.action = `${actionBase}/comment/edit`;
         if (commentIdInput) commentIdInput.value = dataset.commentId || "";
         if (parentIdInput) parentIdInput.value = "";
@@ -3789,12 +3783,12 @@
         setRequired(emailInput, true);
         setRequired(captchaInput, true);
       } else if (mode === "delete") {
-        if (titleEl) titleEl.textContent = "删除评论";
+        if (titleEl) titleEl.textContent = "Delete comment";
         if (noteEl)
           noteEl.textContent = maskedEmail
-            ? `确认删除该评论（${maskedEmail}）？`
-            : "确认删除该评论？";
-        if (submitBtn) submitBtn.textContent = "确认删除";
+            ? `Delete this comment (${maskedEmail})?`
+            : "Delete this comment?";
+        if (submitBtn) submitBtn.textContent = "Delete";
         form.action = `${actionBase}/comment/delete`;
         if (commentIdInput) commentIdInput.value = dataset.commentId || "";
         if (parentIdInput) parentIdInput.value = "";
@@ -3983,38 +3977,38 @@ const initImageViewer = () => {
         <div class="image-viewer-ui">
           <div class="image-viewer-count" data-viewer-count></div>
           <div class="image-viewer-actions">
-            <button class="image-viewer-btn" type="button" data-viewer-zoom-out aria-label="\u7f29\u5c0f\u56fe\u7247" title="\u7f29\u5c0f\u56fe\u7247">
+            <button class="image-viewer-btn" type="button" data-viewer-zoom-out aria-label="Zoom out" title="Zoom out">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M6 12h12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
               </svg>
             </button>
             <span class="image-viewer-zoom" data-viewer-zoom>100%</span>
-            <button class="image-viewer-btn" type="button" data-viewer-zoom-in aria-label="\u653e\u5927\u56fe\u7247" title="\u653e\u5927\u56fe\u7247">
+            <button class="image-viewer-btn" type="button" data-viewer-zoom-in aria-label="Zoom in" title="Zoom in">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M12 6v12M6 12h12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
               </svg>
             </button>
-            <button class="image-viewer-btn image-viewer-btn-text" type="button" data-viewer-one-to-one aria-label="\u539f\u59cb\u5c3a\u5bf8\uff081:1\uff09" title="\u539f\u59cb\u5c3a\u5bf8\uff081:1\uff09">1:1</button>
-            <button class="image-viewer-btn" type="button" data-viewer-rotate-ccw aria-label="\u9006\u65f6\u9488\u65cb\u8f6c\u0039\u0030\u00b0" title="\u9006\u65f6\u9488\u65cb\u8f6c\u0039\u0030\u00b0">
+            <button class="image-viewer-btn image-viewer-btn-text" type="button" data-viewer-one-to-one aria-label="Actual size (1:1)" title="Actual size (1:1)">1:1</button>
+            <button class="image-viewer-btn" type="button" data-viewer-rotate-ccw aria-label="Rotate counterclockwise" title="Rotate counterclockwise">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M3 12a9 9 0 1 0 3-6.708" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                 <polyline points="3 4 3 10 9 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
             </button>
-            <button class="image-viewer-btn" type="button" data-viewer-rotate-cw aria-label="\u987a\u65f6\u9488\u65cb\u8f6c\u0039\u0030\u00b0" title="\u987a\u65f6\u9488\u65cb\u8f6c\u0039\u0030\u00b0">
+            <button class="image-viewer-btn" type="button" data-viewer-rotate-cw aria-label="Rotate clockwise" title="Rotate clockwise">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M21 12a9 9 0 1 1-3-6.708" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                 <polyline points="21 4 21 10 15 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
             </button>
-            <button class="image-viewer-btn" type="button" data-viewer-download aria-label="\u4e0b\u8f7d\u56fe\u7247" title="\u4e0b\u8f7d\u56fe\u7247">
+            <button class="image-viewer-btn" type="button" data-viewer-download aria-label="Download image" title="Download image">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                 <polyline points="7 10 12 15 17 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                 <line x1="12" y1="15" x2="12" y2="3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
               </svg>
             </button>
-            <button class="image-viewer-btn" type="button" data-viewer-close aria-label="\u5173\u95ed\u9884\u89c8" title="\u5173\u95ed\u9884\u89c8">
+            <button class="image-viewer-btn" type="button" data-viewer-close aria-label="Close preview" title="Close preview">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <line x1="6" y1="6" x2="18" y2="18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                 <line x1="6" y1="18" x2="18" y2="6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
@@ -4023,12 +4017,12 @@ const initImageViewer = () => {
           </div>
           <div class="image-viewer-stage" data-viewer-stage>
             <img class="image-viewer-img" data-viewer-img alt="">
-            <button class="image-viewer-nav prev" type="button" data-viewer-prev aria-label="\u4e0a\u4e00\u5f20" title="\u4e0a\u4e00\u5f20">
+            <button class="image-viewer-nav prev" type="button" data-viewer-prev aria-label="Previous image" title="Previous image">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M15 18l-6-6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
             </button>
-            <button class="image-viewer-nav next" type="button" data-viewer-next aria-label="\u4e0b\u4e00\u5f20" title="\u4e0b\u4e00\u5f20">
+            <button class="image-viewer-nav next" type="button" data-viewer-next aria-label="Next image" title="Next image">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M9 18l6-6-6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
@@ -5613,8 +5607,8 @@ const initImageViewer = () => {
         const copyBtn = document.createElement("button");
         copyBtn.type = "button";
         copyBtn.className = "code-copy";
-        copyBtn.setAttribute("aria-label", "复制");
-        copyBtn.setAttribute("data-tooltip", "复制");
+        copyBtn.setAttribute("aria-label", "Copy");
+        copyBtn.setAttribute("data-tooltip", "Copy");
         copyBtn.innerHTML =
           "<svg class=\"code-copy-icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\" focusable=\"false\">" +
           "<rect x=\"9\" y=\"9\" width=\"10\" height=\"12\" rx=\"2\" ry=\"2\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"></rect>" +
@@ -5623,18 +5617,18 @@ const initImageViewer = () => {
         copyBtn.addEventListener("click", async () => {
           const success = await writeClipboardText(raw);
           if (success) {
-            copyBtn.setAttribute("data-tooltip", "已复制");
-            copyBtn.setAttribute("aria-label", "已复制");
+            copyBtn.setAttribute("data-tooltip", "Copied");
+            copyBtn.setAttribute("aria-label", "Copied");
             copyBtn.classList.add("is-copied");
-            readerAnnounce("代码已复制");
+            readerAnnounce("Code copied");
             setTimeout(() => {
-              copyBtn.setAttribute("data-tooltip", "复制");
-              copyBtn.setAttribute("aria-label", "复制");
+              copyBtn.setAttribute("data-tooltip", "Copy");
+              copyBtn.setAttribute("aria-label", "Copy");
               copyBtn.classList.remove("is-copied");
             }, 1500);
           } else {
-            copyBtn.setAttribute("data-tooltip", "复制失败，请选择代码手动复制");
-            readerAnnounce("复制失败，请选择代码手动复制");
+            copyBtn.setAttribute("data-tooltip", "Copy failed. Select the code and copy it manually.");
+            readerAnnounce("Copy failed. Select the code and copy it manually.");
           }
         });
         if (lang || langLabel.textContent) {
@@ -5776,8 +5770,8 @@ const initImageViewer = () => {
         const isFullscreen =
           document.fullscreenElement === wrapper ||
           document.fullscreenElement === wrapper.querySelector("iframe");
-        button.setAttribute("aria-label", isFullscreen ? "退出全屏" : "全屏");
-        button.setAttribute("title", isFullscreen ? "退出全屏" : "全屏");
+        button.setAttribute("aria-label", isFullscreen ? "Exit fullscreen" : "Fullscreen");
+        button.setAttribute("title", isFullscreen ? "Exit fullscreen" : "Fullscreen");
         wrapper.classList.toggle("is-fullscreen", isFullscreen);
       });
     };
@@ -5801,8 +5795,8 @@ const initImageViewer = () => {
           button = document.createElement("button");
           button.type = "button";
           button.className = "iframe-fullscreen-toggle";
-          button.setAttribute("aria-label", "全屏");
-          button.setAttribute("title", "全屏");
+          button.setAttribute("aria-label", "Fullscreen");
+          button.setAttribute("title", "Fullscreen");
           button.innerHTML =
             "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\" focusable=\"false\">" +
             "<path d=\"M3 7V5a2 2 0 0 1 2-2h2\" />" +
@@ -5962,7 +5956,7 @@ const initImageViewer = () => {
     let searchVersion = 0;
     let keyboardIndex = -1;
     resultsEl.setAttribute("aria-live", "polite");
-    resultsEl.setAttribute("aria-label", "搜索结果");
+    resultsEl.setAttribute("aria-label", "Search results");
 
     const getBasePath = () => {
       const pathMatch = window.location.pathname.match(/^(.*?)\/s\//);
@@ -6011,7 +6005,7 @@ const initImageViewer = () => {
       abortController = new AbortController();
       const busyTimer = setTimeout(() => {
         if (version !== searchVersion) return;
-        resultsEl.textContent = "正在搜索…";
+        resultsEl.textContent = "Searching…";
         resultsEl.hidden = false;
         hideTabsAndPanels(true);
       }, 200);
@@ -6025,7 +6019,7 @@ const initImageViewer = () => {
         const payload = await resp.json().catch(() => null);
         if (version !== searchVersion) return;
         if (!payload || payload.code !== 0) {
-          resultsEl.innerHTML = '<div class="kb-search-empty">搜索失败</div>';
+          resultsEl.innerHTML = '<div class="kb-search-empty">Search failed</div>';
           resultsEl.hidden = false;
           hideTabsAndPanels(true);
           return;
@@ -6034,7 +6028,7 @@ const initImageViewer = () => {
         renderResults(results, query);
       } catch (err) {
         if (err?.name === "AbortError" || version !== searchVersion) return;
-        resultsEl.innerHTML = '<div class="kb-search-empty">搜索出错</div>';
+        resultsEl.innerHTML = '<div class="kb-search-empty">Search failed</div>';
         resultsEl.hidden = false;
         hideTabsAndPanels(true);
       } finally {
@@ -6045,7 +6039,7 @@ const initImageViewer = () => {
     const renderResults = (results, query) => {
       keyboardIndex = -1;
       if (!results.length) {
-        resultsEl.innerHTML = '<div class="kb-search-empty">没有找到结果</div>';
+        resultsEl.innerHTML = '<div class="kb-search-empty">No results found</div>';
         resultsEl.hidden = false;
         hideTabsAndPanels(true);
         return;
@@ -6054,9 +6048,9 @@ const initImageViewer = () => {
       let html = '<ul class="kb-search-list">';
       results.forEach((r) => {
         const titleHtml = highlightText(r.title, query);
-        const snippet = String(r.snippet || "").replace(/\$\$[\s\S]*?\$\$|\$[^$\n]+\$/g, "〔公式〕")
-          .replace(/\${1,2}[^$]*$/g, "〔公式〕")
-          .replace(/!\[[^\]]*\]\([^)]*\)/g, "〔图片〕").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+        const snippet = String(r.snippet || "").replace(/\$\$[\s\S]*?\$\$|\$[^$\n]+\$/g, "[formula]")
+          .replace(/\${1,2}[^$]*$/g, "[formula]")
+          .replace(/!\[[^\]]*\]\([^)]*\)/g, "[image]").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
           .replace(/(?:\*\*|__|`|^#{1,6}\s)/g, "");
         const snippetHtml = highlightText(snippet, query);
         const pathHtml = r.hpath ? escapeHtml(r.hpath) : '';

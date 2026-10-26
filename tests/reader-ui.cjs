@@ -32,7 +32,7 @@ const payload = title => ({ok: true, json: async () => ({code: 0, data: {html: m
     assert(sidebar.inert, 'Closed mobile navigation cannot receive focus');
     open.click();
     assert.equal(sidebar.getAttribute('aria-modal'), 'true');
-    assert.equal(p.doc.activeElement.getAttribute('aria-label'), '关闭导航');
+    assert.equal(p.doc.activeElement.getAttribute('aria-label'), 'Close navigation');
     assert(p.doc.querySelector('.kb-main').inert, 'Modal drawer isolates the reading area');
     p.doc.dispatchEvent(new p.w.KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
     assert(sidebar.inert);

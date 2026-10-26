@@ -163,9 +163,13 @@ class Regression(PdfCookieTests, PdfReleaseTests, PdfExportTests, unittest.TestC
         text = body.decode()
         welcome = re.search(r'<section class="notebook-welcome".*?</section>', text).group()
         self.assertIn('课程 &lt;Notebook&gt;', welcome)
-        self.assertIn('课程 &lt;A&gt;', welcome)
-        self.assertIn('课程 B', welcome)
+        self.assertNotIn('课程 &lt;A&gt;', welcome)
+        self.assertNotIn('课程 B', welcome)
         self.assertNotIn('内部讲义', welcome)
+        self.assertNotIn('<ul', welcome)
+        self.assertIn('Browse documents', welcome)
+        self.assertIn('Continue reading:', welcome)
+        self.assertNotIn('展开文档树', welcome)
         self.assertIn('data-reader-resume hidden', welcome)
         self.assertIn('data-reader-show-tree', welcome)
         self.assertIn('reader-mobile-bar', text)
@@ -174,6 +178,32 @@ class Regression(PdfCookieTests, PdfReleaseTests, PdfExportTests, unittest.TestC
         status, _, body = Client(self.base).request('/s/' + share['slug'] + '?partial=1')
         self.assertEqual(status, 200)
         self.assertIn('data-notebook-welcome', json.loads(body)['data']['html'])
+        for doc_id in [self.name + 'root', self.name + 'child', self.name + 'other']:
+            status, _, body = Client(self.base).request('/s/' + share['slug'] + '/' + doc_id)
+            self.assertEqual(status, 200)
+            self.assertNotIn('data-reader-pages', body.decode())
+            self.assertNotIn('reader-subpages', body.decode())
+
+    def test_public_reader_controls_use_english(self):
+        share = self.share(title='中文标题', markdown='# 正文\n\n原始中文内容不得翻译。')
+        visitor = Client(self.base)
+        for path in ['/', '/login', '/register', '/forgot', '/reset', '/s/' + share['slug'], '/s/' + share['slug'] + '/export']:
+            status, _, body = visitor.request(path)
+            if status != 200:
+                continue
+            html = body.decode()
+            controls = re.findall(r'<button\b[^>]*>(.*?)</button>', html, re.S)
+            for control in controls:
+                label = re.sub(r'<[^>]+>', '', control)
+                self.assertNotRegex(label, r'[\u3400-\u9fff]', (path, label))
+        _, _, body = visitor.request('/s/' + share['slug'])
+        self.assertIn('原始中文内容不得翻译。', body.decode())
+        self.assertIn('reader-frame', body.decode())
+        self.assertIn('>Source</button>', body.decode())
+        self.assertIn('>Export PDF</a>', body.decode())
+        protected = self.share(docId=self.name + '_protected', password='reader-pass')
+        _, _, gate = visitor.request('/s/' + protected['slug'])
+        self.assertIn('>Unlock</button>', gate.decode())
 
     def test_authentication_and_sessions(self):
         self.assertEqual(self.api('auth/verify')['user']['username'], self.name)

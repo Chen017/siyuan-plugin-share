@@ -6346,6 +6346,9 @@ body.image-viewer-open {
 
 /* Reader surfaces and measure. PDF rendering keeps its print geometry. */
 body.layout-share { --sidebar-width: clamp(248px, 23vw, 304px); --toc-width: 240px; }
+/* Browser tap overlays can ignore a control's rounded shape. Supply our own bounded states. */
+body:is(.layout-share, .layout-public, .layout-auth) { -webkit-tap-highlight-color: transparent; }
+body.layout-share a:is(.button, .kb-tree-item, .share-toc-link):is(:hover, :active, :focus-visible) { text-decoration: none; }
 body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .share-page { padding: 0 24px; }
 .share-shell--notebook, .share-shell--doc { max-width: 1440px; margin-inline: auto; }
 .kb-sidebar { flex: 0 0 var(--sidebar-width); }
@@ -6426,23 +6429,19 @@ body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .kb-title-r
 .reader-nav-button:hover, .reader-drawer-close:hover { background: var(--surface-muted); }
 .reader-mobile-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; font-size: .85rem; color: var(--muted); }
 
-.notebook-welcome { max-width: 780px; margin: 24px auto 64px; }
+.notebook-welcome { max-width: 680px; margin: 0 auto; min-height: clamp(360px, 65vh, 640px); display: flex; flex-direction: column; justify-content: center; padding-block: 32px; }
+.notebook-welcome > .kb-title { flex: none; }
 .notebook-eyebrow { color: var(--muted); font-size: .85rem; margin: 0 0 12px; }
 .notebook-intro { color: var(--muted); line-height: 1.8; max-width: 42em; margin: 20px 0; }
 .notebook-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 24px 0 40px; }
 .notebook-actions a { max-width: 100%; overflow-wrap: anywhere; line-height: 1.6; }
-.notebook-section-title { font-size: 1rem; margin: 0 0 12px; }
-.notebook-course-list { list-style: none; padding: 0; margin: 0; }
-.notebook-course-list > li { border-bottom: 1px solid var(--border); }
-.notebook-course {
-  display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%;
-  padding: 18px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--text);
-  font: inherit; line-height: 1.6; text-align: left; cursor: pointer;
-  transition: background-color var(--motion-feedback) ease, color var(--motion-feedback) ease;
+.notebook-reading-hint { max-width: 40em; color: var(--muted); font-size: .875rem; line-height: 1.8; margin: 0; padding-top: 24px; border-top: 1px solid var(--border); }
+@media (hover: none) {
+  body.layout-share :is(.kb-tree-item, .kb-tree-folder):hover:not(.is-active) { background: transparent; color: var(--text); }
 }
-.notebook-course > span:first-child { min-width: 0; overflow-wrap: anywhere; }
-.notebook-course > span:last-child { flex-shrink: 0; color: var(--muted); }
-.notebook-course:hover { background: var(--surface-muted); color: var(--primary); text-decoration: none; }
+body.layout-share :is(.kb-tree-item, .share-toc-link, .reader-nav-button, .reader-drawer-close, .kb-side-action, .kb-tree-toggle, .scroll-top):active {
+  background: var(--reader-selected); color: var(--reader-selected-text);
+}
 
 /* PDF quota layout; sheet transitions live in pdf-export.css, loaded after this file. */
 .pdf-quota-summary { margin: 0; color: var(--text); font-weight: 600; }
@@ -6507,3 +6506,43 @@ body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .kb-title-r
   .button:active:not(:disabled) { transform: none; }
 }
 @media print { .reader-mobile-bar, .reader-drawer-heading { display: none !important; } }
+
+/* One continuous canvas paints the sidebar column through the footer. Sticky navigation
+   supplies content only; no oversized shadows or independently aligned gradients. */
+html:has(body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded)) { background: #f6f7f9; }
+body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .share-page { padding: 16px 24px; min-height: 100dvh; }
+.reader-frame {
+  --reader-column: 0px;
+  position: relative; display: flex; flex-direction: column; flex: 1;
+  width: 100%; max-width: 1440px; min-width: 0; margin-inline: auto;
+  border-radius: 16px; overflow: clip; background: var(--surface);
+}
+.reader-frame:has(> .share-shell--notebook) { --reader-column: var(--sidebar-width); }
+.reader-frame:has(> .share-shell--doc) { --reader-column: var(--toc-width); }
+.reader-frame::before {
+  content: ''; position: absolute; inset: 0 auto 0 0; width: var(--reader-column);
+  background: var(--panel-bg); pointer-events: none;
+}
+body.layout-share .reader-frame > .share-shell {
+  position: relative; max-width: none; margin: 0; background: transparent;
+}
+body.layout-share .reader-frame > .share-footer {
+  position: relative; max-width: none; margin: 0; width: 100%;
+  padding: 20px 24px 24px calc(var(--reader-column) + 24px); background: transparent;
+  overflow-wrap: anywhere;
+}
+@media (min-width: 961px) {
+  body.layout-share .reader-frame :is(.kb-sidebar, .share-toc) { height: calc(100dvh - 120px); background: transparent; box-shadow: none; border-right: 0; }
+  .reader-frame:has([data-notebook-welcome]) .kb-sidebar { height: calc(100dvh - 144px); }
+}
+@media (max-width: 960px) {
+  body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .share-page { padding: 8px; }
+  .reader-frame { border-radius: 14px; }
+  .reader-frame::before { display: none; }
+  body.layout-share .reader-frame > .share-footer { padding: 20px 16px; }
+  body.layout-share .reader-frame :is(.kb-sidebar, .share-toc) { background: var(--panel-bg); box-shadow: var(--shadow); }
+  .notebook-welcome { min-height: min(65vh, 540px); }
+}
+@media (prefers-color-scheme: dark) {
+  html:has(body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded)) { background: #1f242b; }
+}

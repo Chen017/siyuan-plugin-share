@@ -284,7 +284,7 @@ class PdfExportTests:
         self.assertEqual(self.pdf_post(client, path, 'wrong')[0], 400)
         error_status, _, error_body = client.request(path, {'csrf': 'wrong'}, {'Accept': 'text/html'})
         self.assertEqual(error_status, 400)
-        self.assertIn('返回分享页'.encode(), error_body)
+        self.assertIn(b'Back to share', error_body)
         self.assertEqual(self.pdf_post(client, path, csrf, fingerprint='invalid')[0], 400)
         self.assertEqual(client.request(path, method='PUT')[0], 405)
         self.assertEqual(self.pdf_post(client, path, csrf, scope='unknown')[0], 400)

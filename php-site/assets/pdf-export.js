@@ -24,7 +24,7 @@
       dialog = document.createElement('dialog');
       dialog.className = 'pdf-export-dialog';
       dialog.setAttribute('aria-labelledby', 'pdf-dialog-title');
-      dialog.innerHTML = '<header class="pdf-dialog-header"><h2 id="pdf-dialog-title">导出 PDF</h2><button type="button" class="button ghost pdf-dialog-close" aria-label="关闭导出弹窗">×</button></header><p class="pdf-dialog-loading" role="status">正在读取导出选项…</p><iframe data-pdf-dialog-frame title="导出范围与文档选择"></iframe>';
+      dialog.innerHTML = '<header class="pdf-dialog-header"><h2 id="pdf-dialog-title">Export PDF</h2><button type="button" class="button ghost pdf-dialog-close" aria-label="Close export dialog">×</button></header><p class="pdf-dialog-loading" role="status">Loading export options…</p><iframe data-pdf-dialog-frame title="Export scope and document selection"></iframe>';
       dialogFrame = dialog.querySelector('iframe');
       dialog.querySelector('button').addEventListener('click', closeDialog);
       dialog.addEventListener('cancel', (cancel) => { cancel.preventDefault(); closeDialog(); });
@@ -40,7 +40,7 @@
           dialog.querySelector('.pdf-dialog-loading').hidden = true;
           dialogFrame.hidden = false;
         } else {
-          dialog.querySelector('.pdf-dialog-loading').textContent = loaded?.querySelector('[role=alert]')?.textContent || '无法读取导出选项，请关闭弹窗并刷新分享页重试。';
+          dialog.querySelector('.pdf-dialog-loading').textContent = loaded?.querySelector('[role=alert]')?.textContent || 'Unable to load export options. Close this dialog and reload the share page.';
           dialogFrame.hidden = true;
         }
       });
@@ -59,7 +59,7 @@
     dialogFrame.src = url.href;
     dialogFrame.hidden = false;
     dialog.querySelector('.pdf-dialog-loading').hidden = false;
-    dialog.querySelector('.pdf-dialog-loading').textContent = '正在读取导出选项…';
+    dialog.querySelector('.pdf-dialog-loading').textContent = 'Loading export options…';
     document.documentElement.classList.add('pdf-dialog-open');
     dialog.showModal();
   });
@@ -74,7 +74,7 @@
     }
     let font;
     window.SPSPdfFont = () => font || (font = fetch(form.dataset.pdfFont, { credentials: 'same-origin' }).then(async (response) => {
-      if (!response.ok) throw new Error('来源信息字体加载失败，请重试。');
+      if (!response.ok) throw new Error('Unable to load the attribution font. Please retry.');
       let binary = '';
       for (const byte of new Uint8Array(await response.arrayBuffer())) binary += String.fromCharCode(byte);
       return btoa(binary);
@@ -110,22 +110,22 @@
     const setState = (next) => {
       state = next;
       submit.disabled = next === 'checking' || next === 'running';
-      submit.textContent = next === 'running' ? '正在导出…' : next === 'retry' ? '重试剩余文档' : next === 'done' ? '再次导出' : '确定导出';
+      submit.textContent = next === 'running' ? 'Exporting…' : next === 'retry' ? 'Retry remaining documents' : next === 'done' ? 'Export again' : 'Export';
       form.setAttribute('aria-busy', String(submit.disabled));
       form.querySelectorAll('[data-pdf-scope], [data-pdf-root], [data-pdf-selection], [data-pdf-challenge]').forEach((node) => { node.inert = ['checking', 'running', 'retry'].includes(next); });
     };
     const showQuota = (value) => {
-      const next = value.next_recovery_at ? `下一次恢复：${new Date(value.next_recovery_at * 1000).toLocaleString('zh-CN')}（恢复 ${value.next_recovery_count} 篇，本地时间）。` : '当前额度充足。';
+      const next = value.next_recovery_at ? `Next recovery: ${new Date(value.next_recovery_at * 1000).toLocaleString('en-GB')} (${value.next_recovery_count} documents, local time). ` : 'Full quota available. ';
       const expanded = quota.querySelector('details')?.open || false;
       const summary = document.createElement('p');
       summary.className = 'pdf-quota-summary';
-      summary.textContent = `剩余 ${value.remaining} 篇 · ${value.window_seconds / 60} 分钟额度 ${value.limit} 篇`;
+      summary.textContent = `${value.remaining} documents remaining · ${value.limit} per ${value.window_seconds / 60} minutes`;
       const details = document.createElement('details');
       details.open = expanded;
       const label = document.createElement('summary');
-      label.textContent = '额度与恢复规则';
+      label.textContent = 'Quota and recovery details';
       const description = document.createElement('p');
-      description.textContent = `当前已用 ${value.used} 篇。${next}额度随时间逐篇恢复，并非整点重置。`;
+      description.textContent = `${value.used} documents used. ${next}Quota recovers per document on a rolling basis.`;
       details.append(label, description);
       quota.replaceChildren(summary, details);
     };
@@ -164,7 +164,7 @@
       const body = worker.contentDocument;
       let error = body?.querySelector('[role=alert]')?.textContent;
       if (!error) { try { error = JSON.parse(body.body.textContent).error; } catch {} }
-      formStatus.textContent = error || '导出失败，请重试。';
+      formStatus.textContent = error || 'Export failed. Please retry.';
       setState('idle');
       refreshQuota().catch(() => {});
     });
@@ -175,7 +175,7 @@
         body: new URLSearchParams({ csrf: form.querySelector('[name=csrf]').value, fingerprint: await ready, ...extra }),
       });
       const result = await response.json();
-      if (!response.ok && !(response.status === 428 && result.captcha_required)) throw new Error(result.error || '导出验证失败，请重试。');
+      if (!response.ok && !(response.status === 428 && result.captcha_required)) throw new Error(result.error || 'Export verification failed. Please retry.');
       return result;
     };
     const refreshChallenge = async () => {
@@ -212,7 +212,7 @@
         let check;
         if (!challenge.hidden) {
           const answer = form.querySelector('[name=captcha_answer]').value.trim();
-          if (!answer) { formStatus.textContent = '请输入图片中的验证码。'; return; }
+          if (!answer) { formStatus.textContent = 'Enter the code shown in the image.'; return; }
           check = await request('captcha-verify', { token: challengeToken, answer });
           challenge.hidden = true;
         }
@@ -226,9 +226,9 @@
         // Submit in the user's gesture where possible; no server-side browser process.
         HTMLFormElement.prototype.submit.call(form);
         setState('running');
-        formStatus.textContent = '正在整理文档并准备下载…';
+        formStatus.textContent = 'Preparing documents for download…';
       } catch (error) {
-        formStatus.textContent = error.message || "导出准备失败，请刷新页面后重试。";
+        formStatus.textContent = error.message || "Unable to prepare the export. Reload the page and retry.";
       } finally {
         if (state === 'checking') setState('idle');
       }
@@ -245,8 +245,8 @@
     const completed = new Set();
     const names = new Map();
     const filenames = docs.map((doc, index) => {
-      let title = Array.from((doc.title || `文档-${index + 1}`).normalize('NFKC').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')).slice(0, 100).join('').replace(/[. ]+$/, '').trim() || `文档-${index + 1}`;
-      if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i.test(title)) title = `文档_${title}`;
+      let title = Array.from((doc.title || `Document-${index + 1}`).normalize('NFKC').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')).slice(0, 100).join('').replace(/[. ]+$/, '').trim() || `Document-${index + 1}`;
+      if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i.test(title)) title = `Document_${title}`;
       const count = (names.get(title.toLowerCase()) || 0) + 1;
       names.set(title.toLowerCase(), count);
       return `${title}${count > 1 ? ` (${count})` : ''}.pdf`;
@@ -263,7 +263,7 @@
     const release = () => {
       if (released) return;
       released = true;
-      stopRun(new Error('任务已取消。'));
+      stopRun(new Error('Task cancelled.'));
       button.disabled = true;
       navigator.sendBeacon?.(`${url}/release`, fields());
     };
@@ -271,7 +271,7 @@
     const request = async (extra, signal) => {
       const response = await fetch(`${url}/verify`, { method: 'POST', credentials: 'same-origin', cache: 'no-store', body: fields(extra), signal });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error || '导出任务已失效，请重新打开弹窗。');
+      if (!response.ok) throw new Error(result.error || 'Export task expired. Open the export dialog again.');
       renewAt = Date.now() + result.renew_after * 1000;
     };
     const run = async () => {
@@ -311,19 +311,19 @@
         const frame = document.createElement('iframe');
         frame.className = 'pdf-export-worker';
         frame.name = `sps-pdf-doc-${index}-${Math.random().toString(36).slice(2)}`;
-        frame.title = `PDF 文档 ${index + 1}`;
+        frame.title = `PDF document ${index + 1}`;
         frame.tabIndex = -1;
         frame.setAttribute('aria-hidden', 'true');
         let timeout;
         try {
           return await new Promise((resolve, reject) => {
             pending.set(index, { frame, resolve, reject });
-            timeout = setTimeout(() => reject(new Error('此篇生成耗时过长，请重试剩余文档。')), 1800000);
+            timeout = setTimeout(() => reject(new Error('This document took too long to generate. Retry the remaining documents.')), 1800000);
             frame.addEventListener('load', () => {
               if (frame.contentWindow.location.href === 'about:blank') return;
               const page = frame.contentDocument;
               if (page?.querySelector('[data-pdf-child]')) return;
-              reject(new Error(page?.querySelector('[role=alert]')?.textContent || '文档准备失败，请稍后重试。'));
+              reject(new Error(page?.querySelector('[role=alert]')?.textContent || 'Unable to prepare this document. Please retry later.'));
             });
             document.body.append(frame);
             // A real same-origin document preserves fonts, protected resources,
@@ -359,7 +359,7 @@
             if (!item) break;
             // Final permission check and slot completion share one request.
             await request({ finish: downloadIndex, renew: '1' }, controller.signal);
-            if (error || released) throw error || new Error('任务已取消。');
+            if (error || released) throw error || new Error('Task cancelled.');
             const blobUrl = URL.createObjectURL(item.blob);
             const anchor = document.createElement('a');
             anchor.href = blobUrl;
@@ -371,7 +371,7 @@
             completed.add(downloadIndex);
             ready.delete(downloadIndex++);
             item.resolve();
-            report(`已下载 ${completed.size} / ${docs.length} 篇，正在准备其余文档…`);
+            report(`Downloaded ${completed.size} / ${docs.length}. Preparing the remaining documents…`);
           }
         } catch (reason) { abort(reason); }
         finally { draining = false; }
@@ -382,7 +382,7 @@
             while (next < docs.length && completed.has(next)) next++;
             if (next >= docs.length) return;
             const index = next++;
-            report(`已下载 ${completed.size} / ${docs.length} 篇，正在生成：${filenames[index]}`);
+            report(`Downloaded ${completed.size} / ${docs.length}. Generating: ${filenames[index]}`);
             const blob = await render(index);
             if (error) throw error;
             // Await ordered download before preparing another doc. At most three
@@ -407,7 +407,7 @@
         await Promise.all(Array.from({ length: docs.length > 1 ? 3 : 1 }, worker));
         if (error) throw error;
         release();
-        report(`已逐篇触发 ${completed.size} 个独立 PDF 下载。${warning}若文件未全部出现，请允许浏览器连续下载多个文件。`, 'done');
+        report(`Started ${completed.size} individual PDF downloads. ${warning}If files are missing, allow multiple downloads in your browser.`, 'done');
       } catch (reason) {
         abort(reason);
         let retryable = !released;
@@ -415,13 +415,13 @@
           try { await request({ abandon: '1', renew: '1' }); }
           catch { retryable = false; release(); }
         }
-        report(`已下载 ${completed.size} / ${docs.length} 篇。${reason.message || '下载失败，请重试。'}`, 'error', retryable);
+        report(`Downloaded ${completed.size} / ${docs.length}. ${reason.message || 'Download failed. Please retry.'}`, 'error', retryable);
       } finally {
         clearInterval(heartbeat);
         window.removeEventListener('message', onMessage);
         busy = false;
         button.disabled = released;
-        button.textContent = released ? '导出已结束' : '重试剩余文档';
+        button.textContent = released ? 'Export ended' : 'Retry remaining documents';
       }
     };
     button.addEventListener('click', run);
@@ -454,7 +454,7 @@
     const script = document.createElement('script');
     script.src = source;
     script.onload = () => resolve();
-    script.onerror = () => reject(new Error('PDF 组件加载失败，请重试。'));
+    script.onerror = () => reject(new Error('Unable to load the PDF component. Please retry.'));
     document.head.append(script);
   });
   const loadLibrary = () => library || (library = Promise.all([
@@ -464,7 +464,7 @@
   const loadProvenanceFont = () => provenanceFont || (provenanceFont = (async () => {
     if (typeof parent.SPSPdfFont === 'function') return parent.SPSPdfFont();
     const response = await fetch(preview.dataset.pdfFont, { credentials: 'same-origin' });
-    if (!response.ok) throw new Error('来源信息字体加载失败，请重试。');
+    if (!response.ok) throw new Error('Unable to load the attribution font. Please retry.');
     const bytes = new Uint8Array(await response.arrayBuffer());
     let binary = '';
     for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -585,7 +585,7 @@
       await Promise.all([loadLibrary(), loadProvenanceFont()]);
       send({ blob: await makePdf(section), warning: resourceWarning });
     } catch (error) {
-      send({ error: error.message || 'PDF 生成失败。' });
+      send({ error: error.message || 'PDF generation failed.' });
     } finally {
       finished = true;
       busy = false;
@@ -597,7 +597,7 @@
   const prepare = async () => {
     const deadline = Date.now() + 25000;
     while (!Array.from(documentBody.querySelectorAll(".markdown-body")).every((node) => node.dataset.spsRendered === "1")) {
-      if (Date.now() > deadline) throw new Error("排版组件未能加载，请刷新预览后重试。");
+      if (Date.now() > deadline) throw new Error("Unable to load the layout components. Reload the preview and retry.");
       await pause(100);
     }
     documentBody.querySelectorAll("details").forEach((item) => { item.open = true; });
@@ -639,14 +639,14 @@
     const diagramPending = !!documentBody.querySelector(".md-graphviz:empty")
       || Array.from(documentBody.querySelectorAll(".mermaid")).some((node) => !node.querySelector("svg, img"));
     status.textContent = incomplete || diagramPending
-      ? "部分图片未能加载，请检查下载文件。"
-      : "排版已就绪，正在生成 PDF…";
-    if (incomplete || diagramPending) resourceWarning = '部分图片或图表未能加载，请检查下载文件。';
+      ? "Some images could not load. Check the downloaded file."
+      : "Layout ready. Generating PDF…";
+    if (incomplete || diagramPending) resourceWarning = 'Some images or diagrams could not load. Check the downloaded file.';
     prepared = true;
     updateControls();
     button.click();
   };
   prepare().catch((error) => {
-    send({ error: error.message || '排版准备失败。' });
+    send({ error: error.message || 'Layout preparation failed.' });
   });
 })();

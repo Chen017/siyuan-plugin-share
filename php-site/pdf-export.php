@@ -192,9 +192,9 @@ function pdf_export_fail(int $status, string $message): never {
         $path = (string)parse_url((string)($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH);
         $back = base_path() . '/';
         if (preg_match('#^(.*?/s/[a-zA-Z0-9_-]+)/export(?:/.*)?$#', $path, $matches)) $back = $matches[1];
-        $content = '<main class="pdf-export-panel"><h1>无法导出 PDF</h1><p role="alert">' . htmlspecialchars($message)
-            . '</p><a class="button" href="' . htmlspecialchars($back) . '">返回分享页</a></main>';
-        render_page('无法导出 PDF', $content, null, '', ['layout' => 'share', 'pdf_export' => true]);
+        $content = '<main class="pdf-export-panel"><h1>Unable to export PDF</h1><p role="alert">' . htmlspecialchars($message)
+            . '</p><a class="button" href="' . htmlspecialchars($back) . '">Back to share</a></main>';
+        render_page('Unable to export PDF', $content, null, '', ['layout' => 'share', 'pdf_export' => true]);
     }
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode(['error' => $message], JSON_UNESCAPED_UNICODE);
@@ -362,7 +362,7 @@ function render_pdf_export_link(array $context): string {
     if (!pdf_export_settings()['enabled']) return '';
     $url = base_path() . '/s/' . rawurlencode($context['slug']) . '/export';
     return '<a class="button ghost share-view-toggle" data-pdf-export-link href="' . htmlspecialchars($url)
-        . '?doc=' . rawurlencode($context['doc_id']) . '">导出 PDF</a>';
+        . '?doc=' . rawurlencode($context['doc_id']) . '">Export PDF</a>';
 }
 
 function pdf_export_lease(int $shareId, string $visitor, string $token, bool $renew = false): array {
@@ -427,7 +427,7 @@ function pdf_export_document(array $share, string $slug, string $visitor, string
         $stmt = $pdo->prepare('SELECT doc_id, substr(CAST(markdown AS BLOB), 1, ?) AS markdown FROM share_docs WHERE share_id = ? AND id = ? AND doc_id = ?');
         $stmt->execute([$limits['max_markdown_bytes'] + 1, $shareId, $entry['document_id'], $entry['doc_id']]);
         $doc = $stmt->fetch(PDO::FETCH_ASSOC);
-        if (!$doc) throw new RuntimeException('文档已移除，请重新选择导出范围。', 404);
+        if (!$doc) throw new RuntimeException('This document was removed. Choose the export scope again.', 404);
         $sourceBytes = strlen((string)$doc['markdown']);
         $stmt = $pdo->prepare('SELECT COALESCE(SUM(source_bytes), 0) FROM pdf_export_documents WHERE job_token = ? AND doc_index != ?');
         $stmt->execute([$token, $index]);
@@ -581,28 +581,28 @@ function route_pdf_export(string $slug, string $action = ''): never {
         $tickets[$ticket] = ['created' => time(), 'visitor' => $visitor, 'slug' => $slug, 'token' => '', 'cancelled' => false];
         $_SESSION['pdf_export_tickets'] = $tickets;
         $usage = htmlspecialchars(json_encode(pdf_visitor_usage($visitor)), ENT_QUOTES, 'UTF-8');
-        $content = '<main class="pdf-export-panel">' . ($dialog ? '' : '<h1>导出 PDF</h1>') . '<p>选择范围并确定后，即可逐篇下载。每篇文档是一个独立 PDF 文件。</p>';
+        $content = '<main class="pdf-export-panel">' . ($dialog ? '' : '<h1>Export PDF</h1>') . '<p>Choose a scope to download each document as a separate PDF.</p>';
         $content .= '<div class="pdf-quota-notice" data-pdf-quota="' . $usage . '" role="status"></div>';
-        $content .= '<p>每批最多 ' . $limits['max_docs'] . ' 篇；较大的笔记本请分批勾选。</p>';
+        $content .= '<p>Maximum ' . $limits['max_docs'] . ' documents per batch. Select large notebooks in smaller batches.</p>';
         $content .= '<form method="post" action="' . htmlspecialchars($url) . '" target="sps-pdf-worker" data-pdf-export-form' . pdf_export_worker_attributes($url, '') . '>';
         $content .= render_hidden_inputs(['csrf' => csrf_token(), 'fingerprint' => '', 'auto_download' => '1', 'ticket' => $ticket]);
-        $content .= '<label>导出范围 <select class="input" name="scope" data-pdf-scope><option value="single">单篇文档</option><option value="tree">此文档及子文档</option><option value="all">整个分享范围</option><option value="selected">勾选多篇文档</option></select></label>';
-        $content .= '<label data-pdf-root>文档 <select class="input" name="doc_id">';
+        $content .= '<label>Export scope <select class="input" name="scope" data-pdf-scope><option value="single">Single document</option><option value="tree">This document and its subpages</option><option value="all">Entire share</option><option value="selected">Select documents</option></select></label>';
+        $content .= '<label data-pdf-root>Document <select class="input" name="doc_id">';
         foreach (array_slice($docs, 0, 2000) as $doc) {
             $content .= '<option value="' . htmlspecialchars((string)$doc['doc_id']) . '"' . ($doc['doc_id'] === $active ? ' selected' : '') . '>' . htmlspecialchars((string)($doc['hpath'] ?: $doc['title'])) . '</option>';
         }
-        $content .= '</select></label><fieldset data-pdf-selection hidden><legend>选择文档</legend>';
+        $content .= '</select></label><fieldset data-pdf-selection hidden><legend>Select documents</legend>';
         foreach (array_slice($docs, 0, 2000) as $doc) {
             $content .= '<label><input type="checkbox" name="doc_ids[]" value="' . htmlspecialchars((string)$doc['doc_id']) . '"> ' . htmlspecialchars((string)($doc['hpath'] ?: $doc['title'])) . '</label>';
         }
         $content .= '</fieldset>';
-        if (count($docs) > 2000) $content .= '<p>仅列出前 2000 篇；其余文档请从分享页打开后导出。</p>';
-        $content .= '<fieldset data-pdf-challenge hidden><legend>安全验证（此 Cookie 只需一次）</legend><p>导出过于频繁，请输入图片中的验证码。</p><img data-pdf-captcha-image alt="安全验证码"><button class="button ghost" type="button" data-pdf-captcha-refresh>换一张</button><label>验证码 <input class="input" name="captcha_answer" autocomplete="off" maxlength="8"></label></fieldset>';
-        $content .= '<button class="button primary" type="submit">确定导出</button><p data-pdf-form-status role="status" aria-live="polite"></p></form>';
-        $content .= '<iframe class="pdf-export-worker" name="sps-pdf-worker" data-pdf-worker title="PDF 生成任务" aria-hidden="true" tabindex="-1"></iframe>';
-        if (!$dialog) $content .= '<a href="' . htmlspecialchars(base_path() . '/s/' . rawurlencode($slug)) . '">返回分享页</a>';
+        if (count($docs) > 2000) $content .= '<p>Only the first 2,000 documents are listed. Open other documents from the share page to export them.</p>';
+        $content .= '<fieldset data-pdf-challenge hidden><legend>Security check (once per browser cookie)</legend><p>Enter the verification code to continue exporting.</p><img data-pdf-captcha-image alt="Verification code"><button class="button ghost" type="button" data-pdf-captcha-refresh>Refresh code</button><label>Verification code <input class="input" name="captcha_answer" autocomplete="off" maxlength="8"></label></fieldset>';
+        $content .= '<button class="button primary" type="submit">Export</button><p data-pdf-form-status role="status" aria-live="polite"></p></form>';
+        $content .= '<iframe class="pdf-export-worker" name="sps-pdf-worker" data-pdf-worker title="PDF generation task" aria-hidden="true" tabindex="-1"></iframe>';
+        if (!$dialog) $content .= '<a href="' . htmlspecialchars(base_path() . '/s/' . rawurlencode($slug)) . '">Back to share</a>';
         $content .= '</main>';
-        render_page('导出 PDF', $content, null, '', ['layout' => 'share', 'pdf_export' => true, 'pdf_embedded' => $dialog]);
+        render_page('Export PDF', $content, null, '', ['layout' => 'share', 'pdf_export' => true, 'pdf_embedded' => $dialog]);
     }
     if ($method !== 'POST') pdf_export_fail(405, '不支持此请求。');
     $fingerprint = $_POST['fingerprint'] ?? '';
