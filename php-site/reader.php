@@ -242,7 +242,7 @@ function render_doc_tree_icon(?array $doc, string $assetBasePath): string {
     return '';
 }
 
-function render_share_search_box(string $slug): string {
+function render_share_search_box(): string {
     $html  = '<div class="kb-search" data-share-search>';
     $html .= '<div class="kb-search-input-wrap">';
     $html .= '<svg class="kb-search-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.35-4.35"/></svg>';
@@ -490,7 +490,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $documentTree = build_doc_tree($docs, $activeDocId);
             $treeHtml = render_doc_tree($documentTree, $slug, $activeDocId, 0, '', $assetBasePath);
             $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
-            $sidebar .= render_share_search_box($slug);
+            $sidebar .= render_share_search_box();
             $sidebar .= '<div class="kb-side-tabs" data-share-tabs data-share-default="tree">';
             $sidebar .= '<button class="kb-side-tab is-active" type="button" data-share-tab="tree">Documents</button>';
             $sidebar .= '<button class="kb-side-tab" type="button" data-share-tab="toc">Contents</button>';
@@ -567,7 +567,7 @@ function route_share(string $slug, ?string $docId = null): void {
         $markdown = insert_adjacent_emoji_image_spacing($markdown);
         $registerShareVisitor();
         $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
-        $sidebar .= render_share_search_box($slug);
+        $sidebar .= render_share_search_box();
         $sidebar .= '<div class="kb-side-tabs" data-share-tabs data-share-default="toc">';
         $sidebar .= '<button class="kb-side-tab is-active" type="button" data-share-tab="toc">Contents</button>';
         $sidebar .= '</div>';
@@ -595,7 +595,7 @@ function route_share(string $slug, ?string $docId = null): void {
         $notebookTree = build_doc_tree($docs, $docId);
         $treeHtml = render_doc_tree($notebookTree, $slug, $docId, 0, '', $assetBasePath);
         $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
-        $sidebar .= render_share_search_box($slug);
+        $sidebar .= render_share_search_box();
         $sidebar .= '<div class="kb-side-tabs" data-share-tabs data-share-default="tree">';
         $sidebar .= '<button class="kb-side-tab is-active" type="button" data-share-tab="tree">Documents</button>';
         $sidebar .= '<button class="kb-side-tab" type="button" data-share-tab="toc">Contents</button>';

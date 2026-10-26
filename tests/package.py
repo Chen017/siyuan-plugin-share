@@ -18,6 +18,9 @@ with tempfile.TemporaryDirectory(prefix='siyuan-package-') as directory:
         assert archive.testzip() is None
         assert {'index.php', 'admin.php', 'config.example.php', 'pdf-export.php', 'pdf-visitor.php', 'assets/app.js', 'robots.txt', 'llms.txt'} <= names
         assert 'config.php' not in names
+        assert 'assets/MiSans-Latin.woff2' in names
+        assert not {'assets/MiSans-Regular.ttf', 'assets/MiSansVF.ttf'} & names
+        assert not any(name.startswith('resources/') for name in names)
         assert all((info.external_attr >> 16) & 0o777 == 0o644 for info in archive.infolist()), 'Server files need readable permissions after extraction'
         assert not any(name.startswith(('storage/', 'uploads/', 'tests/', '.git/', '.test-output/')) for name in names)
         for name in sorted(names):

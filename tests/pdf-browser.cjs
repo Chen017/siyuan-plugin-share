@@ -163,6 +163,7 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     assert.equal(automaticDownloads.length, 2);
     for (let index = 0; index < automaticDownloads.length; index++) await automaticDownloads[index].saveAs(path.join(output, `dialog-auto-${index + 1}.pdf`));
     await options.locator('[data-pdf-quota]').filter({ hasText: '118 documents remaining' }).waitFor();
+    await options.locator('[data-pdf-quota] summary').click();
     assert.match(await options.locator('[data-pdf-quota]').innerText(), /Next recovery/);
     assert.equal(applicationPages().length, pagesBefore, 'Dialog and automatic download open no extra application tabs');
     assert.equal(reader.url(), originalUrl, 'Reader stays on the document');
@@ -176,10 +177,14 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     await options.locator('[data-pdf-scope]').press('Escape');
     await modal.waitFor({ state: 'hidden' });
     await reader.emulateMedia({ colorScheme: 'light', reducedMotion: 'no-preference' });
-    await reader.route('**/assets/vendor/html2pdf.bundle.min.js*', (route) => route.abort(), { times: 1 });
+    // Block both preload and script requests: aborting only the preload can leave
+    // the actual library load successful and never exercise the retry controls.
+    const libraryFailure = (route) => route.abort();
+    await reader.route('**/assets/vendor/html2pdf.bundle.min.js*', libraryFailure);
     await reader.locator('[data-pdf-export-link]').click();
     await options.getByRole('button', { name: 'Export', exact: true }).click();
     await options.getByRole('button', { name: 'Retry remaining documents', exact: true }).waitFor({ timeout: 45000 });
+    await reader.unroute('**/assets/vendor/html2pdf.bundle.min.js*', libraryFailure);
     const task = reader.frames().find((frame) => frame.name() === 'sps-pdf-worker');
     const taskCredentials = await task.locator('[data-pdf-preview]').evaluate((node) => ({ csrf: node.dataset.csrf, lease: node.dataset.lease }));
     await reader.getByRole('button', { name: 'Close export dialog' }).click();
@@ -233,7 +238,7 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
       await admin.goto(base + '/login');
       await admin.locator('[name=username]').fill('admin');
       await admin.locator('[name=password]').fill('123456');
-      await admin.locator('[data-login-panel=password] button[type=submit]').click();
+      await admin.getByRole('button', { name: 'Sign in', exact: true }).click();
       await admin.goto(base + '/admin#settings');
       const settings = admin.locator('[data-pdf-settings-form]');
       assert.equal(await settings.locator('input[type=number]:visible').count(), 2);

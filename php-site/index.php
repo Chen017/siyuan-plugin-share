@@ -777,24 +777,11 @@ function current_user(): ?array {
     return $row;
 }
 
-function require_login(): array {
+function require_admin(): array {
+    // current_user() already rejects disabled/non-admin accounts and stale sessions.
     $user = current_user();
     if (!$user) {
         redirect('/login');
-    }
-    if ((int)$user['disabled'] === 1) {
-        session_destroy();
-        redirect('/login');
-    }
-    return $user;
-}
-
-function require_admin(): array {
-    $user = require_login();
-    if ($user['role'] !== 'admin') {
-        http_response_code(403);
-        echo 'Forbidden';
-        exit;
     }
     return $user;
 }

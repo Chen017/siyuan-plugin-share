@@ -12,6 +12,7 @@
 tests/
 scripts/
 docs/
+resources/
 backups/
 **/__pycache__/
 *.swp

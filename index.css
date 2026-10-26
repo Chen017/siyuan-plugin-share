@@ -114,10 +114,6 @@
   box-shadow: 0 0 0 3px rgba(63, 126, 233, 0.25);
 }
 
-.sps-switch__text {
-  line-height: 1.4;
-}
-
 .sps-share-exclude {
   margin-top: 10px;
   display: flex;
@@ -294,18 +290,6 @@
   gap: 8px;
   flex-wrap: wrap;
   margin-top: 10px;
-}
-
-.sps-actions-nowrap {
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  overflow-y: hidden;
-  align-items: center;
-}
-
-.sps-actions-nowrap .b3-button {
-  white-space: nowrap;
-  flex-shrink: 0;
 }
 
 .sps-setting-actions-inline {

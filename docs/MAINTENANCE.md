@@ -28,10 +28,15 @@ These files are loaded by the front controller; Nginx continues to deny executio
 python tests/run.py --php /path/to/php-8.3
 NODE_PATH=/path/to/isolated/node_modules node tests/frontend.cjs
 NODE_PATH=/path/to/isolated/node_modules node tests/reader-ui.cjs
+NODE_PATH=/path/to/isolated/node_modules node tests/plugin.cjs
 python tests/deploy-guard.py --bash /path/to/bash
 ```
 
 The frontend suites use `jsdom@26.1.0`. PDF text-layer generation also uses `jspdf@4.0.0`; verify its generated documents with `pypdfium2==5.14.0` and `tests/pdf-text-layer.py`. These are isolated test dependencies, not application dependencies. CI installs them in the runner's temporary directory.
+
+The plugin suite loads the actual no-build entry point in a disposable host. It checks desktop/mobile lifecycle, English/Chinese locales, old settings migration, scoped incremental uploads, API payloads, retries and cancellation. The frontend workflow runs it together with the reader suites.
+
+For full browser PDF checks, add `--browser` to the PHP runner and provide Playwright plus its browser. `SIYUAN_PLAYWRIGHT_MODULE` and `SIYUAN_BROWSER_EXECUTABLE` can point to an existing isolated installation. The test exercises actual individual downloads, collapsed quota details, failure/retry controls, cancellation and administrator settings.
 
 The PHP runner copies application code into a temporary directory, excludes real configuration/data, creates a disposable database and isolates native PHP session files. The Docker mode adds Nginx access rules, lifecycle and persistence checks. Browser PDF tests require their separate browser environment; an explicit skip does not mean they passed.
 
@@ -40,6 +45,8 @@ On `main`, deployment calls both reusable regression workflows and waits for bot
 ## Packages
 
 `scripts/package.py` builds the plugin and server ZIPs without publishing. It includes every PHP module and the optional configuration example, public metadata and assets; it excludes local `config.php`, persisted data and test artifacts. `tests/package.py` verifies archive integrity and PHP include dependencies. The manual release workflow uses this same packager. No tag or release is created by the maintenance tests.
+
+The original MiSans input lives in `resources/fonts/`, outside public assets and all release packages. `scripts/subset-misans.py` regenerates the reader's Latin WOFF2; KaTeX and PDF fonts remain runtime dependencies. Docker excludes the source-only resources directory from its build context.
 
 ## Deployment and backups
 
@@ -54,5 +61,7 @@ For the administrator-only migration, the deployment guard additionally compares
 ## Cleanup scope
 
 The 2026-10-27 maintenance pass separates PHP responsibilities, removes unreachable helpers and confirmed obsolete styles, unifies backup and configuration-permission handling, aligns health checks, isolates test sessions, filters local artifacts from build context and corrects deployment documentation. It does not change sync contracts, stored note content, share IDs/URLs, PDF behavior or the no-build plugin format.
+
+The follow-up [cleanup audit](CLEANUP_20261027.md) removes remaining orphan plugin methods, obsolete component styles and unused shipped assets, and simplifies the administrator guard with session-revocation coverage. Migration routines, legacy API ownership, dynamically generated classes and custom rendering hooks remain supported.
 
 Historical branches are archived in a verified local Git bundle before removal. Keep `main`, the local `upstream` reference, and the owner's remote `upstream` reference; do not rewrite the actual upstream repository. The bundle also records branch tips and preserves any local PDF test patch separately. This private archive is not part of release packages or Docker builds.

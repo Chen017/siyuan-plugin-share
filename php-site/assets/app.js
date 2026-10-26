@@ -3109,16 +3109,6 @@ const initImageViewer = () => {
     let dragOriginX = 0;
     let dragOriginY = 0;
 
-    const getViewportSize = () => {
-      if (window.visualViewport) {
-        return {
-          width: window.visualViewport.width,
-          height: window.visualViewport.height,
-        };
-      }
-      return {width: window.innerWidth, height: window.innerHeight};
-    };
-
     const applyOneToOneScale = () => {
       if (!image) return;
       const naturalWidth = image.naturalWidth || 0;
@@ -3621,15 +3611,6 @@ const initImageViewer = () => {
           return {icon, label};
         }
         return {icon: "", label: trimmed};
-      };
-
-      const reparseInline = (inlineToken, text, env) => {
-        inlineToken.content = text;
-        if (md.inline && typeof md.inline.parse === "function") {
-          const children = [];
-          md.inline.parse(text, md, env || {}, children);
-          inlineToken.children = children;
-        }
       };
 
       const buildTitleHtml = (titleRaw, meta) => {

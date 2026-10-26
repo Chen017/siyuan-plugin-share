@@ -459,6 +459,39 @@ class Regression(PdfCookieTests, PdfReleaseTests, PdfExportTests, unittest.TestC
                 value = row['value'].replace("'", "''")
                 self.rows(f"UPDATE settings SET value='{value}' WHERE key='{row['key']}'")
 
+    def test_admin_session_revocation(self):
+        for column, value in [('disabled', '1'), ('role', "'user'"), ('password_hash', "'changed-password-hash'")]:
+            with self.subTest(column=column):
+                client = Client(self.base)
+                self.assertEqual(client.form('/login', {'username': self.name, 'password': 'Test-PHP83!pass'})[0], 302)
+                original = self.rows(f"SELECT {column} AS value FROM users WHERE username = '{self.name}'")[0]['value']
+                self.rows(f"UPDATE users SET {column} = {value} WHERE username = '{self.name}'")
+                try:
+                    for route in ['/dashboard', '/admin', '/account']:
+                        status, headers, _ = client.request(route)
+                        self.assertEqual((status, headers.get('Location')), (302, '/login'), route)
+                    # A revoked session cannot execute a settings mutation either.
+                    status, headers, _ = client.request('/admin/settings', {'csrf': 'invalid'})
+                    self.assertEqual((status, headers.get('Location')), (302, '/login'))
+                finally:
+                    escaped = str(original).replace("'", "''")
+                    self.rows(f"UPDATE users SET {column} = '{escaped}' WHERE username = '{self.name}'")
+
+    def test_legacy_owner_api_key_remains_usable(self):
+        name = self.name + '_legacy_api'
+        self.create_actor(name, role='user')
+        for column in ['api_key_hash', 'api_key_prefix', 'api_key_last4']:
+            self.rows(f"UPDATE users SET {column} = (SELECT {column} FROM users WHERE username = '{self.name}') WHERE username = '{name}'")
+        self.rows(f"UPDATE users SET api_key_hash = NULL WHERE username = '{self.name}'")
+        verified = self.api('auth/verify')
+        self.assertEqual((verified['user']['username'], verified['user']['role']), (name, 'user'))
+        share = self.share()
+        owner = self.rows(f"SELECT user_id FROM shares WHERE id = {int(share['id'])}")[0]['user_id']
+        self.assertEqual(owner, verified['user']['id'])
+        self.assertIn(b'PHP83_MARKER', Client(self.base).request('/s/' + share['slug'])[2])
+        self.rows(f"UPDATE users SET disabled = 1 WHERE username = '{name}'")
+        self.api('auth/verify', status=401)
+
     def test_admin_share_restore_and_delete(self):
         share = self.share()
         admin = self.admin()

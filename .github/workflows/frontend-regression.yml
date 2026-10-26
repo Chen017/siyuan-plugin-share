@@ -11,6 +11,7 @@ on:
       - 'i18n/**'
       - 'tests/frontend.cjs'
       - 'tests/reader-ui.cjs'
+      - 'tests/plugin.cjs'
       - 'tests/pdf-text-layer.*'
       - '.github/workflows/frontend-regression.yml'
   pull_request:
@@ -34,8 +35,9 @@ jobs:
         run: |
           for file in index.js php-site/assets/*.js; do node --check "$file"; done
           node -e "for (const path of ['plugin.json', 'i18n/en_US.json', 'i18n/zh_CN.json']) JSON.parse(require('node:fs').readFileSync(path, 'utf8'))"
-      - name: Verify Markdown, accessibility and lazy diagram loading
+      - name: Verify plugin lifecycle, Markdown and reader interaction
         run: |
+          NODE_PATH="$RUNNER_TEMP/reader-test/node_modules" node tests/plugin.cjs
           NODE_PATH="$RUNNER_TEMP/reader-test/node_modules" node tests/frontend.cjs
           NODE_PATH="$RUNNER_TEMP/reader-test/node_modules" node tests/reader-ui.cjs
       - uses: actions/setup-python@v5

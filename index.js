@@ -28,7 +28,6 @@ const STORAGE_INCREMENTAL_CURSOR = "incrementalCursorBySite";
 const STORAGE_DOC_BLOCK_COUNTS = "docBlockCountBySite";
 const STORAGE_EXPORT_RETRY_CACHE_INDEX = "exportRetryCacheIndexBySite";
 const STORAGE_AUTO_UPDATE_RUNTIME = "autoUpdateRuntimeBySite";
-const DOCK_TYPE = "siyuan-plugin-share-dock";
 const MB = 1024 * 1024;
 const UPLOAD_CHUNK_MIN_SIZE = 256 * 1024;
 const UPLOAD_CHUNK_MAX_SIZE = 8 * MB;
@@ -338,12 +337,6 @@ const SPS_QR_STYLES = [
 const SPS_QR_ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="16" height="16" fill="currentColor"><path d="M48.384 45.376l412.224 0 0 84.992-412.224 0 0-84.992ZM565.44 45.376l238.656 0 0 84.992-238.656 0 0-84.992ZM891.584 45.376l86.72 0 0 86.72-86.72 0 0-86.72ZM48.384 374.4l412.224 0 0 85.056-412.224 0 0-85.056ZM45.696 45.376l84.992 0 0 412.224-84.992 0 0-412.224ZM375.616 45.376l84.992 0 0 412.224-84.992 0 0-412.224ZM189.376 200.832l115.712 0 0 115.712-115.712 0 0-115.712ZM565.44 130.368l82.752 0 0 87.232-82.752 0 0-87.232ZM804.032 130.368l90.752 0 0 160.512-90.752 0 0-160.512ZM891.584 217.6l86.72 0 0 151.872-86.72 0 0-151.872ZM651.328 282.688l152.768 0 0 109.312-152.768 0 0-109.312ZM736.832 369.408l155.392 0 0 88.128-155.392 0 0-88.128ZM565.952 372.16l85.376 0 0 85.376-85.376 0 0-85.376ZM45.696 542.784l84.992 0 0 192.576-84.992 0 0-192.576ZM130.88 717.248l91.968 0 0 92.032-91.968 0 0-92.032ZM45.696 805.632l85.184 0 0 173.056-85.184 0 0-173.056ZM217.664 542.784l261.696 0 0 105.728-261.696 0 0-105.728ZM281.344 639.104l109.184 0 0 100.48-109.184 0 0-100.48ZM370.176 717.248l109.184 0 0 174.848-109.184 0 0-174.848ZM285.44 805.632l105.088 0 0 173.056-105.088 0 0-173.056ZM197.952 869.12l102.016 0 0 109.568-102.016 0 0-109.568ZM629.184 542.784l195.264 0 0 174.464-195.264 0 0-174.464ZM871.168 542.784l107.136 0 0 107.136-107.136 0 0-107.136ZM545.088 630.016l107.136 0 0 194.304-107.136 0 0-194.304ZM716.672 692.8l107.776 0 0 111.872-107.776 0 0-111.872ZM545.088 869.12l107.136 0 0 109.568-107.136 0 0-109.568ZM802.816 892.096l175.488 0 0 86.592-175.488 0 0-86.592ZM890.56 804.672l87.744 0 0 105.728-87.744 0 0-105.728Z"/></svg>';
 const DEFAULT_DOC_ICON_LEAF = "\u{1F4C4}";
 const DEFAULT_DOC_ICON_PARENT = "\u{1F4D1}";
-const BLOCK_REF_ID_PATTERN = "[0-9]{14}-[0-9a-z]{7,}";
-const BLOCK_REF_RE = new RegExp(
-  `\\(\\(${BLOCK_REF_ID_PATTERN}(?:\\s+\\"[^\\"]*\\")?\\)\\)`,
-  "i",
-);
-const BLOCK_REF_LINK_RE = new RegExp(`siyuan://blocks/${BLOCK_REF_ID_PATTERN}`, "i");
 
 const TREE_SHARE_CLASS = "sps-tree-share";
 const TREE_SHARED_CLASS = "sps-tree-item--shared";
@@ -1042,162 +1035,6 @@ function rewriteAssetLinks(markdown) {
     .replace(/href="\.\/emojis\//g, 'href="emojis/');
 }
 
-function makeResourcePathsRelative(html) {
-  if (typeof html !== "string") return "";
-  return html
-    .replace(/(src|href)="\/(assets|stage|appearance|emojis)\//g, '$1="$2/')
-    .replace(/(src)="\/(emojis)/g, '$1="$2');
-}
-
-function safeJsonForHtmlScript(value) {
-  return JSON.stringify(value).replace(/</g, "\\u003c");
-}
-
-function getSnippetCSSHtml() {
-  let out = "";
-  try {
-    document.querySelectorAll("style").forEach((item) => {
-      if (item?.id?.startsWith("snippetCSS")) out += item.outerHTML;
-    });
-  } catch {
-    // ignore
-  }
-  return out;
-}
-
-function getSnippetJSHtml() {
-  let out = "";
-  try {
-    document.querySelectorAll("script").forEach((item) => {
-      if (item?.id?.startsWith("snippetJS")) out += item.outerHTML;
-    });
-  } catch {
-    // ignore
-  }
-  return out;
-}
-
-function getExportIconScriptHtml() {
-  const iconName = globalThis?.siyuan?.config?.appearance?.icon || "";
-  if (!iconName) return "";
-  const escaped = escapeAttr(iconName);
-  const isBuiltInIcon = ["ant", "material"].includes(iconName);
-  const fallback = isBuiltInIcon ? "" : `<script src="appearance/icons/material/icon.js"></script>`;
-  return `${fallback}<script src="appearance/icons/${escaped}/icon.js"></script>`;
-}
-
-function buildExportIndexHtml({title, content, exportMode}) {
-  const cfg = globalThis?.siyuan?.config || {};
-  const appearance = cfg.appearance || {};
-  const editor = cfg.editor || {};
-  const lang = appearance.lang || "zh_CN";
-
-  let themeName = appearance.themeLight || "daylight";
-  let mode = 0;
-  if (appearance.mode === 1) {
-    themeName = appearance.themeDark || themeName;
-    mode = 1;
-  }
-  const themeMode = mode === 1 ? "dark" : "light";
-
-  const previewClass =
-    exportMode === "htmlmd"
-      ? "b3-typography"
-      : `protyle-wysiwyg${editor.displayBookmarkIcon ? " protyle-wysiwyg--attr" : ""}`;
-
-  const winSiyuan = {
-    config: {
-      appearance: {
-        mode,
-        codeBlockThemeDark: appearance.codeBlockThemeDark || "",
-        codeBlockThemeLight: appearance.codeBlockThemeLight || "",
-      },
-      editor: {
-        codeLineWrap: true,
-        fontSize: Number(editor.fontSize) || 16,
-        codeLigatures: !!editor.codeLigatures,
-        plantUMLServePath: editor.plantUMLServePath || "",
-        codeSyntaxHighlightLineNum: !!editor.codeSyntaxHighlightLineNum,
-        katexMacros: editor.katexMacros || "",
-      },
-    },
-    languages: {
-      copy: globalThis?.siyuan?.languages?.copy || "Copy",
-    },
-  };
-
-  const snippetCSS = getSnippetCSSHtml();
-  const snippetJS = getSnippetJSHtml();
-  const iconScript = getExportIconScriptHtml();
-  const winSiyuanJson = safeJsonForHtmlScript(winSiyuan);
-
-  return `<!DOCTYPE html>
-<html lang="${escapeAttr(lang)}" data-theme-mode="${escapeAttr(themeMode)}" data-light-theme="${escapeAttr(
-    appearance.themeLight || "",
-  )}" data-dark-theme="${escapeAttr(appearance.themeDark || "")}">
-<head>
-    <base href="">
-    <meta charset="utf-8">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0"/>
-    <meta name="mobile-web-app-capable" content="yes"/>
-    <meta name="apple-mobile-web-app-status-bar-style" content="black">
-    <link rel="stylesheet" type="text/css" id="baseStyle" href="stage/build/export/base.css"/>
-    <link rel="stylesheet" type="text/css" id="themeDefaultStyle" href="appearance/themes/${escapeAttr(themeName)}/theme.css"/>
-    <script src="stage/protyle/js/protyle-html.js"></script>
-    <title>${escapeHtml(title || "")}</title>
-    <style>
-        body {font-family: var(--b3-font-family);background-color: var(--b3-theme-background);color: var(--b3-theme-on-background)}
-    </style>
-    ${snippetCSS}
-</head>
-<body>
-<div class="${previewClass}" style="max-width: 800px;margin: 0 auto;" id="preview">${content || ""}</div>
-${iconScript}
-<script src="stage/build/export/protyle-method.js"></script>
-<script src="stage/protyle/js/lute/lute.min.js"></script>  
-<script>
-    window.siyuan = ${winSiyuanJson};
-    const previewElement = document.getElementById('preview');
-    Protyle.highlightRender(previewElement, "stage/protyle");
-    Protyle.mathRender(previewElement, "stage/protyle", false);
-    Protyle.mermaidRender(previewElement, "stage/protyle");
-    Protyle.flowchartRender(previewElement, "stage/protyle");
-    Protyle.graphvizRender(previewElement, "stage/protyle");
-    Protyle.chartRender(previewElement, "stage/protyle");
-    Protyle.mindmapRender(previewElement, "stage/protyle");
-    Protyle.abcRender(previewElement, "stage/protyle");
-    Protyle.htmlRender(previewElement);
-    Protyle.plantumlRender(previewElement, "stage/protyle");
-    document.querySelectorAll(".protyle-action__copy").forEach((item) => {
-      item.addEventListener("click", (event) => {
-            let text = item.parentElement.nextElementSibling.textContent.trimEnd();
-            text = text.replace(/\\u00A0/g, " ");
-            navigator.clipboard.writeText(text);
-            event.preventDefault();
-            event.stopPropagation();
-      })
-    });
-</script>
-${snippetJS}
-</body></html>`;
-}
-
-function joinWorkspaceRelPath(...parts) {
-  const cleaned = parts
-    .flatMap((p) => (p == null ? [] : [String(p)]))
-    .map((p) => p.replace(/^[\\/]+/, "").replace(/[\\/]+$/, ""))
-    .filter(Boolean);
-  return `/${cleaned.join("/")}`;
-}
-
-function normalizeWorkspaceRelPath(input) {
-  const raw = String(input || "").trim();
-  if (!raw) return "";
-  const normalized = raw.replace(/\\/g, "/");
-  return normalized.startsWith("/") ? normalized.replace(/\/+$/, "") : `/${normalized.replace(/\/+$/, "")}`;
-}
-
 function joinFsPath(base, ...parts) {
   const baseStr = String(base || "");
   const sep = baseStr.includes("\\") ? "\\" : "/";
@@ -1207,70 +1044,6 @@ function joinFsPath(base, ...parts) {
     .map((p) => p.replace(/^[\\/]+/, "").replace(/[\\/]+$/, ""))
     .filter(Boolean);
   return [baseTrimmed, ...cleaned].join(sep);
-}
-
-async function resolveWorkspaceRoot(publishRootInput) {
-  const wsInfo = await fetchSyncPost("/api/system/getWorkspaceInfo", {});
-  if (!wsInfo || wsInfo.code !== 0) {
-    throw new Error(wsInfo?.msg || tGlobal("siyuanShare.error.workspaceInfoFailed"));
-  }
-  const workspaceDir = wsInfo?.data?.workspaceDir;
-  if (!workspaceDir) throw new Error(tGlobal("siyuanShare.error.workspacePathFailed"));
-
-  const inputRaw = String(publishRootInput || "").trim();
-  if (!inputRaw) throw new Error(tGlobal("siyuanShare.error.publishDirRequired"));
-  const inputNorm = inputRaw.replace(/\\/g, "/").replace(/\/+$/, "");
-
-  const wsNorm = String(workspaceDir).replace(/\\/g, "/").replace(/\/+$/, "");
-  const isWindows = /^[a-zA-Z]:\//.test(wsNorm) || wsNorm.startsWith("//");
-
-  // Windows absolute path or UNC path.
-  const isWinAbs = /^[a-zA-Z]:\//.test(inputNorm) || inputNorm.startsWith("//");
-  if (isWinAbs) {
-    const wsCmp = isWindows ? wsNorm.toLowerCase() : wsNorm;
-    const inputCmp = isWindows ? inputNorm.toLowerCase() : inputNorm;
-    if (inputCmp === wsCmp) {
-      return {workspaceDir, rootRel: "/"};
-    }
-    if (inputCmp.startsWith(`${wsCmp}/`)) {
-      const rel = inputNorm.slice(wsNorm.length) || "/";
-      return {workspaceDir, rootRel: rel.startsWith("/") ? rel : `/${rel}`};
-    }
-    throw new Error(
-      tGlobal("siyuanShare.error.publishDirOutsideWorkspace", {workspace: workspaceDir}),
-    );
-  }
-
-  const rel = normalizeWorkspaceRelPath(inputNorm);
-  if (rel.includes("..")) throw new Error(tGlobal("siyuanShare.error.publishDirInvalid"));
-  return {workspaceDir, rootRel: rel};
-}
-
-async function putWorkspaceFile(workspacePath, content, filename = "index.html", mime = "text/html") {
-  const form = new FormData();
-  form.append("path", workspacePath);
-  form.append("isDir", "false");
-  form.append("modTime", String(Date.now()));
-  const blob = content instanceof Blob ? content : new Blob([String(content)], {type: mime});
-  form.append("file", blob, filename);
-
-  const resp = await fetch("/api/file/putFile", {
-    method: "POST",
-    body: form,
-    credentials: "include",
-    headers: {
-      ...getAuthHeaders(),
-    },
-  });
-  const json = await resp.json().catch(() => null);
-  if (!resp.ok) {
-    throw new Error(
-      json?.msg || tGlobal("siyuanShare.error.writeFileFailedStatus", {status: resp.status}),
-    );
-  }
-  if (json?.code !== 0) {
-    throw new Error(json?.msg || tGlobal("siyuanShare.error.writeFileFailed"));
-  }
 }
 
 async function safeRm(dirPath) {
@@ -1306,41 +1079,6 @@ function pickActiveProtyle() {
     if (hit) return hit;
   }
   return visibles[0];
-}
-
-function extractDocIdsFromDoctreeElements(elements) {
-  if (!elements) return [];
-  const els = Array.from(elements);
-  const ids = [];
-  for (const el of els) {
-    if (!el || typeof el.getAttribute !== "function") continue;
-    let found = "";
-    const directAttrs = [
-      "data-node-id",
-      "data-id",
-      "data-doc-id",
-      "data-root-id",
-      "data-block-id",
-    ];
-    for (const attr of directAttrs) {
-      const v = el.getAttribute(attr);
-      if (isValidDocId(v)) {
-        found = v.trim();
-        break;
-      }
-    }
-    if (!found && el.dataset) {
-      for (const v of Object.values(el.dataset)) {
-        if (isValidDocId(v)) {
-          found = v.trim();
-          break;
-        }
-      }
-    }
-    if (!found && isValidDocId(el.id)) found = el.id.trim();
-    if (found) ids.push(found);
-  }
-  return Array.from(new Set(ids));
 }
 
 function extractDocTreeNodes(data) {
@@ -1712,12 +1450,6 @@ function applyDefaultDocIcons(docs) {
   });
 }
 
-function getDocTreeChildren(node) {
-  if (!node) return [];
-  const children = node.children || node.child || node.files || node.nodes;
-  return Array.isArray(children) ? children : [];
-}
-
 function extractDocIdFromValue(value) {
   if (!value) return "";
   const raw = String(value || "").trim();
@@ -1727,20 +1459,6 @@ function extractDocIdFromValue(value) {
   if (!matches || matches.length === 0) return "";
   const candidate = matches[matches.length - 1];
   return isValidDocId(candidate) ? candidate : "";
-}
-
-function deriveParentIdFromPath(pathValue, selfId = "") {
-  if (!pathValue) return "";
-  const parts = String(pathValue || "")
-    .split("/")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  if (parts.length < 2) return "";
-  for (let i = parts.length - 2; i >= 0; i -= 1) {
-    const parentId = extractDocIdFromValue(parts[i]);
-    if (parentId && parentId !== selfId) return parentId;
-  }
-  return "";
 }
 
 function collectDocIdsFromPath(pathValue) {
@@ -1774,24 +1492,6 @@ function getDocTreeNodeId(node) {
     node?.data?.docId,
     node?.data?.nodeId,
     node?.data?.rootId,
-  ];
-  for (const candidate of candidates) {
-    const extracted = extractDocIdFromValue(candidate);
-    if (extracted) return extracted;
-  }
-  return "";
-}
-
-function getDocTreeNodeParentId(node) {
-  if (!node) return "";
-  const candidates = [
-    node?.parentId,
-    node?.parentID,
-    node?.parent_id,
-    node?.parent,
-    node?.data?.parentId,
-    node?.data?.parentID,
-    node?.data?.parent_id,
   ];
   for (const candidate of candidates) {
     const extracted = extractDocIdFromValue(candidate);
@@ -1849,79 +1549,6 @@ function getShareSignature(shares) {
     .filter((row) => row.id);
   rows.sort((a, b) => a.id.localeCompare(b.id));
   return rows.map((row) => Object.values(row).join("|")).join(";");
-}
-
-function findDocTreeNode(nodes, docId) {
-  if (!Array.isArray(nodes) || !isValidDocId(docId)) return null;
-  const stack = [...nodes];
-  while (stack.length) {
-    const node = stack.pop();
-    const nodeId = getDocTreeNodeId(node);
-    if (nodeId && nodeId === docId) return node;
-    const children = getDocTreeChildren(node);
-    if (children.length) stack.push(...children);
-  }
-  return null;
-}
-
-function getDocTreeSortValue(node) {
-  if (!node) return null;
-  const candidates = [
-    node.sort,
-    node.sortOrder,
-    node.sortIndex,
-    node.sortId,
-    node.sortID,
-    node.sort_id,
-    node.order,
-    node.orderIndex,
-    node.index,
-  ];
-  for (const value of candidates) {
-    const num = Number(value);
-    if (Number.isFinite(num)) return num;
-  }
-  return null;
-}
-
-function sortDocTreeNodes(nodes) {
-  if (!Array.isArray(nodes)) return [];
-  return nodes
-    .map((node, idx) => ({node, idx, sort: getDocTreeSortValue(node)}))
-    .sort((a, b) => {
-      const aSort = Number.isFinite(a.sort) ? a.sort : a.idx;
-      const bSort = Number.isFinite(b.sort) ? b.sort : b.idx;
-      if (aSort === bSort) return a.idx - b.idx;
-      return aSort - bSort;
-    })
-    .map((entry) => entry.node);
-}
-
-function flattenDocTree(nodes, out = [], parentId = "") {
-  if (!Array.isArray(nodes)) return out;
-  const ordered = sortDocTreeNodes(nodes);
-  ordered.forEach((node, index) => {
-    const id = getDocTreeNodeId(node);
-    const title = String(node?.name || node?.title || node?.content || node?.label || "");
-    const nodeParent = getDocTreeNodeParentId(node) || "";
-    const validId = isValidDocId(id);
-    const sortValue = getDocTreeSortValue(node);
-    const sortIndex = Number.isFinite(sortValue) ? sortValue : index;
-    if (validId) {
-      out.push({
-        docId: id,
-        title,
-        parentId: nodeParent || parentId || "",
-        sortIndex,
-      });
-    }
-    const children = getDocTreeChildren(node);
-    if (children.length) {
-      const nextParent = validId ? id : parentId;
-      flattenDocTree(children, out, nextParent);
-    }
-  });
-  return out;
 }
 
 class SiYuanSharePlugin extends Plugin {
@@ -1987,7 +1614,6 @@ class SiYuanSharePlugin extends Plugin {
     this.autoUpdateDelayJitterRatio = 0.15;
     this.autoUpdateRetryBaseDelayMs = 30 * 1000;
     this.autoUpdateRetryMaxDelayMs = 30 * 60 * 1000;
-    this.autoUpdateQuietWindowMs = 60 * 1000;
     this.autoUpdateQueue = [];
     this.autoUpdateQueuedSet = new Set();
     this.autoUpdateRerunSet = new Set();
@@ -4505,22 +4131,6 @@ class SiYuanSharePlugin extends Plugin {
     }
   }
 
-  alignSettingSiteSelectWidth() {
-    const {siteSelect, siteNameInput, siteInput, apiKeyInput} = this.settingEls || {};
-    if (!siteSelect) return;
-    const ref =
-      (siteNameInput && siteNameInput.isConnected && siteNameInput) ||
-      (siteInput && siteInput.isConnected && siteInput) ||
-      (apiKeyInput && apiKeyInput.isConnected && apiKeyInput) ||
-      null;
-    if (!ref) return;
-    const rect = ref.getBoundingClientRect();
-    const width = Math.round(rect?.width || 0);
-    if (!Number.isFinite(width) || width <= 0) return;
-    siteSelect.style.width = `${width}px`;
-    siteSelect.style.maxWidth = `${width}px`;
-  }
-
   onDockClick = (event) => {
     const target = event.target.closest("[data-action]");
     if (!target) return;
@@ -4782,11 +4392,6 @@ class SiYuanSharePlugin extends Plugin {
     this.notify(message);
   };
 
-  hasReferenceInMarkdown(markdown) {
-    if (!markdown) return false;
-    return BLOCK_REF_RE.test(markdown) || BLOCK_REF_LINK_RE.test(markdown);
-  }
-
   async querySqlRows(stmt) {
     if (!stmt) return null;
     try {
@@ -4875,37 +4480,6 @@ class SiYuanSharePlugin extends Plugin {
     }
     if (failed) return null;
     return Array.from(updated);
-  }
-
-  async queryDocUpdatedMap(docIds, {controller = null} = {}) {
-    const t = this.t.bind(this);
-    const scope = Array.from(
-      new Set((Array.isArray(docIds) ? docIds : []).map((id) => String(id || "").trim()).filter((id) => isValidDocId(id))),
-    );
-    if (!scope.length) return new Map();
-    const map = new Map();
-    let failed = false;
-    for (const part of chunkArray(scope, 200)) {
-      throwIfAborted(controller, t("siyuanShare.message.cancelled"));
-      const quoted = part.map((id) => `'${escapeSqlString(id)}'`).join(",");
-      const rows = await this.querySqlRows(`SELECT id, updated FROM blocks WHERE type='d' AND id IN (${quoted})`);
-      if (!Array.isArray(rows)) {
-        failed = true;
-        continue;
-      }
-      rows.forEach((row) => {
-        const docId = String(row?.id || "").trim();
-        if (!isValidDocId(docId)) return;
-        map.set(docId, normalizeDocUpdatedStamp(row?.updated));
-      });
-    }
-    if (failed) return null;
-    scope.forEach((docId) => {
-      if (!map.has(docId)) {
-        map.set(docId, "");
-      }
-    });
-    return map;
   }
 
   async queryDocBlockCountMap(docIds, {controller = null} = {}) {
@@ -8825,130 +8399,6 @@ class SiYuanSharePlugin extends Plugin {
     };
   }
 
-  buildIncrementalPlan(localState, remoteSnapshot) {
-    const localDocs = Array.isArray(localState?.docs) ? localState.docs : [];
-    const localAssets = Array.isArray(localState?.assets) ? localState.assets : [];
-    const remoteDocs = this.normalizeSnapshotDocs(remoteSnapshot?.docs);
-    const remoteAssets = this.normalizeSnapshotAssets(remoteSnapshot?.assets);
-    const localDocMap = new Map(localDocs.map((doc) => [String(doc.docId), doc]));
-    const remoteDocMap = new Map(remoteDocs.map((doc) => [String(doc.docId), doc]));
-    const localAssetMap = new Map(localAssets.map((asset) => [String(asset.path), asset]));
-    const remoteAssetMap = new Map(remoteAssets.map((asset) => [String(asset.path), asset]));
-
-    const addedDocIds = [];
-    const updatedDocIds = [];
-    const changedDocIds = new Set();
-    localDocs.forEach((doc) => {
-      const remote = remoteDocMap.get(String(doc.docId));
-      if (!remote) {
-        addedDocIds.push(String(doc.docId));
-        changedDocIds.add(String(doc.docId));
-        return;
-      }
-      if (!remote.contentHash || !remote.metaHash) {
-        updatedDocIds.push(String(doc.docId));
-        changedDocIds.add(String(doc.docId));
-        return;
-      }
-      if (remote.contentHash !== normalizeHashHex(doc.contentHash)) {
-        updatedDocIds.push(String(doc.docId));
-        changedDocIds.add(String(doc.docId));
-        return;
-      }
-      if (remote.metaHash !== normalizeHashHex(doc.metaHash)) {
-        updatedDocIds.push(String(doc.docId));
-        changedDocIds.add(String(doc.docId));
-      }
-    });
-
-    const deletedDocIds = [];
-    remoteDocs.forEach((doc) => {
-      if (!localDocMap.has(String(doc.docId))) {
-        deletedDocIds.push(String(doc.docId));
-      }
-    });
-
-    const addedAssetPaths = [];
-    const updatedAssetPaths = [];
-    const changedAssetPaths = new Set();
-    localAssets.forEach((asset) => {
-      const remote = remoteAssetMap.get(String(asset.path));
-      if (!remote) {
-        addedAssetPaths.push(String(asset.path));
-        changedAssetPaths.add(String(asset.path));
-        return;
-      }
-      if (!remote.hash || !asset.hash || remote.hash !== normalizeHashHex(asset.hash)) {
-        updatedAssetPaths.push(String(asset.path));
-        changedAssetPaths.add(String(asset.path));
-        return;
-      }
-      if (String(remote.docId || "") !== String(asset.docId || "")) {
-        updatedAssetPaths.push(String(asset.path));
-        changedAssetPaths.add(String(asset.path));
-      }
-    });
-
-    const deletedAssetPaths = [];
-    remoteAssets.forEach((asset) => {
-      if (!localAssetMap.has(String(asset.path))) {
-        deletedAssetPaths.push(String(asset.path));
-      }
-    });
-
-    const uploadDocs = localDocs
-      .filter((doc) => changedDocIds.has(String(doc.docId)))
-      .map((doc) => ({
-        docId: String(doc.docId),
-        title: String(doc.title || ""),
-        icon: normalizeDocIconValue(doc.icon || ""),
-        hPath: String(doc.hPath || ""),
-        parentId: String(doc.parentId || ""),
-        sortIndex: Number.isFinite(Number(doc.sortIndex)) ? Number(doc.sortIndex) : 0,
-        sortOrder: Math.max(0, Math.floor(Number(doc.sortOrder) || 0)),
-        markdown: String(doc.markdown || ""),
-        contentHash: normalizeHashHex(doc.contentHash),
-        metaHash: normalizeHashHex(doc.metaHash),
-      }));
-    const uploadAssetPaths = Array.from(changedAssetPaths);
-    const uploadAssetEntries = (Array.isArray(localState?.assetEntries) ? localState.assetEntries : []).filter((entry) => {
-      const asset = entry?.asset || entry;
-      const path = normalizeAssetPath(asset?.path || "");
-      return path && changedAssetPaths.has(path);
-    });
-    const uploadAssets = localAssets
-      .filter((asset) => changedAssetPaths.has(String(asset.path)))
-      .map((asset) => ({
-        path: String(asset.path),
-        size: Math.max(0, Number(asset.size) || 0),
-        docId: String(asset.docId || ""),
-        hash: normalizeHashHex(asset.hash),
-      }));
-
-    return {
-      uploadDocs,
-      uploadAssets,
-      uploadAssetEntries,
-      uploadAssetPaths,
-      deletedDocIds,
-      deletedAssetPaths,
-      summary: {
-        baseDocs: remoteDocs.length,
-        baseAssets: remoteAssets.length,
-        totalDocs: localDocs.length,
-        totalAssets: localAssets.length,
-        addedDocs: addedDocIds.length,
-        updatedDocs: updatedDocIds.length,
-        changedDocs: uploadDocs.length,
-        addedAssets: addedAssetPaths.length,
-        updatedAssets: updatedAssetPaths.length,
-        changedAssets: uploadAssets.length,
-        deletedDocs: deletedDocIds.length,
-        deletedAssets: deletedAssetPaths.length,
-      },
-    };
-  }
-
   buildFullUploadPlan(localState, {assumeExisting = false} = {}) {
     const localDocs = Array.isArray(localState?.docs) ? localState.docs : [];
     const localAssets = Array.isArray(localState?.assets) ? localState.assets : [];
@@ -10322,177 +9772,10 @@ class SiYuanSharePlugin extends Plugin {
     return isValidNotebookId(boxId) ? boxId : "";
   }
 
-  collectDocSubtree(docs, rootDocId) {
-    if (!Array.isArray(docs) || !isValidDocId(rootDocId)) return [];
-    const nodes = new Map();
-    const children = new Map();
-    docs.forEach((doc) => {
-      const docId = String(doc?.docId || "").trim();
-      if (!isValidDocId(docId)) return;
-      const parentIdRaw = String(doc?.parentId || "").trim();
-      const parentId = isValidDocId(parentIdRaw) ? parentIdRaw : "";
-      const normalized = {
-        docId,
-        title: String(doc?.title || ""),
-        parentId,
-        sortIndex: Number.isFinite(Number(doc?.sortIndex)) ? Number(doc.sortIndex) : 0,
-        sortOrder: Number.isFinite(Number(doc?.sortOrder)) ? Number(doc.sortOrder) : 0,
-      };
-      nodes.set(docId, normalized);
-      if (!children.has(parentId)) children.set(parentId, []);
-      children.get(parentId).push(docId);
-    });
-    if (!nodes.has(rootDocId)) return [];
-    const included = new Set();
-    const stack = [rootDocId];
-    while (stack.length) {
-      const current = stack.pop();
-      if (!current || included.has(current) || !nodes.has(current)) continue;
-      included.add(current);
-      const kids = children.get(current) || [];
-      kids.forEach((kid) => stack.push(kid));
-    }
-    const out = [];
-    docs.forEach((doc) => {
-      const docId = String(doc?.docId || "").trim();
-      if (!included.has(docId)) return;
-      const node = nodes.get(docId);
-      if (node) out.push(node);
-    });
-    return out;
-  }
-
   async listDocSubtree(docId, options = {}) {
     const byPath = await this.listDocSubtreeByPath(docId, options);
     if (byPath && byPath.length) return byPath;
     return [];
-  }
-
-  async listDocSubtreeBySQL(docId, notebookId) {
-    if (!isValidDocId(docId)) return [];
-    try {
-      const row = await this.fetchBlockRow(docId);
-      const rootPath = row?.path ? String(row.path || "").trim() : "";
-      const rootBox = row?.box ? String(row.box || "").trim() : "";
-      const safeDocId = docId.replace(/'/g, "''");
-      const safeBox = rootBox.replace(/'/g, "''");
-      let bestDocs = [];
-      const normalizeDocRow = (rowItem, index) => {
-        const rowId = String(rowItem?.id || "").trim();
-        if (!isValidDocId(rowId)) return null;
-        const parentIdRaw = String(rowItem?.parent_id || rowItem?.parentId || "").trim();
-        let parentId = isValidDocId(parentIdRaw) ? parentIdRaw : "";
-        if (!parentId) {
-          parentId = deriveParentIdFromPath(rowItem?.path, rowId);
-        }
-        if (parentId === rowId) parentId = "";
-        const sortRaw = Number(rowItem?.sort);
-        return {
-          docId: rowId,
-          title: typeof rowItem?.content === "string" ? rowItem.content : "",
-          parentId,
-          sortIndex: Number.isFinite(sortRaw) ? sortRaw : index,
-          sortOrder: index,
-        };
-      };
-      const considerDocs = (docs) => {
-        if (docs.length > bestDocs.length) bestDocs = docs;
-        return docs.length > 1;
-      };
-      try {
-        const stmt = `WITH RECURSIVE doc_tree(id) AS (
-          SELECT id FROM blocks WHERE id='${safeDocId}'
-          UNION ALL
-          SELECT b.id FROM blocks b JOIN doc_tree t ON b.parent_id = t.id WHERE b.type='d'
-        )
-        SELECT b.id, b.parent_id, b.content, b.sort, b.path FROM blocks b JOIN doc_tree t ON b.id = t.id ORDER BY b.sort`;
-        const resp = await fetchSyncPost("/api/query/sql", {stmt});
-        if (resp && resp.code === 0 && Array.isArray(resp.data)) {
-          const docs = resp.data.map(normalizeDocRow).filter(Boolean);
-          if (considerDocs(docs)) return docs;
-        }
-      } catch (err) {
-        console.warn("Doc subtree recursive SQL failed", err);
-      }
-      if (rootPath) {
-        const safePath = rootPath.replace(/'/g, "''");
-        const pathPrefix = rootPath.endsWith("/") ? rootPath : `${rootPath}/`;
-        const safePrefix = pathPrefix.replace(/'/g, "''");
-        const altPrefix = rootPath.replace(/\.sy$/i, "");
-        const altPrefixValue = altPrefix && altPrefix !== rootPath ? `${altPrefix}/` : "";
-        const safeAltPrefix = altPrefixValue ? altPrefixValue.replace(/'/g, "''") : "";
-        const pathFilter = safeAltPrefix
-          ? `(path='${safePath}' OR path LIKE '${safePrefix}%' OR path LIKE '${safeAltPrefix}%')`
-          : `(path='${safePath}' OR path LIKE '${safePrefix}%')`;
-        const stmt = `SELECT id, parent_id, content, sort, path FROM blocks WHERE type='d' AND ${pathFilter} ORDER BY sort`;
-        const resp = await fetchSyncPost("/api/query/sql", {stmt});
-        if (resp && resp.code === 0 && Array.isArray(resp.data)) {
-          const docs = resp.data.map(normalizeDocRow).filter(Boolean);
-          if (considerDocs(docs)) return docs;
-        }
-      }
-      if (rootBox) {
-        const stmt = `SELECT id, parent_id, content, sort, path FROM blocks WHERE type='d' AND box='${safeBox}' ORDER BY sort`;
-        const resp = await fetchSyncPost("/api/query/sql", {stmt});
-        if (resp && resp.code === 0 && Array.isArray(resp.data)) {
-          const docs = resp.data.map(normalizeDocRow).filter(Boolean);
-          const subtree = this.collectDocSubtree(docs, docId);
-          if (considerDocs(subtree)) return subtree;
-        }
-      }
-      const iterDocs = await this.listDocSubtreeByParentChain(docId, row);
-      if (considerDocs(iterDocs)) return iterDocs;
-      return bestDocs.length ? bestDocs : [];
-    } catch (err) {
-      console.warn("Doc subtree SQL failed", err);
-      return [];
-    }
-  }
-
-  async listDocSubtreeByParentChain(docId, rootRow) {
-    if (!isValidDocId(docId)) return [];
-    const docs = [];
-    const seen = new Set();
-    const queue = [docId];
-    const rootTitle =
-      rootRow && typeof rootRow.content === "string" && rootRow.content ? rootRow.content : "";
-    docs.push({
-      docId,
-      title: rootTitle,
-      parentId: "",
-      sortIndex: 0,
-      sortOrder: 0,
-    });
-    seen.add(docId);
-    let order = 1;
-    while (queue.length) {
-      const chunk = queue.splice(0, 20);
-      const ids = chunk.filter((id) => isValidDocId(id)).map((id) => `'${id.replace(/'/g, "''")}'`);
-      if (!ids.length) continue;
-      const stmt = `SELECT id, parent_id, content, sort FROM blocks WHERE type='d' AND parent_id IN (${ids.join(
-        ",",
-      )}) ORDER BY sort`;
-      const resp = await fetchSyncPost("/api/query/sql", {stmt});
-      if (!resp || resp.code !== 0 || !Array.isArray(resp.data)) continue;
-      resp.data.forEach((rowItem) => {
-        const rowId = String(rowItem?.id || "").trim();
-        if (!isValidDocId(rowId) || seen.has(rowId)) return;
-        seen.add(rowId);
-        const parentIdRaw = String(rowItem?.parent_id || "").trim();
-        const parentId = isValidDocId(parentIdRaw) ? parentIdRaw : "";
-        const sortRaw = Number(rowItem?.sort);
-        docs.push({
-          docId: rowId,
-          title: typeof rowItem?.content === "string" ? rowItem.content : "",
-          parentId,
-          sortIndex: Number.isFinite(sortRaw) ? sortRaw : order,
-          sortOrder: order,
-        });
-        order += 1;
-        queue.push(rowId);
-      });
-    }
-    return docs.length > 1 ? docs : [];
   }
 
   async updateShare(
@@ -11830,53 +11113,6 @@ class SiYuanSharePlugin extends Plugin {
     };
   }
 
-  getAutoUpdateShareLogLabel(shareId) {
-    const meta = this.getAutoUpdateShareLogMeta(shareId);
-    return `${meta.typeLabel}:${meta.title} | id:${meta.targetId}`;
-  }
-
-  getTextDisplayWidth(text) {
-    let width = 0;
-    for (const ch of String(text || "")) {
-      const code = ch.codePointAt(0) || 0;
-      width += code <= 0x7f ? 1 : 2;
-    }
-    return width;
-  }
-
-  trimTextByDisplayWidth(text, maxWidth) {
-    const input = String(text || "");
-    const limit = Math.max(0, Math.floor(Number(maxWidth) || 0));
-    if (!limit) return "";
-    let width = 0;
-    let out = "";
-    for (const ch of input) {
-      const code = ch.codePointAt(0) || 0;
-      const step = code <= 0x7f ? 1 : 2;
-      if (width + step > limit) break;
-      out += ch;
-      width += step;
-    }
-    return out;
-  }
-
-  padLogColumn(text, width, {truncate = true} = {}) {
-    const input = String(text || "").replace(/\s+/g, " ").trim();
-    const limit = Math.max(0, Math.floor(Number(width) || 0));
-    if (!limit) return "";
-    let content = input;
-    let contentWidth = this.getTextDisplayWidth(content);
-    if (truncate && contentWidth > limit) {
-      const ellipsis = "...";
-      const ellipsisWidth = this.getTextDisplayWidth(ellipsis);
-      const keepWidth = Math.max(0, limit - ellipsisWidth);
-      content = `${this.trimTextByDisplayWidth(content, keepWidth)}${ellipsis}`;
-      contentWidth = this.getTextDisplayWidth(content);
-    }
-    const padWidth = Math.max(0, limit - contentWidth);
-    return `${content}${" ".repeat(padWidth)}`;
-  }
-
   pushAutoUpdateHistory(level, text, {shareId = "", detail = ""} = {}) {
     const message = String(text || "").trim();
     if (!message) return;
@@ -12867,16 +12103,6 @@ class SiYuanSharePlugin extends Plugin {
     await this.saveData(STORAGE_SETTINGS, this.settings);
   }
 
-  getAutoUpdateScanStamp(siteId) {
-    return this.getAutoUpdateScanCursor(siteId).updated;
-  }
-
-  async setAutoUpdateScanStamp(siteId, stamp) {
-    const normalized = normalizeDocUpdatedStamp(stamp);
-    if (!normalized) return;
-    await this.setAutoUpdateScanCursor(siteId, {updated: normalized, docId: ""});
-  }
-
   setAutoUpdateShareState(shareId, state, {message = ""} = {}) {
     if (this.isUnloading) return;
     const id = String(shareId || "").trim();
@@ -13478,28 +12704,6 @@ class SiYuanSharePlugin extends Plugin {
     const input = this.buildAutoUpdateStructureDigestInput(share, docs);
     if (!input) return "";
     return normalizeHashHex(await hashTextSha256(input));
-  }
-
-  async refreshAutoUpdateStructDigestForShare(shareId, {controller = null} = {}) {
-    const id = String(shareId || "").trim();
-    if (!id) return "";
-    try {
-      const digest = await this.computeAutoUpdateStructureDigestForShare(id, {controller});
-      if (!digest) return "";
-      if (!this.autoUpdateStructDigestByShare || typeof this.autoUpdateStructDigestByShare !== "object") {
-        this.autoUpdateStructDigestByShare = {};
-      }
-      if (this.autoUpdateStructDigestByShare[id] !== digest) {
-        this.autoUpdateStructDigestByShare[id] = digest;
-        this.schedulePersistAutoUpdateRuntime();
-      }
-      return digest;
-    } catch (err) {
-      if (!isAbortError(err)) {
-        console.warn("refresh auto-update struct digest failed", err);
-      }
-      return "";
-    }
   }
 
   stopAutoUpdateStructureReconcile() {
