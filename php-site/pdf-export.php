@@ -372,6 +372,15 @@ function route_pdf_export(string $slug, string $action = ''): never {
     $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
     if ($action !== '' || $method === 'POST') pdf_export_csrf();
     if ($action === 'release' && $method === 'POST') {
+        $ticket = $_POST['ticket'] ?? '';
+        if (is_string($ticket) && isset($_SESSION['pdf_export_tickets'][$ticket])) {
+            $entry = &$_SESSION['pdf_export_tickets'][$ticket];
+            try { $owner = pdf_visitor_id(true); } catch (RuntimeException $error) { $owner = ''; }
+            if ($entry['visitor'] === $owner && $entry['slug'] === $slug) {
+                $entry['cancelled'] = true;
+                if ($entry['token'] !== '') pdf_export_release($entry['token']);
+            }
+        }
         $token = $_POST['lease'] ?? '';
         if (is_string($token)) pdf_export_release($token);
         http_response_code(204);
@@ -381,6 +390,11 @@ function route_pdf_export(string $slug, string $action = ''): never {
     $shareId = (int)$share['id'];
     try {
         $visitor = pdf_visitor_id($method !== 'GET');
+        if ($action === 'quota' && $method === 'POST') {
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode(['ok' => true, 'quota' => pdf_visitor_usage($visitor)]);
+            exit;
+        }
         if ($action === 'claim' && $method === 'POST') {
             $token = $_POST['lease'] ?? '';
             $index = $_POST['index'] ?? '';
@@ -444,10 +458,18 @@ function route_pdf_export(string $slug, string $action = ''): never {
             if ($activeDoc) array_unshift($docs, $activeDoc);
         }
         $active = in_array($active, array_column($docs, 'doc_id'), true) ? $active : (string)($docs[0]['doc_id'] ?? '');
-        $content = '<main class="pdf-export-panel"><h1>导出 PDF</h1><p>选择范围后打开预览，点击保存即可逐篇下载。每篇文档是一个独立 PDF 文件，不会合并。</p>';
+        $dialog = ($_GET['dialog'] ?? '') === '1';
+        $tickets = array_filter($_SESSION['pdf_export_tickets'] ?? [], static fn($entry) => is_array($entry) && (int)($entry['created'] ?? 0) > time() - 1800);
+        while (count($tickets) >= 32) array_shift($tickets);
+        $ticket = bin2hex(random_bytes(16));
+        $tickets[$ticket] = ['created' => time(), 'visitor' => $visitor, 'slug' => $slug, 'token' => '', 'cancelled' => false];
+        $_SESSION['pdf_export_tickets'] = $tickets;
+        $usage = htmlspecialchars(json_encode(pdf_visitor_usage($visitor)), ENT_QUOTES, 'UTF-8');
+        $content = '<main class="pdf-export-panel">' . ($dialog ? '' : '<h1>导出 PDF</h1>') . '<p>选择范围并确定后，即可逐篇下载。每篇文档是一个独立 PDF 文件。</p>';
+        $content .= '<div class="pdf-quota-notice" data-pdf-quota="' . $usage . '" role="status"></div>';
         $content .= '<p>每批最多 ' . $limits['max_docs'] . ' 篇；较大的笔记本请分批勾选。</p>';
-        $content .= '<form method="post" action="' . htmlspecialchars($url) . '" target="_blank" rel="noopener" data-pdf-export-form>';
-        $content .= render_hidden_inputs(['csrf' => csrf_token(), 'fingerprint' => '']);
+        $content .= '<form method="post" action="' . htmlspecialchars($url) . '" target="sps-pdf-worker" data-pdf-export-form>';
+        $content .= render_hidden_inputs(['csrf' => csrf_token(), 'fingerprint' => '', 'auto_download' => '1', 'ticket' => $ticket]);
         $content .= '<label>导出范围 <select class="input" name="scope" data-pdf-scope><option value="single">单篇文档</option><option value="tree">此文档及子文档</option><option value="all">整个分享范围</option><option value="selected">勾选多篇文档</option></select></label>';
         $content .= '<label data-pdf-root>文档 <select class="input" name="doc_id">';
         foreach (array_slice($docs, 0, 2000) as $doc) {
@@ -460,9 +482,11 @@ function route_pdf_export(string $slug, string $action = ''): never {
         $content .= '</fieldset>';
         if (count($docs) > 2000) $content .= '<p>仅列出前 2000 篇；其余文档请从分享页打开后导出。</p>';
         $content .= '<fieldset data-pdf-challenge hidden><legend>安全验证（此 Cookie 只需一次）</legend><p>导出过于频繁，请输入图片中的验证码。</p><img data-pdf-captcha-image alt="安全验证码"><button class="button ghost" type="button" data-pdf-captcha-refresh>换一张</button><label>验证码 <input class="input" name="captcha_answer" autocomplete="off" maxlength="8"></label></fieldset>';
-        $content .= '<button class="button primary" type="submit">打开导出预览</button><p data-pdf-form-status role="status"></p></form>';
-        $content .= '<a href="' . htmlspecialchars(base_path() . '/s/' . rawurlencode($slug)) . '">返回分享页</a></main>';
-        render_page('导出 PDF', $content, null, '', ['layout' => 'share', 'pdf_export' => true]);
+        $content .= '<button class="button primary" type="submit">确定导出</button><p data-pdf-form-status role="status" aria-live="polite"></p></form>';
+        $content .= '<iframe class="pdf-export-worker" name="sps-pdf-worker" data-pdf-worker title="PDF 生成任务" aria-hidden="true" tabindex="-1"></iframe>';
+        if (!$dialog) $content .= '<a href="' . htmlspecialchars(base_path() . '/s/' . rawurlencode($slug)) . '">返回分享页</a>';
+        $content .= '</main>';
+        render_page('导出 PDF', $content, null, '', ['layout' => 'share', 'pdf_export' => true, 'pdf_embedded' => $dialog]);
     }
     if ($method !== 'POST') pdf_export_fail(405, '不支持此请求。');
     $fingerprint = $_POST['fingerprint'] ?? '';
@@ -475,8 +499,16 @@ function route_pdf_export(string $slug, string $action = ''): never {
         if ($lease !== '' && !$complete) pdf_export_release($lease);
     });
     try {
+        $ticket = $_POST['ticket'] ?? '';
+        if (($_POST['auto_download'] ?? '') === '1') {
+            $entry = is_string($ticket) ? ($_SESSION['pdf_export_tickets'][$ticket] ?? null) : null;
+            if (!$entry || $entry['visitor'] !== $visitor || $entry['slug'] !== $slug || $entry['cancelled'] || $entry['created'] <= time() - 1800) {
+                throw new RuntimeException('导出任务已取消或选项已过期，请关闭弹窗后重试。', 409);
+            }
+        }
         $docs = pdf_export_select_docs($shareId, $_POST);
         $lease = pdf_export_admit($shareId, $fingerprint, count($docs));
+        if (($_POST['auto_download'] ?? '') === '1') $_SESSION['pdf_export_tickets'][$ticket]['token'] = $lease;
         set_time_limit($limits['max_execution_seconds']);
         $memory = ini_parse_quantity((string)ini_get('memory_limit'));
         ini_set('memory_limit', (string)($memory > 0 ? min($memory, $limits['max_memory_bytes']) : $limits['max_memory_bytes']));
@@ -486,7 +518,8 @@ function route_pdf_export(string $slug, string $action = ''): never {
         $stmt->execute(array_merge([$shareId], $docIds));
         if ((int)$stmt->fetchColumn() > $limits['max_asset_bytes']) throw new RuntimeException('关联附件过大，请减少单次导出篇数。', 413);
         $stmt = db()->prepare('SELECT substr(CAST(markdown AS BLOB), 1, ?) FROM share_docs WHERE share_id = ? AND id = ?');
-        $content = '<div class="pdf-export-toolbar" data-pdf-preview data-pdf-library="' . htmlspecialchars(site_asset_url('vendor/html2pdf.bundle.min.js')) . '" data-pdf-font="' . htmlspecialchars(site_asset_url('vendor/fonts/pdf-provenance.ttf')) . '" data-pdf-text-library="' . htmlspecialchars(site_asset_url('pdf-text-layer.js')) . '" data-export-url="' . htmlspecialchars($url) . '" data-lease="' . $lease . '" data-csrf="' . csrf_token() . '">';
+        $auto = ($_POST['auto_download'] ?? '') === '1' ? '1' : '0';
+        $content = '<div class="pdf-export-toolbar" data-pdf-preview data-pdf-auto="' . $auto . '" data-pdf-library="' . htmlspecialchars(site_asset_url('vendor/html2pdf.bundle.min.js')) . '" data-pdf-font="' . htmlspecialchars(site_asset_url('vendor/fonts/pdf-provenance.ttf')) . '" data-pdf-text-library="' . htmlspecialchars(site_asset_url('pdf-text-layer.js')) . '" data-export-url="' . htmlspecialchars($url) . '" data-lease="' . $lease . '" data-csrf="' . csrf_token() . '">';
         $content .= '<p data-pdf-status role="status">正在准备公式、字体和图片…</p><button class="button primary" type="button" data-pdf-download disabled>' . (count($docs) > 1 ? '保存全部 PDF（逐篇下载）' : '保存 PDF') . '</button><p>每篇分别下载。若浏览器询问，请允许连续下载多个文件。保存的 PDF 支持选择、复制和搜索正文，并保留隐藏来源与版权信息。</p><p>关闭预览释放任务；同一访客跨标签页也只能同时导出一个任务。</p></div><main class="pdf-document">';
         $images = 0;
         $sourceBytes = 0;

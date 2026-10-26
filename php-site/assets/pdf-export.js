@@ -1,5 +1,68 @@
 (() => {
   "use strict";
+  let dialog;
+  let dialogFrame;
+  let closeTimer;
+  const closeDialog = () => {
+    if (!dialog?.open || closeTimer) return;
+    dialogFrame.contentWindow.postMessage({ type: 'sps-pdf-cancel' }, location.origin);
+    dialog.dataset.closing = '1';
+    const delay = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 160;
+    closeTimer = setTimeout(() => {
+      dialog.close();
+      dialogFrame.src = 'about:blank';
+      document.documentElement.classList.remove('pdf-dialog-open');
+      delete dialog.dataset.closing;
+      closeTimer = null;
+    }, delay);
+  };
+  document.addEventListener('click', (event) => {
+    const link = event.target.closest?.('[data-pdf-export-link]');
+    if (!link || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    if (!dialog) {
+      dialog = document.createElement('dialog');
+      dialog.className = 'pdf-export-dialog';
+      dialog.setAttribute('aria-labelledby', 'pdf-dialog-title');
+      dialog.innerHTML = '<header class="pdf-dialog-header"><h2 id="pdf-dialog-title">导出 PDF</h2><button type="button" class="button ghost pdf-dialog-close" aria-label="关闭导出弹窗">×</button></header><p class="pdf-dialog-loading" role="status">正在读取导出选项…</p><iframe data-pdf-dialog-frame title="导出范围与文档选择"></iframe>';
+      dialogFrame = dialog.querySelector('iframe');
+      dialog.querySelector('button').addEventListener('click', closeDialog);
+      dialog.addEventListener('cancel', (cancel) => { cancel.preventDefault(); closeDialog(); });
+      dialog.addEventListener('click', (click) => {
+        if (click.target !== dialog) return;
+        const bounds = dialog.getBoundingClientRect();
+        if (click.clientX < bounds.left || click.clientX > bounds.right || click.clientY < bounds.top || click.clientY > bounds.bottom) closeDialog();
+      });
+      dialogFrame.addEventListener('load', () => {
+        if (dialogFrame.getAttribute('src') === 'about:blank') return;
+        const loaded = dialogFrame.contentDocument;
+        if (loaded?.querySelector('[data-pdf-export-form]')) {
+          dialog.querySelector('.pdf-dialog-loading').hidden = true;
+          dialogFrame.hidden = false;
+        } else {
+          dialog.querySelector('.pdf-dialog-loading').textContent = loaded?.querySelector('[role=alert]')?.textContent || '无法读取导出选项，请关闭弹窗并刷新分享页重试。';
+          dialogFrame.hidden = true;
+        }
+      });
+      window.addEventListener('message', (message) => {
+        if (message.origin !== location.origin || message.source !== dialogFrame.contentWindow) return;
+        if (message.data?.type === 'sps-pdf-dialog-close') { closeDialog(); return; }
+        if (message.data?.type !== 'sps-pdf-dialog-size') return;
+        const height = Number(message.data.height);
+        if (Number.isFinite(height)) dialogFrame.style.height = `${Math.max(180, Math.min(height, innerHeight - 130))}px`;
+      });
+      document.body.append(dialog);
+    }
+    if (dialog.open) return;
+    const url = new URL(link.href);
+    url.searchParams.set('dialog', '1');
+    dialogFrame.src = url.href;
+    dialogFrame.hidden = false;
+    dialog.querySelector('.pdf-dialog-loading').hidden = false;
+    dialog.querySelector('.pdf-dialog-loading').textContent = '正在读取导出选项…';
+    document.documentElement.classList.add('pdf-dialog-open');
+    dialog.showModal();
+  });
   const form = document.querySelector("[data-pdf-export-form]");
   if (form) {
     const scope = form.querySelector("[data-pdf-scope]");
@@ -25,6 +88,60 @@
     const ready = fingerprint();
     const challenge = form.querySelector('[data-pdf-challenge]');
     const formStatus = form.querySelector('[data-pdf-form-status]');
+    const worker = document.querySelector('[data-pdf-worker]');
+    const submit = form.querySelector('button[type=submit]');
+    const quota = document.querySelector('[data-pdf-quota]');
+    let state = 'idle';
+    const setState = (next) => {
+      state = next;
+      submit.disabled = next === 'checking' || next === 'running';
+      submit.textContent = next === 'running' ? '正在导出…' : next === 'retry' ? '重试剩余文档' : next === 'done' ? '再次导出' : '确定导出';
+      form.setAttribute('aria-busy', String(submit.disabled));
+      form.querySelectorAll('[data-pdf-scope], [data-pdf-root], [data-pdf-selection], [data-pdf-challenge]').forEach((node) => { node.inert = ['checking', 'running', 'retry'].includes(next); });
+    };
+    const showQuota = (value) => {
+      const next = value.next_recovery_at ? `下一次恢复：${new Date(value.next_recovery_at * 1000).toLocaleString('zh-CN')}（恢复 ${value.next_recovery_count} 篇，本地时间）。` : '当前额度充足。';
+      quota.textContent = `每 ${value.window_seconds / 60} 分钟最多导出 ${value.limit} 篇，当前已用 ${value.used} 篇，剩余 ${value.remaining} 篇。${next}请合理导出，额度随时间逐篇恢复，并非整点重置。`;
+    };
+    showQuota(JSON.parse(quota.dataset.pdfQuota));
+    const refreshQuota = async () => {
+      const response = await fetch(`${form.action}/quota`, { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' }, body: new URLSearchParams({ csrf: form.querySelector('[name=csrf]').value }) });
+      const result = await response.json();
+      if (response.ok && result.quota) showQuota(result.quota);
+    };
+    const quotaTimer = setInterval(() => { refreshQuota().catch(() => {}); }, 30000);
+    const cancelTask = () => {
+      if (!['running', 'retry'].includes(state)) return;
+      navigator.sendBeacon?.(`${form.action}/release`, new URLSearchParams({ csrf: form.querySelector('[name=csrf]').value, ticket: form.querySelector('[name=ticket]').value }));
+      worker.src = 'about:blank';
+      setState('idle');
+    };
+    window.addEventListener('pagehide', () => { clearInterval(quotaTimer); cancelTask(); });
+    window.addEventListener('message', (message) => {
+      if (message.origin === location.origin && message.source === parent && message.data?.type === 'sps-pdf-cancel') cancelTask();
+    });
+    if (window.parent !== window) {
+      const resize = () => window.parent.postMessage({ type: 'sps-pdf-dialog-size', height: document.querySelector('.pdf-export-panel').getBoundingClientRect().height + 2 }, location.origin);
+      new ResizeObserver(resize).observe(document.querySelector('.pdf-export-panel'));
+      resize();
+      document.addEventListener('keydown', (event) => { if (event.key === 'Escape') window.parent.postMessage({ type: 'sps-pdf-dialog-close' }, location.origin); });
+    }
+    window.addEventListener('message', (message) => {
+      if (message.origin !== location.origin || message.source !== worker.contentWindow || message.data?.type !== 'sps-pdf-export') return;
+      formStatus.textContent = String(message.data.message || '');
+      if (message.data.state === 'done') setState('done');
+      if (message.data.state === 'error') setState(message.data.retryable ? 'retry' : 'idle');
+      if (['done', 'error'].includes(message.data.state)) refreshQuota().catch(() => {});
+    });
+    worker.addEventListener('load', () => {
+      if (state !== 'running' || worker.contentWindow.location.href === 'about:blank' || worker.contentDocument?.querySelector('[data-pdf-preview]')) return;
+      const body = worker.contentDocument;
+      let error = body?.querySelector('[role=alert]')?.textContent;
+      if (!error) { try { error = JSON.parse(body.body.textContent).error; } catch {} }
+      formStatus.textContent = error || '导出失败，请重试。';
+      setState('idle');
+      refreshQuota().catch(() => {});
+    });
     let challengeToken = '';
     const request = async (action, extra = {}) => {
       const response = await fetch(`${form.action}/${action}`, {
@@ -42,7 +159,7 @@
       challenge.querySelector('[data-pdf-captcha-image]').src = result.image;
       challenge.hidden = false;
       form.querySelector('[name=captcha_answer]').value = '';
-      form.querySelector('[name=captcha_answer]').focus();
+      setTimeout(() => form.querySelector('[name=captcha_answer]').focus(), 0);
     };
     form.querySelector('[data-pdf-captcha-refresh]').addEventListener('click', () => {
       refreshChallenge().catch((error) => { formStatus.textContent = error.message; });
@@ -51,7 +168,12 @@
       event.preventDefault();
       const button = form.querySelector("button[type=submit]");
       if (button.disabled) return;
-      button.disabled = true;
+      if (state === 'retry') {
+        setState('running');
+        worker.contentWindow.postMessage({ type: 'sps-pdf-retry' }, location.origin);
+        return;
+      }
+      setState('checking');
       try {
         let input = form.querySelector("input[name=fingerprint]");
         if (!input) {
@@ -67,6 +189,7 @@
           await request('captcha-verify', { token: challengeToken, answer });
           challenge.hidden = true;
         }
+        await refreshQuota();
         const check = await request('check');
         if (check.captcha_required) {
           formStatus.textContent = check.error;
@@ -75,11 +198,12 @@
         }
         // Submit in the user's gesture where possible; no server-side browser process.
         HTMLFormElement.prototype.submit.call(form);
-        formStatus.textContent = "已打开导出预览；如未出现，请允许此站点打开新窗口。";
+        setState('running');
+        formStatus.textContent = '正在整理文档并准备下载…';
       } catch (error) {
         formStatus.textContent = error.message || "导出准备失败，请刷新页面后重试。";
       } finally {
-        button.disabled = false;
+        if (state === 'checking') setState('idle');
       }
     });
   }
@@ -88,6 +212,11 @@
   if (!preview) return;
   const button = preview.querySelector("[data-pdf-download]");
   const status = preview.querySelector("[data-pdf-status]");
+  const automatic = preview.dataset.pdfAuto === '1';
+  const report = (message, state = 'progress', retryable = false) => {
+    status.textContent = message;
+    if (automatic && parent !== window) parent.postMessage({ type: 'sps-pdf-export', state, message, retryable }, location.origin);
+  };
   const documentBody = document.querySelector(".pdf-document");
   const url = preview.dataset.exportUrl;
   const fields = () => new URLSearchParams({ csrf: preview.dataset.csrf, lease: preview.dataset.lease });
@@ -117,6 +246,7 @@
   };
   const sections = Array.from(documentBody.querySelectorAll('.pdf-doc'));
   const completed = new Set();
+  let resourceWarning = '';
   let busy = false;
   let prepared = false;
   function updateControls() {
@@ -250,7 +380,7 @@
       for (let index = 0; index < sections.length; index++) {
         if (completed.has(index)) continue;
         if (heartbeatError) throw heartbeatError;
-        status.textContent = `正在生成第 ${index + 1} / ${sections.length} 篇：${filenames[index]}`;
+        report(`正在生成第 ${index + 1} / ${sections.length} 篇：${filenames[index]}`);
         await claim(index);
         const blob = await makePdf(sections[index]);
         await verify(true);
@@ -265,10 +395,10 @@
         setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
         completed.add(index);
       }
-      status.textContent = `已逐篇触发 ${completed.size} 个独立 PDF 下载。若文件未全部出现，请允许浏览器连续下载多个文件。`;
       release();
+      report(`已逐篇触发 ${completed.size} 个独立 PDF 下载。${resourceWarning}若文件未全部出现，请允许浏览器连续下载多个文件。`, 'done');
     } catch (error) {
-      status.textContent = `已下载 ${completed.size} / ${sections.length} 篇。${error.message || '下载失败，请重试剩余文档。'}`;
+      report(`已下载 ${completed.size} / ${sections.length} 篇。${error.message || '下载失败，请重试剩余文档。'}`, 'error', !released && !!documentBody.children.length);
     } finally {
       clearInterval(heartbeat);
       busy = false;
@@ -323,11 +453,16 @@
     status.textContent = incomplete || diagramPending
       ? "部分图片未能加载。请检查下方预览，必要时重新打开后再保存。"
       : "预览已就绪。点击保存即可逐篇下载，每篇一个 PDF。";
+    if (incomplete || diagramPending) resourceWarning = '部分图片或图表未能加载，请检查下载文件。';
     prepared = true;
     updateControls();
+    if (automatic) button.click();
   };
+  window.addEventListener('message', (message) => {
+    if (message.origin === location.origin && message.source === parent && message.data?.type === 'sps-pdf-retry' && automatic) button.click();
+  });
   prepare().catch((error) => {
-    status.textContent = error.message || "导出准备失败，请重新打开预览。";
     release();
+    report(error.message || '导出准备失败，请重新选择文档。', 'error');
   });
 })();

@@ -23,11 +23,19 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     if (scope === 'selected') {
       for (const box of await controls.locator('[name="doc_ids[]"]').all()) await box.check();
     }
-    const next = ctx.waitForEvent('page');
-    await controls.locator('[data-pdf-export-form] button[type=submit]').click();
-    const preview = await next;
+    // Inspect the renderer independently; the user-facing form auto-downloads.
+    const html = await controls.evaluate(async () => {
+      const form = document.querySelector('[data-pdf-export-form]');
+      const body = new FormData(form);
+      body.delete('auto_download');
+      body.set('fingerprint', 'a'.repeat(64));
+      const response = await fetch(form.action, { method: 'POST', body, headers: { Accept: 'text/html' } });
+      if (!response.ok) throw new Error(await response.text());
+      return response.text();
+    });
+    const preview = controls;
     preview.on('pageerror', (error) => errors.push(error.message));
-    await preview.waitForLoadState();
+    await preview.setContent(html, { waitUntil: 'load' });
     await preview.waitForFunction(() => document.querySelector('[data-pdf-download]')?.disabled === false, null, { timeout: 45000 });
     assert.equal(await preview.getByRole('button', { name: '打印此篇', exact: true }).count(), 0, 'Export offers direct PDF saving only');
     return preview;
@@ -101,6 +109,54 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     }
     await reader.setViewportSize({ width: 1100, height: 900 });
     await title.evaluate((n, value) => { n.textContent = value; }, originalTitle);
+    const originalUrl = reader.url();
+    const applicationPages = () => context.pages().filter((page) => !/^(edge|chrome):\/\//.test(page.url()));
+    const pagesBefore = applicationPages().length;
+    await reader.locator('[data-pdf-export-link]').click();
+    const modal = reader.locator('dialog.pdf-export-dialog');
+    await modal.waitFor({ state: 'visible' });
+    const options = reader.frameLocator('[data-pdf-dialog-frame]');
+    await options.locator('[data-pdf-export-form]').waitFor();
+    assert.match(await options.locator('[data-pdf-quota]').innerText(), /每 60 分钟最多导出 120 篇.*剩余 120 篇/);
+    assert.match(await modal.evaluate((node) => getComputedStyle(node, '::backdrop').backdropFilter), /blur/);
+    await reader.waitForTimeout(250); // Let the requested opening/height animations settle.
+    await reader.screenshot({ path: path.join(output, 'pdf-dialog-desktop.png'), animations: 'disabled' });
+    await reader.setViewportSize({ width: 390, height: 844 });
+    await reader.waitForTimeout(250);
+    await reader.screenshot({ path: path.join(output, 'pdf-dialog-mobile.png'), animations: 'disabled' });
+    assert.ok((await modal.boundingBox()).width <= 390);
+    await reader.setViewportSize({ width: 1100, height: 900 });
+    await options.locator('[data-pdf-scope]').selectOption('all');
+    const automaticDownloads = [];
+    reader.on('download', (download) => automaticDownloads.push(download));
+    await options.getByRole('button', { name: '确定导出', exact: true }).click();
+    await options.locator('[data-pdf-form-status]').filter({ hasText: '已逐篇触发 2 个独立 PDF 下载' }).waitFor({ timeout: 120000 });
+    assert.equal(automaticDownloads.length, 2);
+    for (let index = 0; index < automaticDownloads.length; index++) await automaticDownloads[index].saveAs(path.join(output, `dialog-auto-${index + 1}.pdf`));
+    await options.locator('[data-pdf-quota]').filter({ hasText: '剩余 118 篇' }).waitFor();
+    assert.match(await options.locator('[data-pdf-quota]').innerText(), /下一次恢复/);
+    assert.equal(applicationPages().length, pagesBefore, 'Dialog and automatic download open no extra application tabs');
+    assert.equal(reader.url(), originalUrl, 'Reader stays on the document');
+    await reader.getByRole('button', { name: '关闭导出弹窗' }).click();
+    await modal.waitFor({ state: 'hidden' });
+    await reader.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' });
+    await reader.locator('[data-pdf-export-link]').click();
+    await options.locator('[data-pdf-export-form]').waitFor();
+    await reader.waitForTimeout(100);
+    await reader.screenshot({ path: path.join(output, 'pdf-dialog-dark.png'), animations: 'disabled' });
+    await options.locator('[data-pdf-scope]').press('Escape');
+    await modal.waitFor({ state: 'hidden' });
+    await reader.emulateMedia({ colorScheme: 'light', reducedMotion: 'no-preference' });
+    await reader.route('**/assets/vendor/html2pdf.bundle.min.js*', (route) => route.abort(), { times: 1 });
+    await reader.locator('[data-pdf-export-link]').click();
+    await options.getByRole('button', { name: '确定导出', exact: true }).click();
+    await options.getByRole('button', { name: '重试剩余文档', exact: true }).waitFor({ timeout: 45000 });
+    const task = reader.frames().find((frame) => frame.name() === 'sps-pdf-worker');
+    const taskCredentials = await task.locator('[data-pdf-preview]').evaluate((node) => ({ csrf: node.dataset.csrf, lease: node.dataset.lease }));
+    await reader.getByRole('button', { name: '关闭导出弹窗' }).click();
+    await modal.waitFor({ state: 'hidden' });
+    await reader.waitForTimeout(150);
+    assert.equal((await context.request.post(shareUrl + '/export/verify', { form: taskCredentials })).status(), 410, 'Closing the dialog releases an interrupted task');
     const first = await openPreview(context, 'all');
     assert.equal(await first.locator('.pdf-doc').count(), 2);
     assert.ok(await first.locator('.katex').count() >= 2);

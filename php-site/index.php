@@ -1202,6 +1202,7 @@ function render_page(string $title, string $content, ?array $user = null, string
     $layoutClass = 'layout-' . preg_replace('/[^a-z0-9_-]+/i', '', $layout);
     $includeMarkdown = !empty($options['markdown']);
     if (!empty($options['pdf_export']) && $includeMarkdown) $layoutClass .= ' pdf-export-preview';
+    if (!empty($options['pdf_embedded'])) $layoutClass .= ' pdf-export-embedded';
     $navKey = (string)($options['nav'] ?? '');
     if ($user && $layout !== 'auth' && $layout !== 'share') {
         maybe_send_instance_heartbeat();
@@ -8899,7 +8900,7 @@ if (strpos($path, '/api/v1/') === 0) {
     handle_api($path);
 }
 
-if (preg_match('#^/s/([a-zA-Z0-9_-]+)/export(?:/(verify|release|claim|check|captcha|captcha-verify))?$#', $path, $matches)) {
+if (preg_match('#^/s/([a-zA-Z0-9_-]+)/export(?:/(verify|release|claim|check|quota|captcha|captcha-verify))?$#', $path, $matches)) {
     route_pdf_export($matches[1], $matches[2] ?? '');
 }
 

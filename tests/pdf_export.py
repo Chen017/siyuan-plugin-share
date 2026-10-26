@@ -10,6 +10,47 @@ import unittest
 
 
 class PdfExportTests:
+    def test_pdf_dialog_cancellation_is_scoped_and_handles_pending_submission(self):
+        visitor, path, csrf = self.pdf_visitor(self.share())
+        def ticket():
+            page = visitor.request(path)[2]
+            return re.search(rb'name="ticket" value="([a-f0-9]+)"', page)[1].decode()
+        cancelled = ticket()
+        self.assertEqual(visitor.request(path + '/release', {'csrf': csrf, 'ticket': cancelled})[0], 204)
+        self.assertEqual(self.pdf_post(visitor, path, csrf, auto_download='1', ticket=cancelled)[0], 409)
+        active = ticket()
+        result = self.pdf_post(visitor, path, csrf, auto_download='1', ticket=active)
+        self.assertEqual(result[0], 200, result[2])
+        lease = self.pdf_lease(result[2])
+        unrelated = ticket()
+        visitor.request(path + '/release', {'csrf': csrf, 'ticket': unrelated})
+        self.assertEqual(visitor.request(path + '/verify', {'csrf': csrf, 'lease': lease})[0], 200)
+        visitor.request(path + '/release', {'csrf': csrf, 'ticket': active})
+        self.assertEqual(visitor.request(path + '/verify', {'csrf': csrf, 'lease': lease})[0], 410)
+
+    def test_pdf_quota_status_rolls_forward_and_obeys_permissions(self):
+        visitor, path, csrf = self.pdf_visitor(self.share())
+        identity = self.pdf_visitor_hash(visitor)
+        with self.pdf_limit(120):
+            response = visitor.request(path + '/quota', {'csrf': csrf})
+            self.assertEqual(response[0], 200)
+            self.assertEqual(json.loads(response[2])['quota']['remaining'], 120)
+            now = int(time.time())
+            self.rows(f"INSERT INTO pdf_export_events(ip_hash, fingerprint_hash, visitor_hash, created_at, doc_count) VALUES ('ip', 'fp', '{identity}', {now - 30}, 119), ('ip', 'fp', '{identity}', {now - 10}, 1)")
+            quota = json.loads(visitor.request(path + '/quota', {'csrf': csrf})[2])['quota']
+            self.assertEqual((quota['used'], quota['remaining']), (120, 0))
+            self.assertEqual(quota['next_recovery_at'], now - 30 + 3600)
+            self.assertEqual(quota['next_recovery_count'], 119)
+            with self.pdf_limit(1):
+                reduced = json.loads(visitor.request(path + '/quota', {'csrf': csrf})[2])['quota']
+                self.assertEqual(reduced['next_recovery_at'], now - 10 + 3600)
+                self.assertEqual(reduced['next_recovery_count'], 1)
+            self.assertEqual(visitor.request(path + '/quota', {'csrf': 'wrong'})[0], 400)
+            self.rows(f'UPDATE pdf_export_events SET created_at = {now - 3601}')
+            quota = json.loads(visitor.request(path + '/quota', {'csrf': csrf})[2])['quota']
+            self.assertEqual(quota['remaining'], 120)
+            self.assertIsNone(quota['next_recovery_at'])
+
     def pdf_admin_form(self, admin):
         status, _, page = admin.request('/admin#settings')
         self.assertEqual(status, 200)
