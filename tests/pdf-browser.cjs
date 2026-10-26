@@ -14,7 +14,40 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
   try {
     const page = await context.newPage();
     await page.goto(shareUrl);
+    assert.equal(await page.locator('[data-pdf-export-link]').count(), 0, 'Directory view must not show a PDF action');
+    const openDocument = async (id) => {
+      await page.locator(`a[data-share-nav="doc"][data-doc-id="${id}"]`).first().click();
+      await page.waitForFunction((docId) => document.querySelector('.share-shell')?.dataset.shareDocId === docId, id);
+    };
+    const docUrl = `${shareUrl}/${fixture.docIds[0]}`;
+    await openDocument(fixture.docIds[0]);
+    assert.equal(await page.locator('.kb-title-row .share-document-actions [data-pdf-export-link]').count(), 1);
+    assert.equal(await page.locator('.pdf-share-tools').count(), 0);
+    await openDocument(fixture.docIds[1]);
+    assert.equal(new URL(await page.locator('[data-pdf-export-link]').getAttribute('href'), shareUrl).searchParams.get('doc'), fixture.docIds[1]);
+    await page.locator('[data-share-toggle]').click();
+    assert.equal(await page.locator('.share-article.is-markdown [data-pdf-export-link]').count(), 1);
+    await page.locator('[data-share-toggle]').click();
+    await page.locator('a[data-share-nav="doc"][data-doc-id=""]').first().click();
+    await page.waitForFunction(() => document.querySelector('.share-shell')?.dataset.shareDocId === '');
+    assert.equal(await page.locator('[data-pdf-export-link]').count(), 0, 'Returning to the directory removes the PDF action');
+    await openDocument(fixture.docIds[0]);
+    const title = page.locator('.kb-title');
+    const originalTitle = await title.textContent();
+    await title.evaluate((node) => { node.textContent = '10.21 Functional completeness and Boolean Constants'; });
+    for (const width of [1100, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      const source = await page.locator('[data-share-toggle]').boundingBox();
+      const pdf = await page.locator('[data-pdf-export-link]').boundingBox();
+      assert.ok(Math.abs(source.y - pdf.y) < 1, 'Source and PDF actions are side by side');
+      assert.ok(Math.abs(source.height - pdf.height) < 1, 'Source and PDF actions have matching heights');
+      assert.ok(pdf.x + pdf.width <= width, 'PDF action stays within the viewport');
+      await page.screenshot({ path: path.join(output, `reader-pdf-actions-${width}.png`) });
+    }
+    await page.setViewportSize({ width: 1100, height: 900 });
+    await title.evaluate((node, text) => { node.textContent = text; }, originalTitle);
     await page.locator('[data-pdf-export-link]').click();
+    assert.equal(await page.locator('[name=doc_id]').inputValue(), fixture.docIds[0]);
     await page.locator('[data-pdf-scope]').selectOption('all');
     const popupPromise = context.waitForEvent('page');
     await page.locator('[data-pdf-export-form] button[type=submit]').click();
@@ -127,14 +160,14 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
         assert.equal(await settings.locator('[name=pdf_export_ip_header]').inputValue(), 'HTTP_CF_CONNECTING_IP');
         assert.equal(await settings.locator('[name="limits[max_docs]"]').isVisible(), false);
         await admin.locator('#pdf-export-settings').screenshot({ path: path.join(output, 'pdf-admin-settings.png') });
-        await page.goto(shareUrl);
+        await page.goto(docUrl);
         assert.equal(await page.locator('[data-pdf-export-link]').count(), 0);
         assert.equal((await context.request.get(`${shareUrl}/export`)).status(), 404);
       } finally {
         const restored = await admin.request.post(`${base}/admin/pdf-export-settings`, { form: original, maxRedirects: 0 });
         assert.equal(restored.status(), 302);
       }
-      await page.goto(shareUrl);
+      await page.goto(docUrl);
       assert.equal(await page.locator('[data-pdf-export-link]').count(), 1);
     } finally {
       await adminContext.close();

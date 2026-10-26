@@ -1,15 +1,5 @@
 (() => {
   "use strict";
-  const link = document.querySelector("[data-pdf-export-link]");
-  if (link) {
-    // Resolve the active document at click time, including after partial navigation.
-    link.addEventListener("click", () => {
-      const url = new URL(link.href);
-      const shell = document.querySelector(".share-shell[data-share-doc-id]");
-      if (shell) url.searchParams.set("doc", shell.dataset.shareDocId || "");
-      link.href = url.href;
-    });
-  }
   const form = document.querySelector("[data-pdf-export-form]");
   if (form) {
     const scope = form.querySelector("[data-pdf-scope]");

@@ -35,7 +35,7 @@ class PdfExportTests:
         try:
             disabled = {key: value for key, value in original.items() if key != 'pdf_export_enabled'}
             self.assertEqual(admin.request('/admin/pdf-export-settings', disabled)[0], 302)
-            self.assertNotIn(b'data-pdf-export-link', visitor.request(path[:-7])[2])
+            self.assertNotIn(b'data-pdf-export-link', visitor.request(path[:-7] + '/' + docs[0]['docId'])[2])
             self.assertEqual(visitor.request(path)[0], 404)
             self.assertEqual(self.pdf_post(visitor, path, token)[0], 404)
             self.assertEqual(visitor.request(path + '/verify', {'csrf': token, 'lease': lease})[0], 404)
@@ -118,7 +118,7 @@ class PdfExportTests:
         output = Path(__file__).resolve().parents[1] / '.test-output'
         output.mkdir(exist_ok=True)
         subprocess.run(['node', str(Path(__file__).with_name('pdf-browser.cjs')), self.base + '/s/' + share['slug'], str(output)],
-                       input=json.dumps({'apiKey': self.key, 'shareId': share['id']}), text=True, check=True, timeout=180)
+                       input=json.dumps({'apiKey': self.key, 'shareId': share['id'], 'docIds': [doc['docId'] for doc in docs]}), text=True, check=True, timeout=180)
 
     def pdf_visitor(self, share, password=None):
         self.rows('DELETE FROM pdf_export_events')

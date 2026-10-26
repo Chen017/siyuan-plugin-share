@@ -1252,9 +1252,6 @@ function render_page(string $title, string $content, ?array $user = null, string
     } elseif ($layout === 'share') {
         echo "<div class='share-page'>";
         echo render_share_icon_defs();
-        if (!empty($GLOBALS['share_pdf_context']) && empty($options['pdf_export'])) {
-            echo render_pdf_export_link($GLOBALS['share_pdf_context']);
-        }
         echo $content;
         echo "<footer class='share-footer'><span class='footer-credit'>由 <a class='footer-owner' href='https://github.com/Chen017/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Chen017</a> 维护</span><span class='footer-separator' aria-hidden='true'>·</span><span class='footer-credit'>上游：<a class='footer-upstream' href='https://github.com/b8l8u8e8/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Siyuan Share</a></span></footer>";
         echo "<button class='share-side-trigger' type='button' data-share-drawer-open aria-label='打开侧边栏'><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='currentColor' d='M4 6h16v2H4zM4 11h16v2H4zM4 16h16v2H4z'/></svg><span>导航</span></button>";
@@ -8485,6 +8482,12 @@ function is_share_partial_request(): bool {
     return false;
 }
 
+function render_share_document_actions(string $slug, string $docId): string {
+    return '<div class="share-document-actions">'
+        . '<button class="button ghost share-view-toggle" type="button" data-share-toggle aria-pressed="false">源码</button>'
+        . render_pdf_export_link(['slug' => $slug, 'doc_id' => $docId]) . '</div>';
+}
+
 function route_share(string $slug, ?string $docId = null): void {
     $share = find_share_by_slug($slug);
     if (!$share) {
@@ -8548,7 +8551,6 @@ function route_share(string $slug, ?string $docId = null): void {
         return;
     }
 
-    $GLOBALS['share_pdf_context'] = ['slug' => $slug, 'doc_id' => (string)($docId ?: ($share['doc_id'] ?? ''))];
     $pdo = db();
     $stmt = $pdo->prepare('SELECT id, doc_id, title, icon, hpath, parent_id, sort_index, sort_order, updated_at FROM share_docs WHERE share_id = :sid ORDER BY sort_order ASC, id ASC');
     $stmt->execute([':sid' => $shareId]);
@@ -8666,7 +8668,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $mainHtml .= '<div class="kb-header">' . $breadcrumbsHtml;
             $mainHtml .= '<div class="kb-title-row">';
             $mainHtml .= '<h1 class="kb-title">' . $docTitle . '</h1>';
-            $mainHtml .= '<button class="button ghost share-view-toggle" type="button" data-share-toggle aria-pressed="false">源码</button>';
+            $mainHtml .= render_share_document_actions($slug, $activeDocId);
             $mainHtml .= '</div>';
             $mainHtml .= $shareMetaHtml;
             $mainHtml .= '</div>';
@@ -8720,7 +8722,7 @@ function route_share(string $slug, ?string $docId = null): void {
         $content .= '<div class="kb-header">';
         $content .= '<div class="kb-title-row">';
         $content .= '<h1 class="kb-title">' . $docTitle . '</h1>';
-        $content .= '<button class="button ghost share-view-toggle" type="button" data-share-toggle aria-pressed="false">源码</button>';
+        $content .= render_share_document_actions($slug, (string)$doc['doc_id']);
         $content .= '</div>';
         $content .= $shareMetaHtml;
         $content .= '</div>';
@@ -8792,7 +8794,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $mainHtml .= '<div class="kb-header">' . $breadcrumbsHtml;
             $mainHtml .= '<div class="kb-title-row">';
             $mainHtml .= '<h1 class="kb-title">' . $docTitle . '</h1>';
-            $mainHtml .= '<button class="button ghost share-view-toggle" type="button" data-share-toggle aria-pressed="false">源码</button>';
+            $mainHtml .= render_share_document_actions($slug, (string)$docId);
             $mainHtml .= '</div>';
             $mainHtml .= $shareMetaHtml;
             $mainHtml .= '</div>';

@@ -361,8 +361,8 @@ function pdf_export_select_docs(int $shareId, array $input): array {
 function render_pdf_export_link(array $context): string {
     if (!pdf_export_settings()['enabled']) return '';
     $url = base_path() . '/s/' . rawurlencode($context['slug']) . '/export';
-    return '<div class="pdf-share-tools"><a class="button ghost" data-pdf-export-link href="' . htmlspecialchars($url)
-        . '?doc=' . rawurlencode($context['doc_id']) . '">导出 PDF / 批量导出</a></div>';
+    return '<a class="button ghost share-view-toggle" data-pdf-export-link href="' . htmlspecialchars($url)
+        . '?doc=' . rawurlencode($context['doc_id']) . '">导出 PDF</a>';
 }
 
 function route_pdf_export(string $slug, string $action = ''): never {
