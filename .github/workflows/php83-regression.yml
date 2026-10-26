@@ -32,6 +32,7 @@ jobs:
       - name: Verify consistent backup and restoration using disposable data
         run: |
           bash -n scripts/backup-data.sh scripts/deploy-vps.sh tests/backup-fixture.sh
+          python tests/deploy-guard.py
           php_file=scripts/data-snapshot.php
           docker run --rm --entrypoint php -v "$PWD/scripts:/ops:ro" siyuan-share:php83-test -l "/ops/$(basename "$php_file")"
           bash tests/backup-fixture.sh siyuan-share:php83-test

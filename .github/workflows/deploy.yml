@@ -52,12 +52,19 @@ jobs:
             docker run --rm --network none --entrypoint php siyuan-share-web:latest -r 'if (PHP_MAJOR_VERSION !== 8 || PHP_MINOR_VERSION !== 3 || PHP_VERSION_ID < 80336) exit(1); echo "Built PHP ", PHP_VERSION, "\n";'
             migration_backup=
             # This schema retirement gets one verified backup; routine upgrades keep the existing policy.
-            if ! docker exec siyuan-share-web php -r '$c = is_file("/var/www/html/config.php") ? require "/var/www/html/config.php" : []; $p = new PDO("sqlite:" . ($c["db_path"] ?? "/var/www/html/storage/app.db")); $p->exec("PRAGMA query_only=ON"); $s=$p->prepare("SELECT value FROM settings WHERE key=?"); $s->execute(["admin_only_schema_v1"]); exit($s->fetchColumn() === "1" ? 0 : 1);'; then
+            if [ -s /core-before.json ] || ! docker exec siyuan-share-web php -r '$c = is_file("/var/www/html/config.php") ? require "/var/www/html/config.php" : []; $p = new PDO("sqlite:" . ($c["db_path"] ?? "/var/www/html/storage/app.db")); $p->exec("PRAGMA query_only=ON"); $s=$p->prepare("SELECT value FROM settings WHERE key=?"); $s->execute(["admin_only_schema_v1"]); exit($s->fetchColumn() === "1" ? 0 : 1);'; then
               backup_log=$(mktemp)
-              bash scripts/backup-data.sh siyuan-share-web /root/siyuan-share-backups | tee "$backup_log"
+              if ! bash scripts/backup-data.sh siyuan-share-web /root/siyuan-share-backups > "$backup_log" 2>&1; then
+                cat "$backup_log"
+                rm -f "$backup_log"
+                echo 'Backup failed; refusing cutover.' >&2
+                exit 1
+              fi
+              cat "$backup_log"
               migration_backup=$(sed -n 's/^BACKUP_DIR=//p' "$backup_log")
               rm -f "$backup_log"
-              test -n "$migration_backup" && test -f "$migration_backup/VERIFIED"
+              case "$migration_backup" in /root/siyuan-share-backups/*) ;; *) echo 'Invalid backup path; refusing cutover.' >&2; exit 1 ;; esac
+              if [ ! -f "$migration_backup/VERIFIED" ]; then echo 'Backup verification missing; refusing cutover.' >&2; exit 1; fi
               docker stop --signal SIGTERM --time 30 siyuan-share-web >/dev/null
               docker run --rm --network none --read-only --volumes-from siyuan-share-web:ro -v "$PWD/scripts:/ops:ro" --entrypoint php siyuan-share-web:latest /ops/data-snapshot.php /var/www/html/storage/app.db --core-only > "$migration_backup/core-before.json"
             fi
@@ -76,6 +83,11 @@ jobs:
               docker exec siyuan-share-web php /tmp/core-data-snapshot.php /var/www/html/storage/app.db --core-only > "$migration_backup/core-after.json"
               cmp "$migration_backup/core-before.json" "$migration_backup/core-after.json"
               docker exec siyuan-share-web php -r '$p=new PDO("sqlite:/var/www/html/storage/app.db"); $p->exec("PRAGMA query_only=ON"); $s=$p->prepare("SELECT value FROM settings WHERE key=?"); $s->execute(["admin_only_schema_v1"]); if ($s->fetchColumn() !== "1" || $p->query("PRAGMA foreign_key_check")->fetch()) exit(1);'
+              if [ -s /core-before.json ]; then
+                cmp /core-before.json "$migration_backup/core-after.json"
+                mv /core-before.json "$migration_backup/core-before-retirement.json"
+                echo 'RETIREMENT_CORE_DATA_PRESERVED=1'
+              fi
               printf 'CORE_DATA_PRESERVED=1\nMIGRATION_BACKUP=%s\n' "$migration_backup"
             fi
             if [ '${{ github.event_name == 'workflow_dispatch' && inputs.apply_pdf_limits && 'yes' || 'no' }}' = yes ]; then

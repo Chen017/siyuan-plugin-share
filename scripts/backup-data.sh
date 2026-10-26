@@ -21,7 +21,14 @@ stamp=$(date -u +%Y%m%dT%H%M%SZ)
 backup_dir=$(mktemp -d "$backup_root/$stamp-XXXXXX")
 old_image=$(docker inspect --format '{{.Image}}' "$container")
 rollback_tag="siyuan-share-web:rollback-$stamp"
-docker tag "$old_image" "$rollback_tag"
+# Some containerd upgrades can retain a running root filesystem after its image metadata disappears.
+# Preserve that filesystem and its runtime configuration instead of accepting an unusable rollback tag.
+if docker image inspect "$old_image" >/dev/null 2>&1; then
+    docker tag "$old_image" "$rollback_tag"
+else
+    docker commit --pause=true "$container" "$rollback_tag" >/dev/null
+    old_image=$(docker image inspect "$rollback_tag" --format '{{.Id}}')
+fi
 docker inspect "$container" > "$backup_dir/container-before.json"
 printf '%s\n' "$old_image" > "$backup_dir/image-before.txt"
 printf '%s\n' "$rollback_tag" > "$backup_dir/rollback-image.txt"
