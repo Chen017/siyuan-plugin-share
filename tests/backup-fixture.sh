@@ -6,7 +6,11 @@ backup_root=$(mktemp -d)
 config_file="$backup_root/config.php"
 printf '<?php return ["fixture" => "private-config"];\n' > "$config_file"
 chmod 600 "$config_file"
-bash scripts/prepare-config.sh "$image" "$config_file"
+if (( EUID == 0 )); then
+    bash scripts/prepare-config.sh "$image" "$config_file"
+else
+    sudo bash scripts/prepare-config.sh "$image" "$config_file"
+fi
 test "$(stat -c %a "$config_file")" = 640
 cleanup() {
     docker rm -fv "$container" >/dev/null 2>&1 || true
