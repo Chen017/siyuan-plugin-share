@@ -66,4 +66,4 @@ Each server-issued visitor Cookie has its own rolling allowance, defaulting to 1
 
 A server-side transaction permits only one active export task per visitor Cookie, including across tabs, windows and website sessions. Existing access/password/expiry checks and preset concurrency, batch and resource limits remain in place.
 
-Direct downloads preserve visual layout as page images, so text is generally not selectable. Native Print this document remains available for selectable text. Browsers may ask permission for multiple downloads. See [configuration, limitations and tests](docs/GUEST_PDF_EXPORT.md).
+Save PDF preserves page artwork and adds an aligned Unicode text layer, allowing body text selection, copying and search while retaining hidden provenance. Text inside images is not OCRed. Native Print this document remains available. Browsers may ask permission for multiple downloads. See [configuration, limitations and tests](docs/GUEST_PDF_EXPORT.md).

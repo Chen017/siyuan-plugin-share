@@ -8,4 +8,4 @@
 - MIT and bundled dependency notices: `html2pdf.LICENSE.txt`.
 - Install/audit performed with lifecycle scripts disabled on 2026-10-26; npm audit reported no vulnerabilities for the resolved dependency tree.
 
-The bundle is loaded only on the export preview's download action. No document is sent to the package authors or a remote PDF service. Export captures one A4 page at a time to avoid a full-document canvas allocation, then downloads one PDF per document. Direct downloads preserve visual layout as page images; native per-document printing remains available for selectable text.
+The bundle is loaded only on the export preview's download action. No document is sent to the package authors or a remote PDF service. Export captures one A4 page at a time to avoid a full-document canvas allocation, then downloads one PDF per document. Direct downloads preserve page artwork and add a Unicode selection layer from measured DOM text through the local `pdf-text-layer.js` helper. No OCR or additional body font download is required. Native per-document printing remains available.
