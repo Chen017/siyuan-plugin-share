@@ -646,4 +646,3 @@ function render_markdown(string $markdown): string {
     }
     return sanitize_share_html($parser->text($markdown));
 }
-

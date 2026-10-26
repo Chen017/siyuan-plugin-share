@@ -31,6 +31,11 @@ WORKDIR /var/www/html
 # Copy app files with runtime owner
 COPY --chown=www-data:www-data php-site/ /var/www/html/
 
+# Build context files may come from a private umask-077 checkout. Nginx and FPM
+# run as different users; normalize shipped code/assets, excluding mounted private data/config.
+RUN find /var/www/html -type d -exec chmod 755 {} + \
+    && find /var/www/html -type f -exec chmod 644 {} +
+
 # Configure PHP runtime limits
 RUN set -eux; \
     { \

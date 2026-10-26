@@ -255,4 +255,3 @@ function seed_default_admin(PDO $pdo): void {
         ':updated_at' => $now,
     ]);
 }
-

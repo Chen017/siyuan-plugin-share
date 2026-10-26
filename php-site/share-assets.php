@@ -343,4 +343,3 @@ function handle_legacy_upload_asset_request(string $path): void {
     }
     serve_share_asset($share, $assetPath);
 }
-

@@ -20,7 +20,10 @@ def write_archive(source, items, destination):
                 raise FileNotFoundError(path)
             for file in sorted(path.rglob('*')) if path.is_dir() else [path]:
                 if file.is_file():
-                    archive.write(file, file.relative_to(source).as_posix())
+                    info = zipfile.ZipInfo.from_file(file, file.relative_to(source).as_posix())
+                    info.create_system = 3
+                    info.external_attr = 0o100644 << 16
+                    archive.writestr(info, file.read_bytes(), compress_type=zipfile.ZIP_DEFLATED)
 
 
 def build(output, version):

@@ -1826,4 +1826,3 @@ function handle_api(string $path): void {
 
     api_response(404, null, '接口不存在');
 }
-

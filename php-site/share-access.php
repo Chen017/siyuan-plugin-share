@@ -136,4 +136,3 @@ function register_share_visitor(int $shareId, string $visitorId): void {
         ':created_at' => now(),
     ]);
 }
-

@@ -28,7 +28,11 @@ jobs:
         with:
           python-version: '3.11'
       - name: Build current PHP 8.3 image
-        run: docker build --pull --no-cache -f php-site/Dockerfile -t siyuan-share:php83-test .
+        run: |
+          # Reproduce private VPS checkout permissions; the image must still serve public assets.
+          find php-site -type d -exec chmod 700 {} +
+          find php-site -type f -exec chmod 600 {} +
+          docker build --pull --no-cache -f php-site/Dockerfile -t siyuan-share:php83-test .
       - name: Verify plugin and server archives without publishing
         run: python tests/package.py
       - name: Test PHP runtime, database, HTTP APIs and Nginx rules

@@ -523,4 +523,3 @@ function recalculate_share_size(int $shareId): int {
     ]);
     return $total;
 }
-
