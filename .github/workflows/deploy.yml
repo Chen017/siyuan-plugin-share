@@ -59,25 +59,22 @@ jobs:
             docker compose build --pull web
             docker run --rm --network none --entrypoint php siyuan-share-web:latest -r 'if (PHP_MAJOR_VERSION !== 8 || PHP_MINOR_VERSION !== 3 || PHP_VERSION_ID < 80336) exit(1); echo "Built PHP ", PHP_VERSION, "\n";'
             bash scripts/prepare-config.sh siyuan-share-web:latest
-            migration_backup=
-            # Take one verified backup before schema upgrades; routine upgrades retain the existing policy.
-            if [ -s /core-before.json ] || ! docker exec siyuan-share-web php -r '$c = is_file("/var/www/html/config.php") ? require "/var/www/html/config.php" : []; $p = new PDO("sqlite:" . ($c["db_path"] ?? "/var/www/html/storage/app.db")); $p->exec("PRAGMA query_only=ON"); try { $p->query("SELECT revision FROM shares LIMIT 0"); $p->query("SELECT share_revision,reserved_bytes FROM share_uploads LIMIT 0"); } catch (Throwable $error) { exit(1); } $s=$p->prepare("SELECT value FROM settings WHERE key=?"); $s->execute(["admin_only_schema_v1"]); exit($s->fetchColumn() === "1" ? 0 : 1);'; then
-              backup_log=$(mktemp)
-              if ! bash scripts/backup-data.sh siyuan-share-web /root/siyuan-share-backups > "$backup_log" 2>&1; then
-                cat "$backup_log"
-                rm -f "$backup_log"
-                echo 'Backup failed; refusing cutover.' >&2
-                exit 1
-              fi
-              cat "$backup_log"
-              migration_backup=$(sed -n 's/^BACKUP_DIR=//p' "$backup_log")
-              rm -f "$backup_log"
-              case "$migration_backup" in /root/siyuan-share-backups/*) ;; *) echo 'Invalid backup path; refusing cutover.' >&2; exit 1 ;; esac
-              if [ ! -f "$migration_backup/VERIFIED" ]; then echo 'Backup verification missing; refusing cutover.' >&2; exit 1; fi
-              docker stop --signal SIGTERM --time 30 siyuan-share-web >/dev/null
-              docker run --rm --network none --read-only --volumes-from siyuan-share-web:ro -v "$PWD/scripts:/ops:ro" --entrypoint php siyuan-share-web:latest /ops/data-snapshot.php /var/www/html/storage/app.db --core-only > "$migration_backup/core-before.json"
-            fi
+            # Operator policy: retain no rollback image or persistent data backup.
+            # Only temporary read-only fingerprints are used to verify the cutover.
+            verification=$(mktemp -d /tmp/siyuan-share-verify.XXXXXX)
+            resume_needed=0
+            finish() {
+              result=$?
+              if [ "$resume_needed" = 1 ]; then docker start siyuan-share-web >/dev/null || true; fi
+              case "$verification" in /tmp/siyuan-share-verify.*) rm -rf -- "$verification" ;; esac
+              exit "$result"
+            }
+            trap finish EXIT
+            resume_needed=1
+            docker stop --signal SIGTERM --time 30 siyuan-share-web >/dev/null
+            docker run --rm --network none --read-only --volumes-from siyuan-share-web:ro -v "$PWD/scripts:/ops:ro" --entrypoint php siyuan-share-web:latest /ops/data-snapshot.php /var/www/html/storage/app.db --core-only > "$verification/core-before.json"
             docker compose up -d --no-build --pull never web
+            resume_needed=0
             health=
             for attempt in $(seq 1 60); do
               health=$(docker inspect --format '{{.State.Health.Status}}' siyuan-share-web)
@@ -88,19 +85,11 @@ jobs:
             test "$(curl --max-time 15 -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8081/login)" = 200
             curl --max-time 15 -fsS http://127.0.0.1:8081/login | grep -F '<h1>Sign in</h1>' >/dev/null
             docker exec siyuan-share-web php -r 'if (PHP_MAJOR_VERSION !== 8 || PHP_MINOR_VERSION !== 3 || PHP_VERSION_ID < 80336) exit(1); echo "Running PHP ", PHP_VERSION, "\n";'
-            if [ -n "$migration_backup" ]; then
-              docker cp scripts/data-snapshot.php siyuan-share-web:/tmp/core-data-snapshot.php
-              docker exec siyuan-share-web php /tmp/core-data-snapshot.php /var/www/html/storage/app.db --core-only > "$migration_backup/core-after.json"
-              cmp "$migration_backup/core-before.json" "$migration_backup/core-after.json"
-              echo 'CUTOVER_CORE_DATA_PRESERVED=1'
-              docker exec siyuan-share-web php -r '$p=new PDO("sqlite:/var/www/html/storage/app.db"); $p->exec("PRAGMA query_only=ON"); $s=$p->prepare("SELECT value FROM settings WHERE key=?"); $s->execute(["admin_only_schema_v1"]); $marker=$s->fetchColumn(); $violations=$p->query("PRAGMA foreign_key_check")->fetchAll(PDO::FETCH_ASSOC); echo "MIGRATION_MARKER_OK=", ($marker === "1" ? "1" : "0"), "\nFOREIGN_KEY_VIOLATIONS=", count($violations), "\n"; foreach (array_count_values(array_column($violations, "table")) as $table => $count) echo "FOREIGN_KEY_TABLE=", $table, " COUNT=", $count, "\n"; if ($marker !== "1" || $violations) exit(1);'
-              if [ -s /core-before.json ]; then
-                cmp /core-before.json "$migration_backup/core-after.json"
-                mv /core-before.json "$migration_backup/core-before-retirement.json"
-                echo 'RETIREMENT_CORE_DATA_PRESERVED=1'
-              fi
-              printf 'CORE_DATA_PRESERVED=1\nMIGRATION_BACKUP=%s\n' "$migration_backup"
-            fi
+            docker cp scripts/data-snapshot.php siyuan-share-web:/tmp/core-data-snapshot.php
+            docker exec siyuan-share-web php /tmp/core-data-snapshot.php /var/www/html/storage/app.db --core-only > "$verification/core-after.json"
+            cmp "$verification/core-before.json" "$verification/core-after.json"
+            docker exec siyuan-share-web php -r '$p=new PDO("sqlite:/var/www/html/storage/app.db"); $p->exec("PRAGMA query_only=ON"); if ($p->query("PRAGMA integrity_check")->fetchColumn() !== "ok" || $p->query("PRAGMA foreign_key_check")->fetchAll()) exit(1); echo "SQLITE_INTEGRITY_OK=1\n";'
+            echo 'CORE_DATA_PRESERVED=1; no rollback image or persistent backup retained.'
             if [ '${{ github.event_name == 'workflow_dispatch' && inputs.apply_pdf_limits && 'yes' || 'no' }}' = yes ]; then
               docker exec --user www-data -i siyuan-share-web php /dev/stdin /var/www/html 60 120 < scripts/configure-pdf-limits.php
             fi

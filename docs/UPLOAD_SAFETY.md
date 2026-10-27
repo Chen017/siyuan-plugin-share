@@ -18,3 +18,5 @@ Search, reader pages and attachment downloads share atomic admission for visitor
 Mermaid renders locally. Diagram failures show the source instead of transmitting it to an external service. PlantUML currently shows its source because no local PlantUML engine is bundled. The website no longer submits diagram source to plantuml.com or mermaid.ink, including during PDF export.
 
 Plugin 0.5.6 restricts authenticated icon fetches to the current SiYuan origin's `/api/` paths and refuses redirects. External icons remain ordinary image links without the SiYuan token. Updating the website does not install the plugin into a SiYuan workspace; install the corresponding plugin package too.
+
+Automatic deployment follows the operator's no-backup policy: it retains neither a rollback image nor a persistent data archive. It pauses writes, compares temporary before/after data fingerprints, checks SQLite integrity and foreign keys, and removes the temporary verification files. A failed preflight resumes the stopped service. Manual backup scripts remain available as an optional operator action.
