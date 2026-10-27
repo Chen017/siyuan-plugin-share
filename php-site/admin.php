@@ -76,8 +76,14 @@ if ($path === '/api-key/rotate' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     db()->prepare('UPDATE users SET api_key_hash = ?, api_key_prefix = ?, api_key_last4 = ?, updated_at = ? WHERE id = ?')
         ->execute([$key[1], $key[2], $key[3], now(), $user['id']]);
     $_SESSION['api_key_plain'] = $key[0];
-    flash('info', 'API key created. Copy it now; it will be shown only once.');
-    redirect('/dashboard');
+    flash('info', 'Connection key created. Copy it into the plugin now; it is shown only once.');
+    redirect('/admin#plugin-connection');
+}
+
+if ($path === '/admin/share') {
+    $user = require_admin();
+    require_once __DIR__ . '/admin-share.php';
+    render_admin_share_editor((int)($_GET['share_id'] ?? 0), $user);
 }
 
 if ($path === '/dashboard') {
@@ -85,13 +91,9 @@ if ($path === '/dashboard') {
     $used = recalculate_user_storage((int)$user['id']);
     $limit = get_user_limit_bytes($user);
     $allStored = (int)db()->query('SELECT COALESCE(SUM(size_bytes), 0) FROM shares')->fetchColumn();
-    $content = '<div class="card"><h1>Notes</h1><p>Storage for this API key: ' . format_bytes($used) . ' / ' . ($limit > 0 ? format_bytes($limit) : 'Unlimited') . '</p><p>All stored notes and attachments: ' . format_bytes($allStored) . '</p>';
-    foreach (['error', 'info'] as $kind) if ($message = flash($kind)) $content .= '<p class="flash">' . htmlspecialchars($message) . '</p>';
-    $key = (string)($_SESSION['api_key_plain'] ?? '');
-    unset($_SESSION['api_key_plain']);
-    if ($key !== '') $content .= '<p>API key: <code>' . htmlspecialchars($key) . '</code></p>';
-    else $content .= '<p>API key: ' . (!empty($user['api_key_last4']) ? '••••' . htmlspecialchars((string)$user['api_key_last4']) : 'Not created') . '</p>';
-    $content .= '<form method="post" action="' . $base . '/api-key/rotate">' . render_hidden_inputs(['csrf' => csrf_token()]) . '<button class="button" type="submit">Generate API key</button></form></div>';
+    $content = '<div class="admin-page-heading"><div><p class="admin-eyebrow">Your library</p><h1>Shared notes</h1><p class="muted">Manage links, passwords and access in one place.</p></div><div class="storage-summary"><span>Storage used</span><strong>' . format_bytes($used) . '</strong><small>of ' . ($limit > 0 ? format_bytes($limit) : 'unlimited storage') . '</small></div></div>';
+    if ($allStored !== $used) $content .= '<p class="muted">All retained notes and attachments: ' . format_bytes($allStored) . '</p>';
+    foreach (['error', 'info'] as $kind) if ($message = flash($kind)) $content .= '<p class="flash' . ($kind === 'error' ? ' error' : '') . '" role="status">' . htmlspecialchars($message) . '</p>';
     $search = trim((string)($_GET['share_search'] ?? ''));
     $status = (string)($_GET['status'] ?? 'active');
     if (!in_array($status, ['active', 'deleted', 'all'], true)) $status = 'active';
@@ -101,33 +103,41 @@ if ($path === '/dashboard') {
     $stmt = db()->prepare('SELECT COUNT(*) FROM shares WHERE ' . $where);
     $stmt->execute($params);
     [$page, $size, $pages, $offset] = paginate((int)$stmt->fetchColumn(), max(1, (int)($_GET['share_page'] ?? 1)), normalize_page_size($_GET['share_size'] ?? 10));
-    $stmt = db()->prepare('SELECT * FROM shares WHERE ' . $where . ' ORDER BY updated_at DESC LIMIT ? OFFSET ?');
+    $stmt = db()->prepare('SELECT shares.*, (SELECT COUNT(*) FROM share_visitors WHERE share_id = shares.id) AS visitor_count FROM shares WHERE ' . $where . ' ORDER BY updated_at DESC LIMIT ? OFFSET ?');
     foreach ($params as $i => $value) $stmt->bindValue($i + 1, $value);
     $stmt->bindValue(count($params) + 1, $size, PDO::PARAM_INT);
     $stmt->bindValue(count($params) + 2, $offset, PDO::PARAM_INT);
     $stmt->execute();
     $content .= '<div class="card" id="shares"><h2>Shares</h2><form class="share-filter-form" method="get"><label>Search<input class="input" name="share_search" value="' . htmlspecialchars($search) . '"></label><label>Status<select class="input" name="status">';
     foreach (['active' => 'Active', 'deleted' => 'Deleted', 'all' => 'All'] as $value => $label) $content .= '<option value="' . $value . '"' . ($status === $value ? ' selected' : '') . '>' . $label . '</option>';
-    $content .= '</select></label><button class="button" type="submit">Search</button></form><div class="table-scroll table-scroll-has-actions"><table class="table table-has-actions"><thead><tr><th>Title</th><th>Size</th><th>Visitor limit</th><th class="actions">Actions</th></tr></thead><tbody>';
-    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $share) {
-        $content .= '<tr><td><a href="' . htmlspecialchars($base . '/s/' . $share['slug'], ENT_QUOTES) . '">' . htmlspecialchars($share['title']) . '</a></td><td>' . format_bytes((int)$share['size_bytes']) . '</td><td>' . ((int)$share['visitor_limit'] ?: 'Unlimited') . '</td><td class="actions">';
-        $actions = $share['deleted_at'] ? ['restore' => 'Restore', 'hard-delete' => 'Delete permanently'] : ['delete' => 'Move to deleted'];
+    $content .= '</select></label><button class="button" type="submit">Search</button></form><div class="table-scroll table-scroll-has-actions"><table class="table table-has-actions admin-shares"><thead><tr><th>Share</th><th>Access</th><th>Visitors</th><th>Size</th><th class="actions">Manage</th></tr></thead><tbody>';
+    $listedShares = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($listedShares as $share) {
+        $deleted = !empty($share['deleted_at']);
+        $title = htmlspecialchars($share['title']);
+        $manage = $base . '/admin/share?share_id=' . (int)$share['id'];
+        $content .= '<tr><td class="share-title-cell">' . ($deleted ? '<strong>' . $title . '</strong>' : '<a class="share-title-link" href="' . $manage . '">' . $title . '</a>') . '<small>' . ($share['type'] === 'notebook' ? 'Notebook' : 'Document') . ' · /s/' . htmlspecialchars($share['slug']) . '</small></td>';
+        $statusLabel = $deleted ? 'Deleted' : (share_is_expired($share) ? 'Expired' : (share_requires_password($share) ? 'Password protected' : 'Anyone with the link'));
+        $content .= '<td><span class="share-access-status">' . $statusLabel . '</span><small>' . (!empty($share['expires_at']) ? 'Expires ' . date('Y-m-d H:i', (int)$share['expires_at']) . ' (UTC+8)' : 'No expiry') . '</small></td><td data-label="Visitors">' . (int)$share['visitor_count'] . ' / ' . ((int)$share['visitor_limit'] ?: 'Unlimited') . '</td><td data-label="Size">' . format_bytes((int)$share['size_bytes']) . '</td><td class="actions"><div class="table-actions">';
+        if (!$deleted) $content .= '<a class="button" href="' . $manage . '">Manage</a>';
+        $actions = $deleted ? ['restore' => 'Restore', 'hard-delete' => 'Delete permanently'] : ['delete' => 'Delete'];
         foreach ($actions as $action => $label) {
             $confirm = $action === 'hard-delete' ? ' data-confirm-message="Permanently delete this share and its files?"' : '';
-            $content .= '<form class="inline-form" method="post" action="' . $base . '/admin/share-' . $action . '"' . $confirm . '>' . render_hidden_inputs(['csrf' => csrf_token(), 'share_id' => $share['id']]) . '<button class="button" type="submit">' . $label . '</button></form>';
+            $content .= '<form class="inline-form" method="post" action="' . $base . '/admin/share-' . $action . '"' . $confirm . '>' . render_hidden_inputs(['csrf' => csrf_token(), 'share_id' => $share['id']]) . '<button class="button' . ($action === 'restore' ? '' : ' danger') . '" type="submit">' . $label . '</button></form>';
         }
-        $content .= '</td></tr>';
+        $content .= '</div></td></tr>';
     }
+    if (!$listedShares) $content .= '<tr><td colspan="5" class="admin-empty">' . ($search !== '' ? 'No shares match your search.' : ($status === 'deleted' ? 'No deleted shares.' : 'No shared notes yet. Share a notebook from the SiYuan plugin to begin.')) . '</td></tr>';
     $content .= '</tbody></table></div><p>Page ' . $page . ' / ' . $pages . '</p>';
     if ($page > 1) $content .= '<a class="button" href="' . htmlspecialchars(build_dashboard_query_url(['share_page' => $page - 1]), ENT_QUOTES) . '">Previous</a> ';
     if ($page < $pages) $content .= '<a class="button" href="' . htmlspecialchars(build_dashboard_query_url(['share_page' => $page + 1]), ENT_QUOTES) . '">Next</a>';
     $content .= '</div>';
-    render_page('Notes', $content, $user, '', ['nav' => 'dashboard']);
+    render_page('Shares', $content, $user, '', ['nav' => 'dashboard']);
 }
 
 if ($path === '/admin') {
     $user = require_admin();
-    $content = '<div class="card" id="settings"><h1>Site settings</h1>';
+    $content = '<div class="admin-page-heading"><div><p class="admin-eyebrow">Preferences</p><h1>Site settings</h1><p class="muted">Reading, storage and appearance.</p></div></div><div class="card settings-section" id="settings"><h2>General & appearance</h2>';
     foreach (['error', 'info'] as $kind) if ($message = flash($kind)) $content .= '<p class="flash">' . htmlspecialchars($message) . '</p>';
     $content .= '<form class="settings-form" method="post" action="' . $base . '/admin/settings">' . render_hidden_inputs(['csrf' => csrf_token()]);
     $content .= '<label>Storage limit (MB)<input class="input" type="number" min="0" name="default_storage_limit_mb" value="' . mb_from_bytes(default_storage_limit_bytes()) . '"></label><p class="muted">0 means unlimited. Stored notes and attachments count toward the limit.</p>';
@@ -137,13 +147,21 @@ if ($path === '/admin') {
     foreach (['css' => true, 'js' => false] as $kind => $default) {
         $upper = strtoupper($kind);
         $enabled = get_bool_setting('site_custom_' . $kind . '_enabled', $default);
-        $content .= '<label><input type="checkbox" name="site_custom_' . $kind . '_enabled" value="1"' . ($enabled ? ' checked' : '') . '> Enable custom ' . $upper . '</label>';
+        $content .= '<label class="choice-row"><input type="checkbox" name="site_custom_' . $kind . '_enabled" value="1"' . ($enabled ? ' checked' : '') . '> Enable custom ' . $upper . '</label>';
         $content .= '<label for="custom-' . $kind . '">Custom ' . $upper . '</label><textarea class="input code-input" id="custom-' . $kind . '" name="site_custom_' . $kind . '" rows="8">' . htmlspecialchars((string)get_setting('site_custom_' . $kind, '')) . '</textarea>';
         $example = $kind === 'css' ? 'body.layout-share .markdown-body { max-width: 980px; }' : 'document.querySelectorAll(".markdown-body a").forEach((link) => { link.rel = "noopener"; });';
         $content .= '<details><summary>Custom ' . $upper . ' help and example</summary><p>' . ($kind === 'css' ? 'Scope selectors to body.layout-share or body.layout-app. Rules load after the site stylesheet.' : 'JavaScript runs after DOMContentLoaded. It is disabled by default. Use only trusted scripts.') . '</p><pre class="help-code">' . htmlspecialchars($example) . '</pre></details>';
     }
     $content .= '<button class="button primary" type="submit">Save settings</button></form></div>';
     $content .= render_pdf_export_settings();
+    $key = (string)($_SESSION['api_key_plain'] ?? '');
+    unset($_SESSION['api_key_plain']);
+    $content .= '<details class="plugin-connection card" id="plugin-connection"' . ($key !== '' ? ' open' : '') . '><summary>Plugin connection</summary><p class="muted">The SiYuan plugin uses a connection key to authenticate synchronization. Existing connections keep working. Generating a new key disconnects the old one.</p>';
+    if ($key !== '') $content .= '<label class="field-label">New connection key<code class="connection-key">' . htmlspecialchars($key) . '</code></label><p class="field-hint">Copy this into the plugin now. It is shown only once.</p>';
+    else $content .= '<p class="muted">' . (!empty($user['api_key_last4']) ? 'Connected · key ending ' . htmlspecialchars((string)$user['api_key_last4']) : 'No plugin connection yet') . '</p>';
+    $confirm = !empty($user['api_key_last4']) ? ' data-confirm-message="Replace the connection key? Update it in your SiYuan plugin to reconnect."' : '';
+    $content .= '<form method="post" action="' . $base . '/api-key/rotate"' . $confirm . '>' . render_hidden_inputs(['csrf' => csrf_token()]) . '<button class="button" type="submit">' . (!empty($user['api_key_last4']) ? 'Replace connection key' : 'Connect plugin') . '</button></form></details>';
+
     render_page('Site settings', $content, $user, '', ['nav' => 'admin-settings']);
 }
 
@@ -197,9 +215,10 @@ if (in_array($path, ['/admin/share-delete', '/admin/share-restore', '/admin/shar
 
 if ($path === '/') {
     if ($user = current_user()) redirect('/dashboard');
-    $content = '<section class="home-hero"><div class="home-hero__main"><h1 class="home-title">' . htmlspecialchars($config['app_name']) . '</h1><p class="home-lead">Read and share notes.</p><div class="home-actions">';
+    $content = '<section class="home-hero"><div class="home-hero__main"><div class="notebook-emblem" aria-hidden="true">' . render_reader_icon('book') . '</div><h1 class="home-title">' . htmlspecialchars($config['app_name']) . '</h1><p class="home-lead">Explore shared notes, one idea at a time.</p><div class="home-actions">';
     $home = trim((string)get_setting('reader_home_url', ''));
-    if (reader_home_url_key($home) !== '') $content .= '<a class="button primary" href="' . htmlspecialchars($home, ENT_QUOTES) . '">Home</a>';
-    $content .= '<a class="button" href="' . $base . '/login">Sign in</a></div></div></section>';
+    $hasHome = reader_home_url_key($home) !== '';
+    if ($hasHome) $content .= '<a class="button primary" href="' . htmlspecialchars($home, ENT_QUOTES) . '">Open notebook' . render_reader_icon('arrow') . '</a>';
+    $content .= '<a class="button' . ($hasHome ? '' : ' primary') . '" href="' . $base . '/login">Sign in</a></div></div></section>';
     render_page('Home', $content, null);
 }

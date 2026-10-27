@@ -2,6 +2,18 @@
 declare(strict_types=1);
 
 // Share passwords, expiration and persistent visitor limits.
+// Both plugin and website edits use the same optimistic update. An upload that
+// started earlier must never undo a later access change.
+function save_share_access(array $share, string $slug, ?string $passwordHash, ?int $expiresAt, int $visitorLimit, ?string $title = null): bool {
+    $stmt = db()->prepare('UPDATE shares SET revision = revision + 1, title = :title, slug = :slug, password_hash = :password_hash, expires_at = :expires_at, visitor_limit = :visitor_limit, updated_at = :updated_at WHERE id = :id AND user_id = :uid AND revision = :revision AND deleted_at IS NULL');
+    $stmt->execute([
+        ':title' => $title ?? $share['title'], ':slug' => $slug, ':password_hash' => $passwordHash,
+        ':expires_at' => $expiresAt, ':visitor_limit' => $visitorLimit, ':updated_at' => now(),
+        ':id' => (int)$share['id'], ':uid' => (int)$share['user_id'], ':revision' => (int)$share['revision'],
+    ]);
+    return $stmt->rowCount() === 1;
+}
+
 function share_requires_password(array $share): bool {
     return !empty($share['password_hash']);
 }

@@ -242,11 +242,28 @@ function render_doc_tree_icon(?array $doc, string $assetBasePath): string {
     return '';
 }
 
+function render_reader_icon(string $name): string {
+    $paths = [
+        'book' => '<path d="M12 6.5C9.5 4.5 6 4.5 3 5.5v14c3-1 6.5-1 9 1 2.5-2 6-2 9-1v-14c-3-1-6.5-1-9 1Zm0 0v14"/>',
+        'home' => '<path d="m3 10 9-7 9 7M5 9v11h5v-6h4v6h5V9"/>',
+        'code' => '<path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-14-2 18"/>',
+        'download' => '<path d="M12 3v12m-4-4 4 4 4-4M4 16v5h16v-5"/>',
+        'arrow' => '<path d="M4 12h16m-6-6 6 6-6 6"/>',
+    ];
+    return '<svg class="reader-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' . ($paths[$name] ?? '') . '</svg>';
+}
+
+function render_reader_library(string $title, string $slug): string {
+    return '<a class="reader-library" href="' . base_path() . '/s/' . rawurlencode($slug) . '" data-share-nav="doc" data-doc-id="">'
+        . render_reader_icon('book') . '<span>' . htmlspecialchars($title) . '</span></a>';
+}
+
 function render_share_search_box(): string {
     $html  = '<div class="kb-search" data-share-search>';
     $html .= '<div class="kb-search-input-wrap">';
     $html .= '<svg class="kb-search-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.35-4.35"/></svg>';
-    $html .= '<input class="kb-search-input" type="search" placeholder="Search…" data-share-search-input autocomplete="off" spellcheck="false">';
+    $html .= '<input class="kb-search-input" type="search" placeholder="Search notes" aria-label="Search notes" data-share-search-input autocomplete="off" spellcheck="false">';
+    $html .= '<kbd class="kb-search-shortcut" aria-hidden="true">Ctrl K</kbd>';
     $html .= '<button class="kb-search-clear" type="button" data-share-search-clear hidden aria-label="Clear search">&times;</button>';
     $html .= '</div>';
     $html .= '<div class="kb-search-results" data-share-search-results hidden></div>';
@@ -286,7 +303,7 @@ function render_doc_tree(array $nodes, string $slug, ?string $activeId = null, i
             $docTitle = htmlspecialchars($doc['title'] ?? $docId);
             $docPath = base_path() . '/s/' . $slug . '/' . rawurlencode($docId);
             $activeClass = $isActive ? ' is-active' : '';
-            $docAttrs = ' href="' . $docPath . '" title="' . htmlspecialchars((string)($doc['title'] ?? $docId), ENT_QUOTES, 'UTF-8') . '" data-doc-id="' . htmlspecialchars($docId) . '" data-share-nav="doc"';
+            $docAttrs = ($isActive ? ' aria-current="page"' : '') . ' href="' . $docPath . '" title="' . htmlspecialchars((string)($doc['title'] ?? $docId), ENT_QUOTES, 'UTF-8') . '" data-doc-id="' . htmlspecialchars($docId) . '" data-share-nav="doc"';
             $html .= '<a class="kb-tree-item' . $activeClass . '"' . $docAttrs . '>';
             $html .= render_doc_tree_icon($doc, $assetBasePath);
             $html .= '<span class="kb-tree-label">' . $docTitle . '</span></a>';
@@ -341,22 +358,23 @@ function render_reader_home_link(string $slug): string {
     $home = trim((string)get_setting('reader_home_url', ''));
     $homeKey = reader_home_url_key($home);
     if ($homeKey === '' || $homeKey === reader_home_url_key(base_url() . '/s/' . rawurlencode($slug))) return '';
-    return '<a class="button ghost reader-home-link" data-reader-home href="' . htmlspecialchars($home, ENT_QUOTES, 'UTF-8') . '" aria-label="Return to home">Home</a>';
+    return '<a class="button ghost reader-home-link" data-reader-home href="' . htmlspecialchars($home, ENT_QUOTES, 'UTF-8') . '" aria-label="Return to home">' . render_reader_icon('home') . 'Home</a>';
 }
 
 function render_share_document_actions(string $slug, string $docId): string {
     return '<div class="share-document-actions">' . render_reader_home_link($slug)
-        . '<button class="button ghost share-view-toggle" type="button" data-share-toggle aria-pressed="false">Source</button>'
+        . '<button class="button ghost share-view-toggle" type="button" data-share-toggle aria-pressed="false">' . render_reader_icon('code') . '<span data-share-toggle-label>Source</span></button>'
         . render_pdf_export_link(['slug' => $slug, 'doc_id' => $docId]) . '</div>';
 }
 
 function render_notebook_welcome(string $title, string $slug): string {
     $html = '<div class="kb-main" role="main"><section class="notebook-welcome" data-notebook-welcome>';
-    $html .= '<p class="notebook-eyebrow">Notebook</p><h1 class="kb-title">' . htmlspecialchars($title) . '</h1>';
-    $html .= '<p class="notebook-intro">Open the document tree to choose where to begin, or pick up where you left off.</p>';
-    $html .= '<div class="notebook-actions">' . render_reader_home_link($slug) . '<button class="button primary" type="button" data-reader-show-tree>Browse documents</button>';
+    $html .= '<div class="notebook-emblem" aria-hidden="true">' . render_reader_icon('book') . '</div>';
+    $html .= '<p class="notebook-eyebrow">Shared notebook</p><h1 class="kb-title">' . htmlspecialchars($title) . '</h1>';
+    $html .= '<p class="notebook-intro">A little space for ideas.<br>Explore the notes, or pick up where you left off.</p>';
+    $html .= '<div class="notebook-actions"><button class="button primary" type="button" data-reader-show-tree>Browse documents' . render_reader_icon('arrow') . '</button>' . render_reader_home_link($slug);
     $html .= '<a class="button" data-reader-resume hidden>Continue reading: <span></span></a></div>';
-    $html .= '<p class="notebook-reading-hint">Your reading position stays in this browser. On smaller screens, use Navigation to explore the notebook.</p>';
+    $html .= '<p class="notebook-reading-hint">Make yourself at home.<br>Your reading position is saved in this browser.</p>';
     return $html . '</section></div>';
 }
 
@@ -493,6 +511,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $documentTree = build_doc_tree($docs, $activeDocId);
             $treeHtml = render_doc_tree($documentTree, $slug, $activeDocId, 0, '', $assetBasePath);
             $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
+            $sidebar .= render_reader_library($shareTitleRaw, $slug);
             $sidebar .= render_share_search_box();
             $sidebar .= '<div class="kb-side-tabs" data-share-tabs data-share-default="tree">';
             $sidebar .= '<button class="kb-side-tab is-active" type="button" data-share-tab="tree">Documents</button>';
@@ -570,6 +589,7 @@ function route_share(string $slug, ?string $docId = null): void {
         $markdown = insert_adjacent_emoji_image_spacing($markdown);
         $registerShareVisitor();
         $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
+        $sidebar .= render_reader_library($shareTitleRaw, $slug);
         $sidebar .= render_share_search_box();
         $sidebar .= '<div class="kb-side-tabs" data-share-tabs data-share-default="toc">';
         $sidebar .= '<button class="kb-side-tab is-active" type="button" data-share-tab="toc">Contents</button>';
@@ -598,6 +618,7 @@ function route_share(string $slug, ?string $docId = null): void {
         $notebookTree = build_doc_tree($docs, $docId);
         $treeHtml = render_doc_tree($notebookTree, $slug, $docId, 0, '', $assetBasePath);
         $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
+        $sidebar .= render_reader_library($shareTitleRaw, $slug);
         $sidebar .= render_share_search_box();
         $sidebar .= '<div class="kb-side-tabs" data-share-tabs data-share-default="tree">';
         $sidebar .= '<button class="kb-side-tab is-active" type="button" data-share-tab="tree">Documents</button>';

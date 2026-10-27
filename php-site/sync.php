@@ -234,18 +234,7 @@ function handle_api(string $path): void {
             $newSlug = $slug;
         }
 
-        $stmt = $pdo->prepare('UPDATE shares SET revision = revision + 1, slug = :slug, password_hash = :password_hash, expires_at = :expires_at, visitor_limit = :visitor_limit, updated_at = :updated_at WHERE id = :id AND user_id = :uid AND revision = :revision');
-        $stmt->execute([
-            ':slug' => $newSlug,
-            ':password_hash' => $passwordHash,
-            ':expires_at' => $expiresValue,
-            ':visitor_limit' => $visitorValue,
-            ':updated_at' => now(),
-            ':id' => $shareId,
-            ':uid' => $user['id'],
-            ':revision' => (int)$share['revision'],
-        ]);
-        if ($stmt->rowCount() !== 1) api_response(409, null, 'Share changed; refresh before updating access settings');
+        if (!save_share_access($share, $newSlug, $passwordHash, $expiresValue, $visitorValue)) api_response(409, null, 'Share changed; refresh before updating access settings');
 
         api_response(200, ['share' => [
             'id' => (int)$share['id'],

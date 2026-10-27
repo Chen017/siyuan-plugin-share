@@ -6,10 +6,16 @@ const path = require('node:path');
 const {JSDOM, VirtualConsole} = require('jsdom');
 const source = fs.readFileSync(path.join(__dirname, '../php-site/assets/app.js'), 'utf8');
 const delay = (ms = 35) => new Promise(resolve => setTimeout(resolve, ms));
-const main = (title = '笔记本', welcome = false) => `<main class="kb-main"><section class="share-article"><h1 class="kb-title">${title}</h1>${welcome ? '<div data-notebook-welcome><button data-reader-show-tree>展开文档树</button><a data-reader-resume hidden><span></span></a></div>' : '<div class="markdown-body" data-sps-rendered="1"><h2 id="chapter">Chapter</h2></div>'}</section></main>`;
+const main = (title = '笔记本', welcome = false) => `<main class="kb-main"><section class="share-article"><h1 class="kb-title">${title}</h1>${welcome ? '<div data-notebook-welcome><button data-reader-show-tree>展开文档树</button><a data-reader-resume hidden><span></span></a></div>' : '<button data-share-toggle aria-pressed="false"><svg aria-hidden="true"></svg><span data-share-toggle-label>Source</span></button><textarea class="markdown-source" readonly aria-label="Markdown source">## Chapter</textarea><div class="markdown-body" data-sps-rendered="1"><h2 id="chapter">Chapter</h2></div>'}</section></main>`;
 function page({mobile = false, reduced = false, record, welcome = true} = {}) {
   const dom = new JSDOM(`<body class="layout-share"><header><button data-share-drawer-open>导航</button><span data-reader-mobile-title>笔记本</span></header><div class="share-shell" data-share-doc-id="${welcome ? '' : 'a'}"><aside class="kb-sidebar" data-share-sidebar data-share-slug="book"><div data-share-search><input data-share-search-input><button data-share-search-clear hidden>清除</button><div data-share-search-results hidden></div></div><div data-share-tabs data-share-default="tree"><button data-share-tab="tree">文档树</button><button data-share-tab="toc">目录</button></div><div data-share-panel="tree"><div class="kb-side-body"><ul><li class="kb-tree-node is-collapsed" data-tree-key="doc:a"><button class="kb-tree-toggle" aria-expanded="false">展开</button><a class="kb-tree-item" href="/s/book/a" data-doc-id="a" data-share-nav="doc">课程 A</a><ul class="kb-tree-children"><li><a class="kb-tree-item" href="/s/book/b" data-doc-id="b" data-share-nav="doc">课程 B</a></li></ul></li></ul></div></div><div data-share-panel="toc" hidden></div></aside>${main(welcome ? '笔记本' : '课程 A', welcome)}</div><footer class="share-footer"></footer><div data-share-drawer-close></div><p data-reader-status role="status"></p></body>`, {url: 'https://reader.test/s/book', runScripts: 'outside-only', pretendToBeVisual: true, virtualConsole: new VirtualConsole()});
   const w = dom.window, errors = [];
+  w.surfaceAnimations = [];
+  w.HTMLElement.prototype.animate = function(frames, options) {
+    const animation = {element: this, frames, options, cancel() { this.cancelled = true; this.oncancel?.(); }};
+    w.surfaceAnimations.push(animation);
+    return animation;
+  };
   w.console.error = e => errors.push(e);
   w.matchMedia = q => ({matches: q.includes('reduced-motion') ? reduced : q.includes('max-width: 960px') && mobile, addEventListener() {}});
   w.HTMLElement.prototype.scrollTo = () => {};
@@ -46,6 +52,8 @@ const payload = title => ({ok: true, json: async () => ({code: 0, data: {html: m
     assert.equal(p.w.lastScroll.top, 640, 'Explicit resume restores the saved reading position');
     assert.equal(p.doc.activeElement.textContent, '课程 B');
     assert.equal(p.doc.querySelector('.kb-main').hasAttribute('aria-busy'), false);
+    assert.equal(p.doc.querySelector('[data-doc-id=b]').getAttribute('aria-current'), 'page');
+    assert(!p.doc.querySelector('.share-shell').classList.contains('is-navigating'), 'Fast navigation never flashes a loading bar');
     assert.equal(p.doc.querySelector('[data-reader-mobile-title]').textContent, '课程 B');
     assert.equal(p.errors.length, 0);
   } finally { p.close(); }
@@ -61,6 +69,8 @@ const payload = title => ({ok: true, json: async () => ({code: 0, data: {html: m
     racing.w.fetch = () => new Promise(resolve => pending.push(resolve));
     racing.doc.querySelector('[data-doc-id=a]').click();
     racing.doc.querySelector('[data-doc-id=b]').click();
+    await delay(270);
+    assert(racing.doc.querySelector('.share-shell').classList.contains('is-navigating'), 'Slow navigation gives visible feedback while retaining readable content');
     pending[0](payload('课程 A'));
     await delay();
     assert.equal(racing.doc.querySelector('.kb-main').getAttribute('aria-busy'), 'true', 'Old request cleanup cannot clear newer loading state');
@@ -69,6 +79,17 @@ const payload = title => ({ok: true, json: async () => ({code: 0, data: {html: m
     assert.equal(racing.doc.querySelector('.kb-title').textContent, '课程 B');
     assert.equal(racing.doc.querySelectorAll('.is-pending').length, 0);
     assert.equal(racing.doc.querySelector('.kb-main').hasAttribute('aria-busy'), false);
+    assert(!racing.doc.querySelector('.share-shell').classList.contains('is-navigating'));
+    const toggle = racing.doc.querySelector('[data-share-toggle]');
+    toggle.click();
+    assert.equal(toggle.getAttribute('aria-pressed'), 'true');
+    assert.equal(toggle.textContent, 'Preview');
+    assert(toggle.querySelector('svg'), 'Source switching preserves its icon');
+    toggle.click();
+    assert.equal(toggle.textContent, 'Source');
+    assert.equal(toggle.getAttribute('aria-pressed'), 'false');
+    assert(racing.w.surfaceAnimations.length > 0);
+    assert(racing.w.surfaceAnimations.every(animation => animation.frames.every(frame => Object.keys(frame).every(key => ['opacity', 'transform'].includes(key)))), 'Surface motion does not animate layout dimensions');
   } finally { racing.close(); }
 
   const search = page({mobile: true, reduced: true});
@@ -98,6 +119,7 @@ const payload = title => ({ok: true, json: async () => ({code: 0, data: {html: m
     assert.equal(search.w.location.search, '?highlight=primitive');
     search.doc.querySelector('[data-scroll-top]').click();
     assert.equal(search.w.lastScroll.behavior, 'auto', 'Reduced Motion also disables JavaScript smooth scrolling');
+    assert.equal(search.w.surfaceAnimations.length, 0, 'Reduced Motion skips all custom surface animations');
     assert.equal(search.errors.length, 0);
   } finally { search.close(); }
   console.log('Reader UI passed: local resume, stale records, drawer focus/inert, navigation races, search cancellation, keyboard results and same-tab navigation.');

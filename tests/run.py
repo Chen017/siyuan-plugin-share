@@ -26,6 +26,7 @@ from pdf_export import PdfExportTests
 from pdf_release import PdfReleaseTests
 from pdf_cookie import PdfCookieTests
 from selected_fixes import SelectedFixTests
+from admin_ui import AdminShareTests
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = """<?php
@@ -76,12 +77,12 @@ class Client:
     def form(self, path, fields):
         status, _, body = self.request(path)
         assert status == 200, (path, status)
-        match = re.search(rb'name="csrf" value="([^"]+)"', body)
+        match = re.search(rb"""name=["']csrf["'] value=["']([^"']+)["']""", body)
         assert match, 'CSRF token missing: ' + path
         return self.request(path, {'csrf': match[1].decode(), **fields})
 
 
-class Regression(SelectedFixTests, PdfCookieTests, PdfReleaseTests, PdfExportTests, unittest.TestCase):
+class Regression(AdminShareTests, SelectedFixTests, PdfCookieTests, PdfReleaseTests, PdfExportTests, unittest.TestCase):
     base = ''
     docker = False
     container = None
@@ -113,11 +114,11 @@ class Regression(SelectedFixTests, PdfCookieTests, PdfReleaseTests, PdfExportTes
     def rotate_key(self, client):
         status, _, body = client.request('/dashboard')
         self.assertEqual(status, 200)
-        token = re.search(rb'name="csrf" value="([^"]+)"', body)
+        token = re.search(rb"""name=["']csrf["'] value=["']([^"']+)["']""", body)
         self.assertIsNotNone(token)
         status, _, body = client.request('/api-key/rotate', {'csrf': token[1].decode()})
         self.assertEqual(status, 302)
-        status, _, body = client.request('/dashboard')
+        status, _, body = client.request('/admin')
         key = re.search(rb'\b[a-f0-9]{48}\b', body)
         self.assertIsNotNone(key, 'Generated API key missing')
         return key[0].decode()
@@ -125,7 +126,7 @@ class Regression(SelectedFixTests, PdfCookieTests, PdfReleaseTests, PdfExportTes
     def csrf(self, client, page):
         status, _, body = client.request(page)
         self.assertEqual(status, 200)
-        token = re.search(rb'name="csrf" value="([^"]+)"', body)
+        token = re.search(rb"""name=["']csrf["'] value=["']([^"']+)["']""", body)
         self.assertIsNotNone(token)
         return token[1].decode()
 
@@ -213,7 +214,7 @@ class Regression(SelectedFixTests, PdfCookieTests, PdfReleaseTests, PdfExportTes
                 self.assertNotIn(b'data-reader-home', page)
             page = visitor.request(other_path)[2].decode()
             self.assertIn('data-reader-home href="' + saved_home + '"', page)
-            self.assertIn('aria-label="Return to home">Home</a>', page)
+            self.assertRegex(page, r'aria-label="Return to home">(?:<svg\b.*?</svg>)?Home</a>')
             self.assertNotRegex(page, r'data-reader-home[^>]*data-share-nav')
             # TLS termination must not show Home inside the home share when PHP sees HTTP.
             secure_home = saved_home.replace('http://', 'https://', 1)
@@ -253,7 +254,7 @@ class Regression(SelectedFixTests, PdfCookieTests, PdfReleaseTests, PdfExportTes
         _, _, body = visitor.request('/s/' + share['slug'])
         self.assertIn('原始中文内容不得翻译。', body.decode())
         self.assertIn('reader-frame', body.decode())
-        self.assertIn('>Source</button>', body.decode())
+        self.assertRegex(body.decode(), r'data-share-toggle\b[^>]*>.*?\bSource(?:</span>)?</button>')
         self.assertIn('>Export PDF</a>', body.decode())
         protected = self.share(docId=self.name + '_protected', password='reader-pass')
         _, _, gate = visitor.request('/s/' + protected['slug'])

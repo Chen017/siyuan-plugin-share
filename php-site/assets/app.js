@@ -3,10 +3,44 @@
 
   const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)");
   const scrollBehavior = () => reduceMotion?.matches ? "auto" : "smooth";
+  // Animate only the surface that changed. Never delay input, fetching or rendering.
+  const interfaceAnimations = new WeakMap();
+  const revealSurface = (element, distance = 4) => {
+    if (!element) return;
+    interfaceAnimations.get(element)?.cancel();
+    interfaceAnimations.delete(element);
+    if (reduceMotion?.matches || !element.animate) return;
+    const animation = element.animate([
+      {opacity: .4, transform: `translateY(${distance}px)`},
+      {opacity: 1, transform: "translateY(0)"},
+    ], {duration: 220, easing: "cubic-bezier(.2,.8,.2,1)"});
+    interfaceAnimations.set(element, animation);
+    animation.onfinish = animation.oncancel = () => {
+      if (interfaceAnimations.get(element) === animation) interfaceAnimations.delete(element);
+    };
+  };
   const readerAnnounce = (message) => {
     const status = document.querySelector("[data-reader-status]");
     if (status) status.textContent = message;
   };
+
+  // Shared account/share fields. Passwords are revealed only from a local input;
+  // no saved hash is sent to the browser or treated as a recoverable password.
+  document.addEventListener("click", event => {
+    const button = event.target.closest?.("[data-password-visibility]");
+    if (!button) return;
+    const input = document.getElementById(button.dataset.passwordVisibility);
+    if (!input) return;
+    const visible = input.type === "password";
+    input.type = visible ? "text" : "password";
+    button.textContent = visible ? "Hide" : "Show";
+    button.setAttribute("aria-pressed", String(visible));
+  });
+  document.addEventListener("input", event => {
+    if (!event.target.matches?.("[data-share-new-password]")) return;
+    const form = event.target.form;
+    if (event.target.value) form?.querySelector('[name="password_mode"][value="set"]')?.click();
+  });
   // Shared, interruptible presentation lifecycle. Timers are bounded and cancelled on reopening.
   const surfaceTimers = new WeakMap();
   const showSurface = (surface) => {
@@ -70,6 +104,9 @@
 
   const initReaderBehavior = () => {
     if (!document.body.classList.contains("layout-share")) return;
+    const shortcut = document.querySelector(".kb-search-shortcut");
+    if (shortcut && /Mac|iPhone|iPad/.test(navigator.platform)) shortcut.textContent = "⌘ K";
+    document.querySelector("[data-share-search-input]")?.setAttribute("aria-keyshortcuts", "Control+k Meta+k");
     readerRevealDocument(document.querySelector(".share-shell")?.dataset.shareDocId);
     window.addEventListener("pagehide", readerSavePosition);
     document.addEventListener("visibilitychange", () => {
@@ -142,88 +179,16 @@
   let markdownInitRetryTimer = null;
   let markdownInitRetryCount = 0;
   const markdownInitRetryLimit = 40;
-  const FOOTNOTE_ICON_SVG =
-    '<svg t="1770295603918" class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" p-id="6974" width="32" height="32" aria-hidden="true"><path d="M551.557889 78.312604a278.444815 278.444815 0 0 1 390.539326 3.412314 278.956662 278.956662 0 0 1 3.412314 390.79525l-0.554501 0.511847-141.525719 141.696335a278.572776 278.572776 0 0 1-330.610564 47.559125 278.658084 278.658084 0 0 1-89.487932-77.630141 42.653924 42.653924 0 0 1 68.331586-51.099401 193.264929 193.264929 0 0 0 222.226943 65.388465 193.264929 193.264929 0 0 0 69.184665-44.488042l141.269795-141.440412a193.648814 193.648814 0 0 0-2.601889-271.023032 193.136967 193.136967 0 0 0-270.681801-2.559235L530.188273 219.966285a42.653924 42.653924 0 1 1-60.142033-60.44061l81.127763-80.786532 0.42654-0.426539z" p-id="6975" fill="#0969DA"></path><path d="M319.904429 344.856974a278.359507 278.359507 0 0 1 320.458929 94.265172 42.653924 42.653924 0 0 1-68.331586 51.056746 193.350237 193.350237 0 0 0-140.928564-77.118294 193.051659 193.051659 0 0 0-150.483043 56.217872l-141.269796 141.397757a193.648814 193.648814 0 0 0 2.601889 271.023032 193.136967 193.136967 0 0 0 270.639147 2.601889l80.402646-80.487954a42.653924 42.653924 0 0 1 60.355303 60.312648l-80.701224 80.743878-0.511847 0.511847a278.444815 278.444815 0 0 1-390.539327-3.412314 278.956662 278.956662 0 0 1-3.412314-390.79525l0.554501-0.511847 141.52572-141.696335A278.572776 278.572776 0 0 1 319.904429 344.856974z" p-id="6976" fill="#0969DA"></path></svg>';
+  const FOOTNOTE_ICON_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h4"/></svg>';
   const footnoteWindows = new Set();
+  const footnoteActionWindows = new WeakMap();
+  const footnoteWindowActions = new WeakMap();
+  let footnoteOpenTimer = 0;
+  let footnoteCloseTimer = 0;
+  let hoveredFootnoteAction = null;
   let footnoteWindowZ = 1300;
   let footnoteWindowSeq = 0;
   let footnotePreviewBound = false;
-
-  const initNav = () => {
-    const navItems = Array.from(document.querySelectorAll(".app-nav .nav-item"));
-    if (!navItems.length) return;
-    const currentPath = window.location.pathname.replace(/\/+$/, "");
-
-    const setActive = (target) => {
-      navItems.forEach((item) => item.classList.remove("is-active"));
-      if (target) target.classList.add("is-active");
-    };
-
-    const findItem = (hash) =>
-      navItems.find((item) => {
-        const itemPath = (item.dataset.navPath || "").replace(/\/+$/, "");
-        const itemHash = item.dataset.navHash || "";
-        if (itemPath && itemPath !== currentPath) return false;
-        if (hash) return itemHash === hash;
-        return !itemHash;
-      });
-
-    const updateByHash = () => {
-      const hash = window.location.hash.replace(/^#/, "");
-      const item = findItem(hash) || findItem("");
-      setActive(item);
-    };
-
-    navItems.forEach((item) => {
-      item.addEventListener("click", (event) => {
-        if (
-          event.defaultPrevented ||
-          event.metaKey ||
-          event.ctrlKey ||
-          event.shiftKey ||
-          event.altKey
-        ) {
-          return;
-        }
-        const hash = item.dataset.navHash || "";
-        const itemPath = (item.dataset.navPath || "").replace(/\/+$/, "");
-        if (hash && itemPath === currentPath) {
-          const target = document.getElementById(hash);
-          if (target) {
-            event.preventDefault();
-            target.scrollIntoView({behavior: scrollBehavior(), block: "start"});
-            history.replaceState(null, "", `#${hash}`);
-            setActive(item);
-          }
-        }
-      });
-    });
-
-    if ("IntersectionObserver" in window) {
-      const hashTargets = navItems
-        .map((item) => item.dataset.navHash || "")
-        .filter(Boolean)
-        .map((hash) => document.getElementById(hash))
-        .filter(Boolean);
-      if (hashTargets.length) {
-        const observer = new IntersectionObserver(
-          (entries) => {
-            const visible = entries
-              .filter((entry) => entry.isIntersecting)
-              .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
-            if (!visible) return;
-            const item = findItem(visible.target.id);
-            setActive(item);
-          },
-          {rootMargin: "-20% 0px -70% 0px", threshold: [0, 0.5, 1]},
-        );
-        hashTargets.forEach((el) => observer.observe(el));
-      }
-    }
-
-    window.addEventListener("hashchange", updateByHash);
-    updateByHash();
-  };
 
   const initKnowledgeTree = () => {
     const toggles = document.querySelectorAll(".kb-tree-toggle");
@@ -270,11 +235,14 @@
       });
       writeState(openKeys);
     };
-    const toggleNode = (node, nextOpen) => {
+    const toggleNode = (node, nextOpen, animate = false) => {
       node.classList.toggle("is-open", nextOpen);
       node.classList.toggle("is-collapsed", !nextOpen);
       const btn = node.querySelector(".kb-tree-toggle");
       if (btn) btn.setAttribute("aria-expanded", String(nextOpen));
+      const children = node.querySelector(":scope > .kb-tree-children");
+      if (nextOpen && animate) revealSurface(children, -3);
+      else if (children) interfaceAnimations.get(children)?.cancel();
     };
     const treeScope = document.querySelector("[data-share-panel='tree']") || document;
     const toggleAll = (nextOpen) => {
@@ -302,7 +270,7 @@
         const node = btn.closest(".kb-tree-node");
         if (!node) return;
         const nextOpen = !node.classList.contains("is-open");
-        toggleNode(node, nextOpen);
+        toggleNode(node, nextOpen, true);
         syncState();
       });
     });
@@ -311,7 +279,7 @@
         const node = label.closest(".kb-tree-node");
         if (!node || !node.querySelector(".kb-tree-toggle")) return;
         const nextOpen = !node.classList.contains("is-open");
-        toggleNode(node, nextOpen);
+        toggleNode(node, nextOpen, true);
         syncState();
       });
     });
@@ -1857,11 +1825,21 @@
 
   const closeFootnoteWindow = (windowEl) => {
     if (!windowEl) return;
+    const action = footnoteWindowActions.get(windowEl);
+    if (action && footnoteActionWindows.get(action) === windowEl) {
+      action.setAttribute("aria-expanded", "false");
+      action.removeAttribute("aria-controls");
+      footnoteActionWindows.delete(action);
+    }
+    if (windowEl.contains(document.activeElement) && action?.isConnected) action.focus({preventScroll: true});
     footnoteWindows.delete(windowEl);
     hideSurface(windowEl, () => windowEl.remove());
   };
 
   const clearFootnoteWindows = () => {
+    clearTimeout(footnoteOpenTimer);
+    clearTimeout(footnoteCloseTimer);
+    hoveredFootnoteAction = null;
     footnoteWindows.forEach((windowEl) => {
       windowEl.remove();
     });
@@ -1967,7 +1945,11 @@
       closeFootnoteWindow(windowEl);
     });
 
-    windowEl.addEventListener("mousedown", () => bringFootnoteWindowToFront(windowEl));
+    windowEl.addEventListener("mousedown", () => {
+      clearTimeout(footnoteCloseTimer);
+      windowEl.dataset.hoverPreview = "0";
+      bringFootnoteWindowToFront(windowEl);
+    });
 
     body.addEventListener("click", (event) => {
       const anchor = event.target?.closest?.("a");
@@ -2257,12 +2239,9 @@
     });
 
     const applyDefaultWindowSize = () => {
-      const maxHeight = Math.min(window.innerHeight * 0.6, 520);
-      const maxWidth = Math.min(window.innerWidth * 0.7, 520);
-      const safeWidth = Math.min(maxWidth, 360);
-      const safeHeight = Math.min(maxHeight, 400);
-      windowEl.style.width = `${safeWidth}px`;
-      windowEl.style.height = `${safeHeight}px`;
+      windowEl.style.width = `${Math.min(400, window.innerWidth - 32)}px`;
+      windowEl.style.height = "auto";
+      windowEl.style.maxHeight = `${Math.min(460, window.innerHeight - 32)}px`;
     };
 
     const applyWindowPosition = () => {
@@ -2364,7 +2343,8 @@
       action.dataset.footnoteTarget = href.slice(1);
       action.dataset.footnoteIndex = String(index || "");
       action.setAttribute("aria-label", "Preview footnote");
-      action.setAttribute("title", "Preview footnote");
+      action.setAttribute("aria-expanded", "false");
+      action.setAttribute("aria-haspopup", "dialog");
       sup.parentNode?.insertBefore(action, sup);
     });
   };
@@ -2379,6 +2359,71 @@
 
     if (!footnotePreviewBound) {
       footnotePreviewBound = true;
+      const actionFor = target => {
+        const direct = target?.closest?.(".sps-footnote-action");
+        if (direct) return direct;
+        const reference = target?.closest?.("sup.footnote-ref, .footnote-ref");
+        return reference?.previousElementSibling?.matches(".sps-footnote-action") ? reference.previousElementSibling : null;
+      };
+      const openPreview = (action, hover) => {
+        clearTimeout(footnoteOpenTimer);
+        clearTimeout(footnoteCloseTimer);
+        let preview = footnoteActionWindows.get(action);
+        if (preview?.isConnected && !preview.classList.contains("is-dismissing")) {
+          if (!hover) preview.dataset.hoverPreview = "0";
+          return preview;
+        }
+        const item = findFootnoteItemForAction(action);
+        if (!item) return null;
+        Array.from(footnoteWindows).forEach(panel => {
+          if (panel.dataset.pinned !== "1") closeFootnoteWindow(panel);
+        });
+        const rect = action.getBoundingClientRect();
+        preview = createFootnoteWindow(getFootnoteIndexForItem(item, 0), buildFootnoteContentHtml(item), {anchorPoint: {x: rect.left, y: rect.bottom}});
+        preview.id = `footnote-preview-${++footnoteWindowSeq}`;
+        preview.dataset.hoverPreview = hover ? "1" : "0";
+        footnoteActionWindows.set(action, preview);
+        footnoteWindowActions.set(preview, action);
+        action.setAttribute("aria-controls", preview.id);
+        action.setAttribute("aria-expanded", "true");
+        return preview;
+      };
+      const queueClose = action => {
+        clearTimeout(footnoteOpenTimer);
+        clearTimeout(footnoteCloseTimer);
+        footnoteCloseTimer = setTimeout(() => {
+          const panel = footnoteActionWindows.get(action);
+          if (panel?.dataset.hoverPreview === "1" && panel.dataset.pinned !== "1" && !panel.contains(document.activeElement)) closeFootnoteWindow(panel);
+        }, 240);
+      };
+      document.addEventListener("pointerover", event => {
+        if (event.pointerType !== "mouse" || !matchMedia("(hover: hover) and (pointer: fine)").matches) return;
+        const panel = event.target?.closest?.(".sps-footnote-window");
+        if (panel) { clearTimeout(footnoteCloseTimer); return; }
+        const action = actionFor(event.target);
+        if (!action || actionFor(event.relatedTarget) === action) return;
+        clearTimeout(footnoteOpenTimer);
+        clearTimeout(footnoteCloseTimer);
+        hoveredFootnoteAction = action;
+        footnoteOpenTimer = setTimeout(() => {
+          if (action.isConnected && hoveredFootnoteAction === action) openPreview(action, true);
+        }, 350);
+      });
+      document.addEventListener("pointerout", event => {
+        const action = actionFor(event.target);
+        const panel = event.target?.closest?.(".sps-footnote-window");
+        if (action && actionFor(event.relatedTarget) !== action) {
+          hoveredFootnoteAction = null;
+          queueClose(action);
+        } else if (panel && !panel.contains(event.relatedTarget)) {
+          const trigger = footnoteWindowActions.get(panel);
+          if (trigger && actionFor(event.relatedTarget) !== trigger) queueClose(trigger);
+        }
+      });
+      document.addEventListener("focusout", event => {
+        const action = actionFor(event.target) || footnoteWindowActions.get(event.target?.closest?.(".sps-footnote-window"));
+        if (action && !footnoteActionWindows.get(action)?.contains(event.relatedTarget) && actionFor(event.relatedTarget) !== action) queueClose(action);
+      });
       document.addEventListener("click", (event) => {
         const action = event.target?.closest?.(".sps-footnote-action");
         if (!action) return;
@@ -2386,10 +2431,11 @@
         if (!item) return;
         event.preventDefault();
         event.stopPropagation();
-        const index = getFootnoteIndexForItem(item, 0);
-        const contentHtml = buildFootnoteContentHtml(item);
-        const anchorPoint = resolveFootnoteAnchorPoint(event, action);
-        createFootnoteWindow(index, contentHtml, {anchorPoint});
+        const preview = openPreview(action, false);
+        if (event.detail === 0 && preview) {
+          preview.tabIndex = -1;
+          preview.focus({preventScroll: true});
+        }
       });
 
       document.addEventListener("mousedown", (event) => {
@@ -2401,6 +2447,8 @@
         if (!target) return;
         if (target.closest(".sps-footnote-window")) return;
         if (target.closest(".sps-footnote-action")) return;
+        clearTimeout(footnoteOpenTimer);
+        hoveredFootnoteAction = null;
         Array.from(footnoteWindows).forEach((windowEl) => {
           if (windowEl.dataset.pinned === "1") return;
           closeFootnoteWindow(windowEl);
@@ -2428,11 +2476,21 @@
 
       document.addEventListener("keydown", (event) => {
         if (event.key !== "Escape") return;
+        clearTimeout(footnoteOpenTimer);
+        hoveredFootnoteAction = null;
         Array.from(footnoteWindows).forEach((windowEl) => {
           if (windowEl.dataset.pinned === "1") return;
           closeFootnoteWindow(windowEl);
         });
       });
+      document.addEventListener("scroll", event => {
+        if (event.target?.closest?.(".sps-footnote-window")) return;
+        clearTimeout(footnoteOpenTimer);
+        hoveredFootnoteAction = null;
+        Array.from(footnoteWindows).forEach(panel => {
+          if (panel.dataset.hoverPreview === "1" && panel.dataset.pinned !== "1") closeFootnoteWindow(panel);
+        });
+      }, {passive: true, capture: true});
     }
   };
 
@@ -2451,7 +2509,20 @@
       tabs.getAttribute("data-share-default") ||
       buttons[0]?.dataset.shareTab ||
       "tree";
-    const setActive = (tab) => {
+    const indicator = document.createElement("span");
+    indicator.className = "kb-tab-indicator";
+    indicator.setAttribute("aria-hidden", "true");
+    tabs.prepend(indicator);
+    const positionIndicator = () => {
+      const active = buttons.find(btn => btn.classList.contains("is-active"));
+      if (!active || !active.offsetWidth) return;
+      indicator.style.width = `${active.offsetWidth}px`;
+      indicator.style.transform = `translateX(${active.offsetLeft}px)`;
+    };
+    let activeTab = "";
+    const setActive = (tab, animate = false) => {
+      const changed = activeTab !== tab;
+      activeTab = tab;
       buttons.forEach((btn) => {
         const isActive = (btn.dataset.shareTab || "") === tab;
         btn.classList.toggle("is-active", isActive);
@@ -2460,19 +2531,24 @@
       });
       panels.forEach((panel) => {
         panel.hidden = (panel.dataset.sharePanel || "") !== tab;
+        if (!panel.hidden && changed && animate) revealSurface(panel);
       });
       if (treeActions) {
         treeActions.hidden = tab !== "tree";
       }
+      positionIndicator();
     };
     buttons.forEach((btn) => {
       btn.addEventListener("click", () => {
         const tab = btn.dataset.shareTab || "";
         if (!tab) return;
-        setActive(tab);
+        setActive(tab, true);
       });
     });
     setActive(defaultTab);
+    // Re-measure after a hidden mobile drawer or a breakpoint becomes visible.
+    if (window.ResizeObserver) new ResizeObserver(positionIndicator).observe(tabs);
+    else window.addEventListener("resize", positionIndicator, {passive: true});
   };
 
   const initShareDrawer = () => {
@@ -2487,7 +2563,7 @@
     const mq = window.matchMedia("(max-width: 960px)");
     const heading = document.createElement("div");
     heading.className = "reader-drawer-heading";
-    heading.innerHTML = '<span>Reading navigation</span><button class="reader-drawer-close" type="button" aria-label="Close navigation">Close</button>';
+    heading.innerHTML = '<span>Reading navigation</span><button class="reader-drawer-close" type="button" aria-label="Close navigation"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>';
     sidebar.prepend(heading);
     sidebar.id ||= "reader-navigation";
     openBtn?.setAttribute("aria-controls", sidebar.id);
@@ -2504,7 +2580,7 @@
         sidebar.removeAttribute("role");
         sidebar.removeAttribute("aria-modal");
       }
-      document.querySelectorAll(".kb-main, .share-footer").forEach((node) => { node.inert = modal; });
+      document.querySelectorAll(".kb-main, .share-footer, .reader-mobile-bar, .scroll-top").forEach((node) => { node.inert = modal; });
       openBtn?.setAttribute("aria-expanded", String(modal));
       openBtn?.setAttribute("aria-label", modal ? "Close navigation" : "Open navigation");
     };
@@ -2590,10 +2666,12 @@
       document.querySelectorAll(".kb-tree-item.is-active").forEach((item) => {
         item.classList.remove("is-active");
       });
+      document.querySelectorAll('.kb-tree-item[aria-current]').forEach(item => item.removeAttribute("aria-current"));
       if (!docId) return;
       const selector = `.kb-tree-item[data-doc-id="${cssEscape(docId)}"]`;
       const active = document.querySelector(selector);
       if (active) active.classList.add("is-active");
+      active?.setAttribute("aria-current", "page");
     };
 
     const replaceMain = (html) => {
@@ -2605,6 +2683,7 @@
       const nextMain = wrapper.firstElementChild;
       if (!nextMain) return null;
       main.replaceWith(nextMain);
+      revealSurface(nextMain, 6);
       return nextMain;
     };
 
@@ -2655,7 +2734,10 @@
       if (main) { main.classList.add("is-loading"); main.setAttribute("aria-busy", "true"); }
       pending?.classList.add("is-pending");
       const pendingTimer = window.setTimeout(() => {
-        if (currentId === requestId) readerAnnounce("Opening document…");
+        if (currentId === requestId) {
+          container.classList.add("is-navigating");
+          readerAnnounce("Opening document…");
+        }
       }, 250);
       try {
         const targetUrl = new URL(url, window.location.href);
@@ -2678,6 +2760,7 @@
       } finally {
         window.clearTimeout(pendingTimer);
         if (currentId === requestId) {
+          container.classList.remove("is-navigating");
           const latestMain = document.querySelector(".kb-main");
           if (latestMain) { latestMain.classList.remove("is-loading"); latestMain.removeAttribute("aria-busy"); }
           pending?.classList.remove("is-pending");
@@ -2725,54 +2808,12 @@
         if (!container) return;
         const isMarkdown = container.classList.toggle("is-markdown");
         container.setAttribute("data-share-view", isMarkdown ? "markdown" : "preview");
-        btn.textContent = isMarkdown ? "Preview" : "Source";
+        const label = btn.querySelector("[data-share-toggle-label]") || btn;
+        label.textContent = isMarkdown ? "Preview" : "Source";
         btn.setAttribute("aria-pressed", isMarkdown ? "true" : "false");
+        revealSurface(container.querySelector(isMarkdown ? ".markdown-source" : ".markdown-body"), 0);
       });
     });
-  };
-
-  const initAppDrawer = () => {
-    const openBtn = document.querySelector("[data-app-drawer-open]");
-    const backdrop = document.querySelector("[data-app-drawer-close]");
-    const sidebar = document.querySelector(".app-sidebar");
-    if (!sidebar) return;
-    const setOpen = (open) => {
-      document.body.classList.toggle("app-side-open", open);
-    };
-    if (openBtn) {
-      openBtn.addEventListener("click", () => {
-        const isOpen = document.body.classList.contains("app-side-open");
-        setOpen(!isOpen);
-      });
-    }
-    if (backdrop) {
-      backdrop.addEventListener("click", () => setOpen(false));
-    }
-    document.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") setOpen(false);
-    });
-    document.querySelectorAll(".app-sidebar a").forEach((link) => {
-      link.addEventListener("click", () => setOpen(false));
-    });
-    const mq = window.matchMedia("(max-width: 960px)");
-    const updateTrigger = () => {
-      const shouldShow = mq.matches;
-      if (openBtn) {
-        openBtn.hidden = !shouldShow;
-        openBtn.style.display = shouldShow ? "inline-flex" : "none";
-      }
-      if (!shouldShow) {
-        setOpen(false);
-      }
-    };
-    if (typeof mq.addEventListener === "function") {
-      mq.addEventListener("change", updateTrigger);
-    } else if (typeof mq.addListener === "function") {
-      mq.addListener(updateTrigger);
-    }
-    window.addEventListener("resize", updateTrigger, {passive: true});
-    window.addEventListener("orientationchange", updateTrigger, {passive: true});
-    requestAnimationFrame(updateTrigger);
   };
 
   const initScrollTop = () => {
@@ -5212,7 +5253,6 @@ const initImageViewer = () => {
     {once: true},
   );
 
-  initNav();
 
   initKnowledgeTree();
   initActionTableOverflowState();
@@ -5228,7 +5268,6 @@ const initImageViewer = () => {
   initReaderBehavior();
   initShareDocNavigation();
   initImageViewer();
-  initAppDrawer();
   initScrollTop();
 
   refreshShareDynamicContent();

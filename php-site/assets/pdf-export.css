@@ -8,7 +8,7 @@
 .pdf-select-trigger[aria-expanded=true]::after { transform: rotate(225deg); margin-top: 4px; }
 .pdf-select-trigger:hover, .pdf-select-trigger[aria-expanded=true] { border-color: var(--primary); }
 .pdf-select-trigger:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
-.pdf-select-options { max-height: min(240px, 40dvh); overflow-y: auto; margin-top: 6px; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-sm, 8px); background: var(--surface); box-shadow: 0 6px 18px rgba(15, 23, 42, .1); }
+.pdf-select-options { max-height: min(240px, 40dvh); overflow-y: auto; margin-top: 6px; padding: 4px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow-soft); animation: interface-notice-in var(--motion-feedback, 140ms) var(--ease-present, ease-out); }
 .pdf-select-option { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 10px; border-radius: 6px; color: var(--text); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; cursor: pointer; }
 .pdf-select-option:hover, .pdf-select-option[data-active] { background: var(--reader-selected, #eef2ff); color: var(--primary); }
 .pdf-select-option[aria-selected=true] { font-weight: 600; }
@@ -25,8 +25,9 @@ html.pdf-dialog-open { overflow: hidden; }
 .pdf-export-dialog[data-closing] { animation: interface-panel-out var(--motion-dismiss, 180ms) var(--ease-dismiss, ease-in) both; }
 .pdf-export-dialog[data-closing]::backdrop { animation: pdf-backdrop-exit var(--motion-dismiss, 180ms) ease both; }
 .pdf-dialog-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 24px; border-bottom: 1px solid var(--border, #d1d9e0); }
-.pdf-dialog-header h2 { margin: 0; font-size: 20px; }
-.pdf-dialog-close { width: 36px; height: 36px; padding: 0 !important; font-size: 26px; line-height: 1; border-radius: 50%; }
+.pdf-dialog-header h2 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -.025em; }
+.pdf-dialog-header .pdf-dialog-close { width: 36px; min-height: 36px; padding: 0 !important; font-size: 24px; font-weight: 400; line-height: 1; border-radius: 50%; background: var(--surface-muted); color: var(--muted); }
+.pdf-dialog-header .pdf-dialog-close:hover { color: var(--text); }
 .pdf-dialog-loading { margin: 0; padding: 20px 24px; }
 .pdf-export-dialog > iframe { display: block; width: 100%; height: 380px; border: 0; }
 .pdf-export-dialog > iframe[hidden], .pdf-dialog-loading[hidden] { display: none !important; }
@@ -41,7 +42,16 @@ body.pdf-export-embedded { margin: 0 !important; padding: 0 !important; min-heig
 @keyframes pdf-backdrop-enter { from { opacity: 0; } to { opacity: 1; } }
 @keyframes pdf-backdrop-exit { from { opacity: 1; } to { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .pdf-export-dialog, .pdf-export-dialog::backdrop { animation-duration: .001s !important; } .pdf-export-dialog > iframe { transition: none; } }
-@media (max-width: 600px) { .pdf-export-dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); } }
+@media (max-width: 600px) {
+  .pdf-export-dialog { width: 100%; max-height: calc(100dvh - 12px); margin: auto 0 0; border-radius: 20px 20px 0 0; border-bottom: 0; padding-bottom: env(safe-area-inset-bottom); }
+  .pdf-export-dialog[open] { animation-name: interface-sheet-in; }
+  .pdf-export-dialog[data-closing] { animation-name: interface-sheet-out; }
+  .pdf-dialog-header { padding: 12px 20px; }
+  .pdf-dialog-header .pdf-dialog-close { width: 44px; min-height: 44px; }
+  .pdf-select-trigger, .pdf-select-option { min-height: 44px; }
+}
+@keyframes interface-sheet-in { from { opacity: .4; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes interface-sheet-out { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(24px); } }
 .pdf-export-toolbar { max-width: 900px; margin: 20px auto; padding: 20px; border: 1px solid #bbb; border-radius: 12px; }
 .pdf-document { max-width: 900px; margin: auto; background: white; color: #1f2328; padding: 32px; }
 .pdf-doc + .pdf-doc { margin-top: 48px; border-top: 1px solid #ccc; padding-top: 32px; }

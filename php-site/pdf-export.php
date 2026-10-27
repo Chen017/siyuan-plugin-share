@@ -107,11 +107,11 @@ function render_pdf_export_limit_inputs(array $keys, array $limits): string {
 
 function render_pdf_export_settings(): string {
     $settings = pdf_export_settings();
-    $html = '<section id="pdf-export-settings" style="margin-top:28px"><h2>Visitor PDF export</h2>';
+    $html = '<section class="card settings-section" id="pdf-export-settings"><h2>Visitor PDF export</h2>';
     $html .= '<p class="muted">Set the time window and document allowance. Resource limits are preset.</p>';
-    $html .= '<form method="post" action="' . base_path() . '/admin/pdf-export-settings" data-pdf-settings-form>';
+    $html .= '<form class="settings-form" method="post" action="' . base_path() . '/admin/pdf-export-settings" data-pdf-settings-form>';
     $html .= render_hidden_inputs(['csrf' => csrf_token()]);
-    $html .= '<label><input type="checkbox" name="pdf_export_enabled" value="1"' . ($settings['enabled'] ? ' checked' : '') . '> Allow visitors to export PDF</label>';
+    $html .= '<label class="choice-row"><input type="checkbox" name="pdf_export_enabled" value="1"' . ($settings['enabled'] ? ' checked' : '') . '> Allow visitors to export PDF</label>';
     $html .= render_pdf_export_limit_inputs(['window_seconds', 'requests'], $settings['limits']);
     $html .= '<p class="muted">Each visitor cookie has its own rolling allowance. Shared networks do not share a personal quota. Each document in a batch counts once; retrying it within the same task does not count again. Cookies identify browser visitors approximately, not people.</p>';
     $html .= '<p class="muted">An identical fingerprint from another cookie requires one verification. It does not share or reset the personal quota.</p>';
@@ -362,7 +362,7 @@ function render_pdf_export_link(array $context): string {
     if (!pdf_export_settings()['enabled']) return '';
     $url = base_path() . '/s/' . rawurlencode($context['slug']) . '/export';
     return '<a class="button ghost share-view-toggle" data-pdf-export-link href="' . htmlspecialchars($url)
-        . '?doc=' . rawurlencode($context['doc_id']) . '">Export PDF</a>';
+        . '?doc=' . rawurlencode($context['doc_id']) . '">' . render_reader_icon('download') . 'Export PDF</a>';
 }
 
 function pdf_export_lease(int $shareId, string $visitor, string $token, bool $renew = false): array {

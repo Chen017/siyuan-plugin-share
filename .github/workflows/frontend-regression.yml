@@ -11,6 +11,7 @@ on:
       - 'i18n/**'
       - 'tests/frontend.cjs'
       - 'tests/reader-ui.cjs'
+      - 'tests/footnotes.cjs'
       - 'tests/plugin.cjs'
       - 'tests/pdf-text-layer.*'
       - '.github/workflows/frontend-regression.yml'
@@ -40,6 +41,7 @@ jobs:
           NODE_PATH="$RUNNER_TEMP/reader-test/node_modules" node tests/plugin.cjs
           NODE_PATH="$RUNNER_TEMP/reader-test/node_modules" node tests/frontend.cjs
           NODE_PATH="$RUNNER_TEMP/reader-test/node_modules" node tests/reader-ui.cjs
+          NODE_PATH="$RUNNER_TEMP/reader-test/node_modules" node tests/footnotes.cjs
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'

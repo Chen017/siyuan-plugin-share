@@ -378,57 +378,33 @@ function render_page(string $title, string $content, ?array $user = null, string
         if (empty($options['pdf_export'])) echo "</div>";
         echo "<div class='share-side-backdrop' data-share-drawer-close></div>";
         echo "<p class='reader-status sr-only' data-reader-status role='status' aria-live='polite'></p>";
-        echo "<button class='scroll-top' type='button' data-scroll-top aria-label='Back to top'><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='currentColor' d='M12 2c-2.76 0-5 2.24-5 5v2.5L4 13l4.5 1L12 22l3.5-8L20 13l-3-3.5V7c0-2.76-2.24-5-5-5zm0 3a2 2 0 0 1 2 2v1.5l-2 2-2-2V7a2 2 0 0 1 2-2z'/></svg></button>";
+        echo "<button class='scroll-top' type='button' data-scroll-top aria-label='Back to top'><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' d='m6 12 6-6 6 6M12 6v13'/></svg></button>";
         echo "</div>";
     } elseif ($user) {
         $navItems = [
-            ['key' => 'dashboard', 'label' => 'Notes', 'href' => $base . '/dashboard'],
+            ['key' => 'dashboard', 'label' => 'Shares', 'href' => $base . '/dashboard'],
             ['key' => 'admin-settings', 'label' => 'Site settings', 'href' => $base . '/admin#settings'],
             ['key' => 'account', 'label' => 'Password', 'href' => $base . '/account'],
         ];
-        echo "<div class='app-shell'>";
-        echo "<aside class='app-sidebar'>";
-        echo "<div class='app-logo'>{$app}</div>";
-        echo "<nav class='app-nav'>";
+        echo "<div class='app-shell app-shell--compact'><header class='admin-header'><div class='admin-header-inner'>";
+        echo "<a class='admin-brand' href='{$base}/dashboard'>" . render_reader_icon('book') . "<span>{$app}</span></a>";
+        echo "<nav class='app-nav' aria-label='Administration'>";
         foreach ($navItems as $item) {
             $active = $navKey === $item['key'] ? ' is-active' : '';
+            $current = $active !== '' ? " aria-current='page'" : '';
+            $href = htmlspecialchars($item['href'], ENT_QUOTES, 'UTF-8');
             $label = htmlspecialchars($item['label']);
-            $hrefRaw = (string)$item['href'];
-            $hashPos = strpos($hrefRaw, '#');
-            $pathOnly = $hashPos === false ? $hrefRaw : substr($hrefRaw, 0, $hashPos);
-            $hash = $hashPos === false ? '' : substr($hrefRaw, $hashPos + 1);
-            $href = htmlspecialchars($hrefRaw);
-            $dataAttrs = ' data-nav-key="' . htmlspecialchars((string)$item['key']) . '"';
-            $dataAttrs .= ' data-nav-path="' . htmlspecialchars($pathOnly) . '"';
-            if ($hash !== '') {
-                $dataAttrs .= ' data-nav-hash="' . htmlspecialchars($hash) . '"';
-            }
-            echo "<a class='nav-item{$active}' href='{$href}'{$dataAttrs}><span class='nav-dot'></span><span class='nav-label'>{$label}</span>";
-            echo "</a>";
+            echo "<a class='nav-item{$active}' href='{$href}'{$current}>{$label}</a>";
         }
-        echo "</nav>";
-        echo "</aside>";
-        echo "<div class='app-main'>";
-        echo "<header class='app-topbar'>";
-        echo "<div class='topbar-left'>";
-        echo "<button class='app-side-trigger' type='button' data-app-drawer-open aria-label='Open navigation'><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='currentColor' d='M4 6h16v2H4zM4 11h16v2H4zM4 16h16v2H4z'/></svg></button>";
-        echo "<div class='topbar-title'>{$titleHtml}</div>";
-        echo "</div>";
-        echo "<div class='topbar-right'>";
-        echo "<span class='user-pill'>{$userName}</span>";
-        echo "<form method='post' action='{$base}/logout' class='inline-form'>";
-        echo "<input type='hidden' name='csrf' value='" . csrf_token() . "'>";
-        echo "<button class='button ghost' type='submit'>Sign out</button>";
-        echo "</form>";
-        echo "</div>";
-        echo "</header>";
+        echo "</nav><div class='admin-account'><span class='admin-identity'>{$userName}</span>";
+        echo "<form method='post' action='{$base}/logout' class='inline-form'><input type='hidden' name='csrf' value='" . csrf_token() . "'><button class='button ghost' type='submit'>Sign out</button></form>";
+        echo "</div></div></header><div class='app-main'>";
         echo "<main class='app-content'>";
         echo $content;
         echo "</main>";
         echo "<footer class='app-footer'><span class='footer-credit'>Maintained by <a class='footer-owner' href='https://github.com/Chen017/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Chen017</a></span></footer>";
         echo "</div>";
         echo "</div>";
-        echo "<div class='app-side-backdrop' data-app-drawer-close></div>";
     } else {
         echo "<div class='public-shell' role='main'>";
         echo $content;
@@ -514,20 +490,26 @@ function sanitize_slug(string $slug): string {
     return strtolower(trim($slug));
 }
 
+function share_slug_validation_key(string $slug): string {
+    if ($slug === '') return '';
+    if (!preg_match('/^[a-z0-9]+$/D', $slug)) return 'share.slug.invalid_chars';
+    if (strlen($slug) < SHARE_SLUG_MIN_LENGTH || strlen($slug) > SHARE_SLUG_MAX_LENGTH) return 'share.slug.invalid_length';
+    return '';
+}
+
 function parse_requested_share_slug_or_fail($raw): string {
     $slug = sanitize_slug((string)$raw);
     if ($slug === '') {
         return '';
     }
-    if (!preg_match('/^[a-z0-9]+$/', $slug)) {
+    if (share_slug_validation_key($slug) === 'share.slug.invalid_chars') {
         api_response(400, [
             'errorKey' => 'share.slug.invalid_chars',
             'min' => SHARE_SLUG_MIN_LENGTH,
             'max' => SHARE_SLUG_MAX_LENGTH,
         ], 'Invalid share link suffix');
     }
-    $len = strlen($slug);
-    if ($len < SHARE_SLUG_MIN_LENGTH || $len > SHARE_SLUG_MAX_LENGTH) {
+    if (share_slug_validation_key($slug) === 'share.slug.invalid_length') {
         api_response(400, [
             'errorKey' => 'share.slug.invalid_length',
             'min' => SHARE_SLUG_MIN_LENGTH,
