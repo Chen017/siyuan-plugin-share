@@ -27,7 +27,7 @@ if ($path === '/login') {
         $_SESSION['password_hash'] = $user['password_hash'];
         redirect((int)$user['must_change_password'] === 1 ? '/account' : '/dashboard');
     }
-    $content = '<div class="auth-card">' . render_auth_mascot() . '<h1>Sign in</h1>';
+    $content = '<div class="auth-card"><h1>Sign in</h1><p class="auth-description">Manage your shared notes.</p>';
     if ($error = flash('error')) $content .= '<p class="flash error" role="alert">' . htmlspecialchars($error) . '</p>';
     if ($info = flash('info')) $content .= '<p class="flash" role="status">' . htmlspecialchars($info) . '</p>';
     $content .= '<form method="post" class="auth-form">' . render_hidden_inputs(['csrf' => csrf_token()]);

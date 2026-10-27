@@ -25,7 +25,6 @@ Thumbs.db
 
 # Documentation
 README*.md
-CHANGELOG.md
 LICENSE
 
 # Plugin files (not needed for server)
@@ -34,7 +33,6 @@ index.css
 plugin.json
 i18n/
 icon.png
-preview.png
 
 # Docker
 docker-compose.yml
@@ -45,7 +43,6 @@ Dockerfile
 php-site/storage/
 php-site/uploads/
 php-site/config.php
-php-site/Injection.md
 
 # Temporary files
 *.log

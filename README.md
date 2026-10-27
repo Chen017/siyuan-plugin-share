@@ -1,64 +1,81 @@
-# 🔗 Siyuan Share
+# Siyuan Share
 
 [English](README.md) · [简体中文](README_zh_CN.md)
 
-Share a SiYuan document, a document tree or a notebook through a web link, with passwords, expiration dates, visitor limits and incremental sync.
+Share SiYuan documents and notebooks through a web reader with passwords, expiration dates, visitor limits, incremental sync and downloadable PDFs.
 
-This is **[Chen017](https://github.com/Chen017)'s personal fork** of [b8l8u8e8/siyuan-plugin-share](https://github.com/b8l8u8e8/siyuan-plugin-share). The original sharing features come from upstream; this fork focuses on reading, rendering fixes and self-hosting.
+Maintained by [Chen017](https://github.com/Chen017/siyuan-plugin-share), based on [b8l8u8e8/siyuan-plugin-share](https://github.com/b8l8u8e8/siyuan-plugin-share). Original copyright and the [MIT license](LICENSE) are retained.
 
-## ✨ What changed here
+## Docker Compose
 
-| Area | Personal changes |
-| --- | --- |
-| Runtime | PHP **8.3.36**, graceful Nginx/PHP-FPM shutdown, runtime and API regression checks. |
-| Fonts | Local **MiSans** for Latin letters, digits and common punctuation; system fonts for Chinese. The Latin WOFF2 is **34 KB**, down from the original 8.1 MB TTF. |
-| Reading | Neutral surfaces, clear blue links, rounded press feedback and short motion with reduced-motion support. Notebook landing pages offer Browse documents and local Continue reading, without duplicating the document tree. Reader controls use English. Footer links lead with this fork and credit upstream. |
-| Home navigation | Configurable reader home URL. Other shares show Home / Return to home; documents, query strings and anchors within the same home share do not. |
-| Administrator-only backend | Notes, Site settings and Password navigation; administrator sign-in/out, password changes, API keys, share management and storage quotas remain. Public registration and multi-user management are removed. |
-| Removed services | Access analytics and logs, admin KPI/charts, instance statistics/heartbeats, SMTP/email flows, comments, reports, announcements, moderation/scanning, ordinary CAPTCHA, ICP/contact settings, manual chunk cleanup and the global data-reset endpoint. PDF CAPTCHA and automatic upload cleanup remain. |
-| Configuration | Website/share URL prefix, HTML Head insertion and custom CSS/JS switches, editors, help and injection remain available. Upstream release checks and update prompts are removed; attribution remains. |
-| Data migration | Retired module data is removed once. Notes, share URLs, ownership, API keys and referenced attachments are preserved; historical visitor limits carry forward and storage usage is recalculated. [Scope and migration](docs/FOCUS_SIMPLIFICATION.md). |
-| Rendering | SiYuan table-cell alignment fixes, on-demand diagram engines and one Markdown render per document. Math, footnotes and diagrams remain available. |
-| PDF export | Single/batch downloads in a dialog, selectable text, hidden attribution and visitor quota indicators. [Details](docs/GUEST_PDF_EXPORT.md). |
-| Accessibility & SEO | Clearer links, correct button states and TOC focus, main landmarks, working image-download controls, page descriptions, robots.txt and real 404 responses. |
-| Deployment | Local-only `127.0.0.1:8081`, versioned static assets, GitHub Actions deployment and isolated regression tests. Backup and restore-verification scripts are included. |
-| Maintenance | PHP modules with unchanged routes/API contracts, obsolete style/helper cleanup, one verified backup entry point, consistent rendered-page health checks, private configuration permissions and CI before deployment. [Maintenance guide](docs/MAINTENANCE.md). |
-
-Earlier changes and commit references: [Fork changes](CUSTOM_FEATURES.md) · [PHP upgrade record](docs/PHP83_BETA.md).
-
-## 🚀 Self-host
-
-With Docker and Docker Compose installed:
+Docker Engine and Docker Compose are required. Run from the repository root:
 
 ```sh
 git clone https://github.com/Chen017/siyuan-plugin-share.git
 cd siyuan-plugin-share
-# Review php-site/config.php for your installation.
+# Review php-site/config.php before starting.
 docker compose build --pull
-docker compose up -d
+bash scripts/prepare-config.sh siyuan-share-web:latest
+docker compose up -d --no-build --pull never
+docker compose ps
 ```
 
-The service listens on **`127.0.0.1:8081`**. Point your HTTPS reverse proxy at that address. SQLite data, uploads and configuration persist outside the container.
+The supplied Compose file builds this fork from source and listens on **127.0.0.1:8081**. Point your HTTPS reverse proxy at that address and preserve the Host header. Set the public HTTPS URL in **Site settings**.
 
-Only administrator password sign-in is available. Public registration, email authentication and ordinary CAPTCHA have been removed; PDF CAPTCHA remains independent. Set up the administrator, create an API key, then enter your server URL and key in the SiYuan plugin.
+On a fresh installation, sign in with **admin / 123456** and change the password immediately. The backend is administrator-only; registration and email authentication are unavailable.
 
-## Using the plugin
+| Persistent host path | Contents |
+| --- | --- |
+| `php-site/storage/` | SQLite database and upload staging |
+| `php-site/uploads/` | Attachments |
+| `php-site/config.php` | Read-only mounted installation configuration |
 
-1. Install **Siyuan Share** in SiYuan and configure your server URL and API key.
-2. Right-click a document or notebook, then create a share.
-3. Set its password, expiration or visitor limit as needed; copy the link to share it.
+Keep these paths when updating. Do not replace an existing configuration with the example. After initialization, saved PDF settings take precedence over config defaults.
 
-Update an existing share to keep its URL. Automatic and incremental sync are inherited from upstream. See the [upstream guide](https://github.com/b8l8u8e8/siyuan-plugin-share#readme) for the full plugin workflow.
+## Connect SiYuan
 
-## Contributions merged upstream
+1. Install the Siyuan Share plugin, then enter your server URL and an API key generated in the administrator backend.
+2. Right-click a document or notebook to create a share.
+3. Set its password, expiration date or visitor limit, then copy the link.
 
-Chen017 also contributed [dark-mode code highlighting #38](https://github.com/b8l8u8e8/siyuan-plugin-share/pull/38), [dark mode for login/admin/public pages #39](https://github.com/b8l8u8e8/siyuan-plugin-share/pull/39), [custom HTML head insertion #45](https://github.com/b8l8u8e8/siyuan-plugin-share/pull/45), and [nested-dollar KaTeX parsing #69](https://github.com/b8l8u8e8/siyuan-plugin-share/pull/69). These are already part of upstream.
+Updating an existing share preserves its URL. Automatic updates, incremental sync, document trees, search, math, footnotes and diagrams remain supported.
 
-## Maintenance
+## Reader and PDF
 
-- **`main`**: this fork's deployable code. **`upstream`**: the retained upstream reference branch.
-- [PHP/Docker regression](.github/workflows/php83-regression.yml) and [reader regression](.github/workflows/frontend-regression.yml) use disposable test data.
-- [Backup and rollback records](docs/VPS_UPGRADE_20261022.md) · [Upstream changelog](CHANGELOG.md).
-- The deployment workflow targets the maintainer's VPS; configure your own Actions secrets before using it.
+**Site settings** controls the reader home URL, public URL prefix, storage quotas, HTML Head insertion and custom CSS/JavaScript. Scope custom CSS to `body.layout-share` or `body.layout-app`; only insert trusted code.
 
-Original project by **b8l8u8e8 and contributors**. Personal fork maintained by **Chen017**. [MIT License](LICENSE).
+Open a document and choose **Export PDF**. Select a single document, its subpages, the whole share or specific documents. Each document downloads as a separate PDF with selectable text. The default visitor allowance is 120 documents per rolling hour; the administrator can change it. Browser permissions may be needed for multiple downloads. [PDF usage and limits](docs/GUEST_PDF_EXPORT.md).
+
+## Backup and update
+
+Create and verify a backup before updating:
+
+```sh
+bash backup-volumes.sh siyuan-share-web "$PWD/backups"
+```
+
+The script briefly stops writes, saves configuration/data and the rollback image, verifies extracted file hashes and SQLite integrity, then resumes the service. Keep the directory reported by `BACKUP_DIR` and its `VERIFIED` marker privately.
+
+```sh
+git pull --ff-only
+docker compose build --pull
+bash scripts/prepare-config.sh siyuan-share-web:latest
+docker compose up -d --no-build --pull never
+docker compose logs --tail=100 web
+```
+
+For a rollback, restore the matching verified data/configuration and image together. Database migrations may make an image-only rollback insufficient.
+
+## Development
+
+```sh
+python tests/run.py --php /path/to/php-8.3
+NODE_PATH=/path/to/isolated/node_modules node tests/plugin.cjs
+NODE_PATH=/path/to/isolated/node_modules node tests/frontend.cjs
+NODE_PATH=/path/to/isolated/node_modules node tests/reader-ui.cjs
+python tests/package.py
+```
+
+DOM tests use `jsdom@26.1.0`. PDF text-layer tests additionally use `jspdf@4.0.0` and `pypdfium2==5.14.0`. Add `--browser` to the PHP runner for real PDF downloads; an existing Playwright/browser installation can be selected with `SIYUAN_PLAYWRIGHT_MODULE` and `SIYUAN_BROWSER_EXECUTABLE`. Docker regression uses `--docker <built-image>` and disposable data. Runtime data, backups and local test output are excluded from release packages.
+
+`main` deploys to the maintainer's VPS only after PHP/Docker and reader regression pass. Configure your own repository secrets before reusing this workflow. The plugin remains a no-build single-file entry point; source fonts live in `resources/fonts/` and are excluded from public assets.

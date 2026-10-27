@@ -373,7 +373,7 @@ function render_page(string $title, string $content, ?array $user = null, string
         if (empty($options['pdf_export'])) echo "<div class='reader-frame'>";
         echo "<header class='reader-mobile-bar'><button class='reader-nav-button' type='button' data-share-drawer-open aria-label='Open navigation' aria-expanded='false'><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='currentColor' d='M4 6h16v2H4zM4 11h16v2H4zM4 16h16v2H4z'/></svg><span>Navigation</span></button><span class='reader-mobile-title' data-reader-mobile-title>{$pageTitle}</span></header>";
         echo $content;
-        echo "<footer class='share-footer'><span class='footer-credit'>Maintained by <a class='footer-owner' href='https://github.com/Chen017/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Chen017</a></span><span class='footer-separator' aria-hidden='true'>·</span><span class='footer-credit'>Upstream: <a class='footer-upstream' href='https://github.com/b8l8u8e8/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Siyuan Share</a></span></footer>";
+        echo "<footer class='share-footer'><span class='footer-credit'>Maintained by <a class='footer-owner' href='https://github.com/Chen017/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Chen017</a></span></footer>";
         if (empty($options['pdf_export'])) echo "</div>";
         echo "<div class='share-side-backdrop' data-share-drawer-close></div>";
         echo "<p class='reader-status sr-only' data-reader-status role='status' aria-live='polite'></p>";
@@ -424,7 +424,7 @@ function render_page(string $title, string $content, ?array $user = null, string
         echo "<main class='app-content'>";
         echo $content;
         echo "</main>";
-        echo "<footer class='app-footer'><span class='footer-credit'>Maintained by <a class='footer-owner' href='https://github.com/Chen017/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Chen017</a></span><span class='footer-separator' aria-hidden='true'>·</span><span class='footer-credit'>Upstream: <a class='footer-upstream' href='https://github.com/b8l8u8e8/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Siyuan Share</a></span></footer>";
+        echo "<footer class='app-footer'><span class='footer-credit'>Maintained by <a class='footer-owner' href='https://github.com/Chen017/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Chen017</a></span></footer>";
         echo "</div>";
         echo "</div>";
         echo "<div class='app-side-backdrop' data-app-drawer-close></div>";
@@ -467,43 +467,6 @@ function render_page(string $title, string $content, ?array $user = null, string
     echo "</body>";
     echo "</html>";
     exit;
-}
-
-function render_auth_mascot(): string {
-    return <<<'HTML'
-<div class="auth-mascot-pair" aria-hidden="true">
-  <div class="auth-mascot auth-mascot--left" data-auth-mascot data-mascot-state="idle">
-    <div class="auth-mascot__halo"></div>
-    <div class="auth-mascot__head">
-      <span class="auth-mascot__ear auth-mascot__ear--left"></span>
-      <span class="auth-mascot__ear auth-mascot__ear--right"></span>
-      <span class="auth-mascot__eye auth-mascot__eye--left"><span class="auth-mascot__pupil"></span></span>
-      <span class="auth-mascot__eye auth-mascot__eye--right"><span class="auth-mascot__pupil"></span></span>
-      <span class="auth-mascot__blush auth-mascot__blush--left"></span>
-      <span class="auth-mascot__blush auth-mascot__blush--right"></span>
-      <span class="auth-mascot__nose"></span>
-      <span class="auth-mascot__mouth"></span>
-      <span class="auth-mascot__hand auth-mascot__hand--left"></span>
-      <span class="auth-mascot__hand auth-mascot__hand--right"></span>
-    </div>
-  </div>
-  <div class="auth-mascot auth-mascot--right" data-auth-mascot data-mascot-state="idle">
-    <div class="auth-mascot__halo"></div>
-    <div class="auth-mascot__head">
-      <span class="auth-mascot__ear auth-mascot__ear--left"></span>
-      <span class="auth-mascot__ear auth-mascot__ear--right"></span>
-      <span class="auth-mascot__eye auth-mascot__eye--left"><span class="auth-mascot__pupil"></span></span>
-      <span class="auth-mascot__eye auth-mascot__eye--right"><span class="auth-mascot__pupil"></span></span>
-      <span class="auth-mascot__blush auth-mascot__blush--left"></span>
-      <span class="auth-mascot__blush auth-mascot__blush--right"></span>
-      <span class="auth-mascot__nose"></span>
-      <span class="auth-mascot__mouth"></span>
-      <span class="auth-mascot__hand auth-mascot__hand--left"></span>
-      <span class="auth-mascot__hand auth-mascot__hand--right"></span>
-    </div>
-  </div>
-</div>
-HTML;
 }
 
 function render_404_page(): void {

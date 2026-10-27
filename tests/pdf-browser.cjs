@@ -4,6 +4,12 @@ const path = require('node:path');
 const fs = require('node:fs');
 const zlib = require('node:zlib');
 const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright');
+const chooseScope = async (page, value) => {
+  await page.getByRole('combobox', { name: 'Export scope', exact: true }).click();
+  await page.locator(`[role=option][data-value="${value}"]`).click();
+  assert.equal(await page.locator('[data-pdf-scope]').inputValue(), value);
+  assert.equal(await page.getByRole('combobox', { name: 'Export scope', exact: true }).getAttribute('aria-expanded'), 'false');
+};
 (async () => {
   const [shareUrl, output] = process.argv.slice(2);
   const fixture = JSON.parse(fs.readFileSync(0, 'utf8'));
@@ -19,7 +25,7 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
   const openPreview = async (ctx, scope) => {
     const controls = await ctx.newPage();
     await controls.goto(shareUrl + '/export');
-    await controls.locator('[data-pdf-scope]').selectOption(scope);
+    await chooseScope(controls, scope);
     if (scope === 'selected') {
       for (const box of await controls.locator('[name="doc_ids[]"]').all()) await box.check();
     }
@@ -146,6 +152,18 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     await modal.waitFor({ state: 'visible' });
     const options = reader.frameLocator('[data-pdf-dialog-frame]');
     await options.locator('[data-pdf-export-form]').waitFor();
+    const scopeControl = options.getByRole('combobox', { name: 'Export scope', exact: true });
+    await scopeControl.focus();
+    await scopeControl.press('ArrowDown');
+    await scopeControl.press('End');
+    await scopeControl.press('Enter');
+    assert.equal(await options.locator('[data-pdf-scope]').inputValue(), 'selected');
+    assert.equal(await options.locator('[data-pdf-selection]').isVisible(), true);
+    await scopeControl.click();
+    await scopeControl.press('Escape');
+    assert.equal(await modal.isVisible(), true, 'Escape closes the menu before the dialog');
+    assert.equal(await scopeControl.getAttribute('aria-expanded'), 'false');
+    await chooseScope(options, 'single');
     assert.match(await options.locator('[data-pdf-quota]').innerText(), /120 documents remaining.*120 per 60 minutes/);
     assert.equal(await modal.evaluate((node) => getComputedStyle(node, '::backdrop').backdropFilter), 'none');
     await reader.waitForTimeout(250); // Let the opening animation settle.
@@ -155,11 +173,15 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     await reader.screenshot({ path: path.join(output, 'pdf-dialog-mobile.png'), animations: 'disabled' });
     assert.ok((await modal.boundingBox()).width <= 390);
     await reader.setViewportSize({ width: 1100, height: 900 });
-    await options.locator('[data-pdf-scope]').selectOption('all');
+    await chooseScope(options, 'all');
     const automaticDownloads = [];
     reader.on('download', (download) => automaticDownloads.push(download));
     await options.getByRole('button', { name: 'Export', exact: true }).click();
-    await options.locator('[data-pdf-form-status]').filter({ hasText: 'Started 2 individual PDF downloads' }).waitFor({ timeout: 120000 });
+    try {
+      await options.locator('[data-pdf-form-status]').filter({ hasText: 'Started 2 individual PDF downloads' }).waitFor({ timeout: 120000 });
+    } catch (error) {
+      throw new Error(`${await options.locator('[data-pdf-form-status]').textContent()}; scope=${await options.locator('[data-pdf-scope]').inputValue()}; ${error.message}`);
+    }
     assert.equal(automaticDownloads.length, 2);
     for (let index = 0; index < automaticDownloads.length; index++) await automaticDownloads[index].saveAs(path.join(output, `dialog-auto-${index + 1}.pdf`));
     await options.locator('[data-pdf-quota]').filter({ hasText: '118 documents remaining' }).waitFor();
@@ -174,7 +196,7 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     await options.locator('[data-pdf-export-form]').waitFor();
     await reader.waitForTimeout(100);
     await reader.screenshot({ path: path.join(output, 'pdf-dialog-dark.png'), animations: 'disabled' });
-    await options.locator('[data-pdf-scope]').press('Escape');
+    await options.getByRole('combobox', { name: 'Export scope', exact: true }).press('Escape');
     await modal.waitFor({ state: 'hidden' });
     await reader.emulateMedia({ colorScheme: 'light', reducedMotion: 'no-preference' });
     // Block both preload and script requests: aborting only the preload can leave
