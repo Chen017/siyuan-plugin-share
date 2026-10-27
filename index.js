@@ -1386,7 +1386,7 @@ function getDocIconKind(iconValue) {
   const icon = normalizeDocIconValue(iconValue);
   if (!icon) return "empty";
   if (/^data:image\//i.test(icon)) return "data";
-  if (/^https?:\/\//i.test(icon)) return "url";
+  if (/^(?:https?:)?\/\//i.test(icon)) return "url";
   const emojiToken = stripEmojiColons(icon);
   const candidate = emojiToken || icon;
   if (/[\\/]/.test(candidate) || DOC_ICON_IMAGE_EXT_RE.test(candidate)) {
@@ -1411,14 +1411,13 @@ function normalizeDocIconAssetPath(iconValue) {
 }
 
 function normalizeApiIconUrl(iconValue) {
-  if (typeof iconValue !== "string") return "";
-  const raw = iconValue.trim();
-  if (!raw) return "";
-  if (/^https?:\/\//i.test(raw)) return "";
-  if (raw.startsWith("//")) return `${location.protocol}${raw}`;
-  if (raw.startsWith("/api/")) return `${location.origin}${raw}`;
-  if (raw.startsWith("api/")) return `${location.origin}/${raw}`;
-  return "";
+  const raw = typeof iconValue === "string" ? iconValue.trim() : "";
+  if (!raw || !/^(?:\/\/|\/?api\/)/i.test(raw)) return "";
+  try {
+    const url = new URL(raw, `${location.origin}/`);
+    if (url.origin !== location.origin || !url.pathname.startsWith("/api/") || url.username || url.password) return "";
+    return url.href;
+  } catch { return ""; }
 }
 
 function guessImageExtension(contentType = "", url = "") {
@@ -9103,12 +9102,7 @@ class SiYuanSharePlugin extends Plugin {
         requestError = err;
         if (uploadId && !uploadComplete) {
           try {
-            await this.remoteRequest(REMOTE_API.shareUploadCancel, {
-              method: "POST",
-              body: {uploadId},
-              controller,
-              progress,
-            });
+            await this.cancelUploadSession(uploadId, progress);
           } catch (cancelErr) {
             console.warn("shareDoc cancel upload failed", cancelErr);
           }
@@ -9526,12 +9520,7 @@ class SiYuanSharePlugin extends Plugin {
         requestError = err;
         if (uploadId && !uploadComplete) {
           try {
-            await this.remoteRequest(REMOTE_API.shareUploadCancel, {
-              method: "POST",
-              body: {uploadId},
-              controller,
-              progress,
-            });
+            await this.cancelUploadSession(uploadId, progress);
           } catch (cancelErr) {
             console.warn("shareNotebook cancel upload failed", cancelErr);
           }
@@ -10364,6 +10353,16 @@ class SiYuanSharePlugin extends Plugin {
     return {"X-Api-Key": key};
   }
 
+  async cancelUploadSession(uploadId, progress) {
+    const cleanup = new AbortController();
+    const timer = setTimeout(() => cleanup.abort(), 10000);
+    try {
+      return await this.remoteRequest(REMOTE_API.shareUploadCancel, {
+        method: "POST", body: {uploadId}, controller: cleanup, progress, silent: true,
+      });
+    } finally { clearTimeout(timer); }
+  }
+
   async remoteRequest(
     path,
     {
@@ -10775,12 +10774,17 @@ class SiYuanSharePlugin extends Plugin {
   }
 
   async fetchIconUrlBlob(url, controller) {
-    const resp = await fetch(url, {
+    const target = new URL(url, location.origin);
+    if (target.origin !== location.origin || !target.pathname.startsWith("/api/") || target.username || target.password) {
+      throw new Error("Icon API must be on the current SiYuan origin");
+    }
+    const resp = await fetch(target.href, {
       method: "GET",
       headers: {
         ...getAuthHeaders(),
       },
       credentials: "same-origin",
+      redirect: "error",
       signal: controller?.signal,
     });
     if (!resp.ok) {

@@ -16,6 +16,7 @@ function db(): PDO {
     $pdo = new PDO($dsn);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $pdo->exec('PRAGMA foreign_keys = ON;');
+    $pdo->exec('PRAGMA busy_timeout = 3000;');
     migrate($pdo);
     return $pdo;
 }
@@ -176,6 +177,18 @@ function migrate(PDO $pdo): void {
     ensure_column($pdo, 'share_assets', 'size_bytes', 'INTEGER NOT NULL DEFAULT 0');
     ensure_column($pdo, 'share_assets', 'asset_hash', 'TEXT');
 
+    if (!table_has_column($pdo, 'shares', 'revision') || !table_has_column($pdo, 'share_uploads', 'share_revision')
+        || !table_has_column($pdo, 'share_uploads', 'reserved_bytes')) {
+        $pdo->exec('BEGIN IMMEDIATE');
+        try {
+            // Another first request may have migrated while this worker waited for the write lock.
+            ensure_column($pdo, 'shares', 'revision', 'INTEGER NOT NULL DEFAULT 0');
+            ensure_column($pdo, 'share_uploads', 'share_revision', 'INTEGER NOT NULL DEFAULT -1');
+            ensure_column($pdo, 'share_uploads', 'reserved_bytes', 'INTEGER NOT NULL DEFAULT 0');
+            $pdo->exec('COMMIT');
+        } catch (Throwable $error) { $pdo->exec('ROLLBACK'); throw $error; }
+    }
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_share_uploads_updated ON share_uploads(updated_at)');
     seed_default_settings($pdo);
     seed_default_admin($pdo);
     retire_legacy_modules($pdo);

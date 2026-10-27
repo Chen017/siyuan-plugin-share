@@ -245,9 +245,6 @@ function serve_share_asset(array $share, string $assetPath): void {
     if (share_requires_password($share) && !share_access_granted($shareId)) {
         redirect_to_share_page($share, $assetPath);
     }
-    if (share_visitor_limit($share) > 0) {
-        register_share_visitor($shareId, get_visitor_id());
-    }
     $asset = find_share_asset_row($shareId, $assetPath);
     if (!$asset) {
         render_share_asset_not_found();
@@ -261,6 +258,7 @@ function serve_share_asset(array $share, string $assetPath): void {
     if (!is_file($fullPath) || !is_readable($fullPath)) {
         render_share_asset_not_found();
     }
+    if (!admit_share_visitor($shareId)) redirect_to_share_page($share, $assetPath);
     $inline = share_asset_allow_inline($assetPath);
     $mime = $inline ? detect_share_asset_mime($fullPath, $assetPath) : 'application/octet-stream';
     $disposition = $inline ? 'inline' : 'attachment';

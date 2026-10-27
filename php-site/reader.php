@@ -448,8 +448,11 @@ function route_share(string $slug, ?string $docId = null): void {
         if ($visitorRegistered) {
             return;
         }
-        if (share_visitor_limit($share) > 0) {
-            register_share_visitor($shareId, get_visitor_id());
+        if (!admit_share_visitor($shareId)) {
+            if (is_share_partial_request()) api_response(403, null, 'Share access changed or the visitor limit was reached');
+            http_response_code(403);
+            render_page('Share unavailable', '<p>This share is no longer available or has reached its visitor limit.</p>', null, '', ['layout' => 'share']);
+            exit;
         }
         $visitorRegistered = true;
     };

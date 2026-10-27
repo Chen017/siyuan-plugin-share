@@ -3721,7 +3721,7 @@ const initImageViewer = () => {
     const chartInstances = [];
     let diagramIndex = 0;
     let vizInstance = null;
-    const PLANTUML_SERVER = "https://plantuml.com/plantuml";
+
     let mermaidFontPromise = null;
 
     const nextDiagramId = (prefix) => {
@@ -4029,140 +4029,24 @@ const initImageViewer = () => {
       });
     };
 
-    const encodePlantUmlData = (deflated) => {
-      if (!deflated || !deflated.length) return "";
-      const encode6bit = (b) => {
-        if (b < 10) return String.fromCharCode(48 + b);
-        b -= 10;
-        if (b < 26) return String.fromCharCode(65 + b);
-        b -= 26;
-        if (b < 26) return String.fromCharCode(97 + b);
-        b -= 26;
-        if (b === 0) return "-";
-        if (b === 1) return "_";
-        return "?";
-      };
-      const append3bytes = (b1, b2, b3) => {
-        const c1 = b1 >> 2;
-        const c2 = ((b1 & 0x3) << 4) | (b2 >> 4);
-        const c3 = ((b2 & 0xf) << 2) | (b3 >> 6);
-        const c4 = b3 & 0x3f;
-        return (
-          encode6bit(c1 & 0x3f) +
-          encode6bit(c2 & 0x3f) +
-          encode6bit(c3 & 0x3f) +
-          encode6bit(c4 & 0x3f)
-        );
-      };
-      let result = "";
-      for (let i = 0; i < deflated.length; i += 3) {
-        if (i + 2 === deflated.length) {
-          result += append3bytes(deflated[i], deflated[i + 1], 0);
-        } else if (i + 1 === deflated.length) {
-          result += append3bytes(deflated[i], 0, 0);
-        } else {
-          result += append3bytes(deflated[i], deflated[i + 1], deflated[i + 2]);
-        }
-      }
-      return result;
-    };
-
-    const toUtf8Bytes = (input) => {
-      if (typeof TextEncoder !== "undefined") {
-        return new TextEncoder().encode(input);
-      }
-      const encoded = unescape(encodeURIComponent(input));
-      const bytes = new Uint8Array(encoded.length);
-      for (let i = 0; i < encoded.length; i += 1) {
-        bytes[i] = encoded.charCodeAt(i);
-      }
-      return bytes;
-    };
-
-    const deflateWithPako = (bytes) => {
-      if (!window.pako || typeof window.pako.deflate !== "function") return null;
-      try {
-        return window.pako.deflate(bytes, {level: 9});
-      } catch {
-        return null;
-      }
-    };
-
-    const encodePlantUmlHex = (source) => {
-      const input = String(source || "");
-      if (!input.trim()) return "";
-      const bytes = toUtf8Bytes(input);
-      let hex = "";
-      bytes.forEach((b) => {
-        hex += b.toString(16).padStart(2, "0");
-      });
-      return `~h${hex}`;
-    };
-
-    const deflateWithStream = async (bytes) => {
-      if (typeof CompressionStream !== "function") return null;
-      try {
-        const stream = new CompressionStream("deflate");
-        const writer = stream.writable.getWriter();
-        await writer.write(bytes);
-        await writer.close();
-        const buffer = await new Response(stream.readable).arrayBuffer();
-        return new Uint8Array(buffer);
-      } catch {
-        return null;
-      }
-    };
-
-    const encodePlantUmlSync = (source) => {
-      const input = String(source || "");
-      if (!input.trim()) return "";
-      const bytes = toUtf8Bytes(input);
-      const deflated = deflateWithPako(bytes);
-      if (!deflated) return "";
-      const encoded = encodePlantUmlData(deflated);
-      return encoded ? `~1${encoded}` : "";
-    };
-
-    const encodePlantUmlAsync = async (source) => {
-      const input = String(source || "");
-      if (!input.trim()) return "";
-      const bytes = toUtf8Bytes(input);
-      let deflated = deflateWithPako(bytes);
-      if (!deflated) {
-        deflated = await deflateWithStream(bytes);
-      }
-      if (!deflated) return "";
-      const encoded = encodePlantUmlData(deflated);
-      return encoded ? `~1${encoded}` : "";
+    const showDiagramSource = (block, source, kind) => {
+      const wrapper = document.createElement("div");
+      wrapper.className = `md-diagram md-diagram--${kind}`;
+      const message = document.createElement("p");
+      message.className = "muted";
+      message.textContent = "Diagram preview unavailable. Source is shown below and stays on this site.";
+      const pre = document.createElement("pre");
+      const code = document.createElement("code");
+      code.textContent = source;
+      pre.append(code);
+      wrapper.append(message, pre);
+      block.replaceWith(wrapper);
     };
 
     const renderPlantUml = (container) => {
       container.querySelectorAll("pre code").forEach((code) => {
-        const lang = getLanguage(code);
-        if (!["plantuml", "puml", "uml"].includes(lang)) return;
-        const source = code.textContent || "";
-        const hexFallback = encodePlantUmlHex(source);
-        if (!hexFallback) return;
-        if (!code.isConnected) return;
-        const wrapper = document.createElement("div");
-        wrapper.className = "md-diagram md-diagram--plantuml";
-        const img = document.createElement("img");
-        img.loading = "lazy";
-        img.alt = "PlantUML diagram";
-        img.src = `${PLANTUML_SERVER}/svg/${hexFallback}`;
-        wrapper.appendChild(img);
-        replaceCodeBlock(code, wrapper);
-
-        const encodedSync = encodePlantUmlSync(source);
-        if (encodedSync) {
-          img.src = `${PLANTUML_SERVER}/svg/${encodedSync}`;
-          return;
-        }
-        encodePlantUmlAsync(source).then((encodedAsync) => {
-          if (encodedAsync) {
-            img.src = `${PLANTUML_SERVER}/svg/${encodedAsync}`;
-          }
-        });
+        if (!["plantuml", "puml", "uml"].includes(getLanguage(code))) return;
+        showDiagramSource(code.closest("pre") || code, code.textContent || "", "plantuml");
       });
     };
 
@@ -4175,23 +4059,9 @@ const initImageViewer = () => {
         return false;
       };
 
-      const fallbackMermaidImage = (block) => {
+      const showMermaidSource = (block) => {
         const source = block.dataset.mermaidSource || block.textContent || "";
-        if (!source.trim()) return;
-        let encoded = "";
-        try {
-          encoded = btoa(unescape(encodeURIComponent(source)));
-        } catch {
-          return;
-        }
-        const wrapper = document.createElement("div");
-        wrapper.className = "md-diagram md-diagram--mermaid";
-        const img = document.createElement("img");
-        img.loading = "lazy";
-        img.alt = "Mermaid diagram";
-        img.src = `https://mermaid.ink/svg/${encoded}`;
-        wrapper.appendChild(img);
-        block.replaceWith(wrapper);
+        showDiagramSource(block, source, "mermaid");
       };
 
       const isMermaidErrorSvg = (svg) => {
@@ -4205,7 +4075,7 @@ const initImageViewer = () => {
         const targetId = nextDiagramId("mermaid");
         const applySvg = (svg, bindFunctions) => {
           if (isMermaidErrorSvg(svg)) {
-            fallbackMermaidImage(block);
+            showMermaidSource(block);
             return;
           }
           block.innerHTML = svg;
@@ -4223,12 +4093,12 @@ const initImageViewer = () => {
             result
               .then((res) => {
                 if (!res || !res.svg) {
-                  fallbackMermaidImage(block);
+                  showMermaidSource(block);
                   return;
                 }
                 applySvg(res.svg, res.bindFunctions);
               })
-              .catch(() => fallbackMermaidImage(block));
+              .catch(() => showMermaidSource(block));
             return;
           }
           if (typeof result === "string") {
@@ -4239,9 +4109,9 @@ const initImageViewer = () => {
             applySvg(result.svg, result.bindFunctions);
             return;
           }
-          fallbackMermaidImage(block);
+          showMermaidSource(block);
         } catch {
-          fallbackMermaidImage(block);
+          showMermaidSource(block);
         }
       };
 
@@ -4265,7 +4135,7 @@ const initImageViewer = () => {
         });
         container.querySelectorAll("div.mermaid").forEach((block) => blocks.push(block));
         const uniqueBlocks = Array.from(new Set(blocks));
-        uniqueBlocks.forEach((block) => fallbackMermaidImage(block));
+        uniqueBlocks.forEach((block) => showMermaidSource(block));
         return;
       }
       if (!mermaidReady) {
@@ -4663,9 +4533,6 @@ const initImageViewer = () => {
           });
         const dependencies = [];
         if (wantsMermaid) dependencies.push(loadDiagramScript("mermaid.min.js", () => !!window.mermaid));
-        if (wantsMermaid || ["plantuml", "puml", "uml"].some(lang => languages.has(lang))) {
-          dependencies.push(loadDiagramScript("pako.min.js", () => !!window.pako));
-        }
         if (languages.has("echarts") || target.querySelector(".md-diagram--echarts")) {
           dependencies.push(loadDiagramScript("echarts.min.js", () => !!window.echarts));
         }

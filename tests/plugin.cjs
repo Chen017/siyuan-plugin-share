@@ -40,6 +40,7 @@ function host({ mobile = false, locale = 'en_US', stored = {} } = {}) {
   const sandbox = {
     module, console: { ...console, error: (...args) => errors.push(args.map(String).join(' ')) },
     window: dom.window, document: dom.window.document,
+    location: dom.window.location,
     navigator: dom.window.navigator, MutationObserver: dom.window.MutationObserver,
     URL, URLSearchParams, TextEncoder, TextDecoder, Blob, FormData, AbortController,
     crypto: webcrypto, setTimeout: schedule, setInterval: schedule,
@@ -100,7 +101,7 @@ function host({ mobile = false, locale = 'en_US', stored = {} } = {}) {
     shares: [oldShare],
   } });
   try {
-    const { plugin, storage, requests, sandbox } = fixture;
+    const { plugin, storage, requests, sandbox, timers } = fixture;
     await plugin.loadState();
     const siteId = plugin.settings.activeSiteId;
     assert(siteId);
@@ -153,6 +154,26 @@ function host({ mobile = false, locale = 'en_US', stored = {} } = {}) {
     await assert.rejects(plugin.buildScopedIncrementalPlan(args, { controller }), { name: 'AbortError' });
     await assert.rejects(plugin.remoteRequest('/api/v1/shares/upload/complete', { body: payload, controller, silent: true }), { name: 'AbortError' });
     await assert.rejects(sandbox.testHelpers.withRetry(() => { throw new Error('Must not run'); }, { controller }), { name: 'AbortError' });
+    await plugin.cancelUploadSession('pending-upload');
+    assert.equal(requests.at(-1).options.signal.aborted, false, 'Cleanup uses an independent request after user cancellation');
+    assert.equal(timers.size, 0, 'Cleanup timeout is cleared');
+
+    sandbox.siyuan = {config: {api: {token: 'SYNTHETIC_TOKEN'}}};
+    const icons = [];
+    sandbox.fetch = async (url, options) => {
+      icons.push({url, options});
+      return {ok: true, headers: {get: () => 'image/png'}, blob: async () => new Blob(['icon'])};
+    };
+    assert.equal(await plugin.resolveIconUpload('//external.invalid/icon.png'), '//external.invalid/icon.png');
+    assert.equal(icons.length, 0, 'External icons never enter the authenticated downloader');
+    for (const target of ['https://external.invalid/api/icon', '//external.invalid/api/icon', '/api/../outside', 'https://user@siyuan.invalid/api/icon']) {
+      await assert.rejects(plugin.fetchIconUrlBlob(target), /current SiYuan origin/);
+    }
+    await plugin.resolveIconUpload('/api/icon/test', {controller: new AbortController()});
+    assert.equal(icons.length, 1);
+    assert.equal(icons[0].url, 'https://siyuan.invalid/api/icon/test');
+    assert.equal(icons[0].options.headers.Authorization, 'Token SYNTHETIC_TOKEN');
+    assert.equal(icons[0].options.redirect, 'error', 'Authenticated icon requests cannot follow redirects');
   } finally { fixture.close(); }
   console.log('Plugin passed: desktop/mobile lifecycle, settings migration, scoped incremental sync, API payloads, retries and cancellation.');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -23,7 +23,7 @@ async function waitFor(condition, message) {
   }
 }
 
-async function page(raw) {
+async function page(raw, {failMermaid = false} = {}) {
   const dom = new JSDOM(`<body class="layout-share"><div class="share-shell"><aside data-share-sidebar><div data-share-tabs data-share-default="toc"><button data-share-tab="toc">目录</button></div><div data-share-panel="toc"><div data-share-toc="doc"></div></div></aside>${main(raw)}</div><a data-share-nav="doc" href="/s/test?doc=next">Next</a><script src="https://reader.test/assets/app.js?v=fixture"></script></body>`, {
     url: 'https://reader.test/s/test', runScripts: 'outside-only',
     pretendToBeVisual: true, virtualConsole: new VirtualConsole(),
@@ -58,7 +58,7 @@ async function page(raw) {
     requests.push(file);
     w.setTimeout(() => {
       switch (file) {
-        case 'mermaid.min.js': w.mermaid = {initialize() {}, render: async () => ({svg: '<svg xmlns="http://www.w3.org/2000/svg"><text>diagram</text></svg>'})}; break;
+        case 'mermaid.min.js': w.mermaid = {initialize() {}, render: async () => { if (failMermaid) throw new Error('Synthetic renderer failure'); return {svg: '<svg xmlns="http://www.w3.org/2000/svg"><text>diagram</text></svg>'}; }}; break;
         case 'pako.min.js': w.pako = {deflate: () => new Uint8Array([1, 2, 3])}; break;
         case 'echarts.min.js': w.echarts = {init: () => ({setOption() {}, resize() {}})}; break;
         case 'abcjs-basic-min.js': w.ABCJS = {renderAbc: id => w.document.getElementById(id).appendChild(svg())}; break;
@@ -111,14 +111,14 @@ async function page(raw) {
   } finally { plain.close(); }
 
   const cases = [
-    ['mermaid', 'graph LR\nA-->B', ['mermaid.min.js', 'pako.min.js']],
-    ['', 'graph LR\nA-->B', ['mermaid.min.js', 'pako.min.js']],
-    ['mindmap', '- Root\n  - Child', ['mermaid.min.js', 'pako.min.js']],
+    ['mermaid', 'graph LR\nA-->B', ['mermaid.min.js']],
+    ['', 'graph LR\nA-->B', ['mermaid.min.js']],
+    ['mindmap', '- Root\n  - Child', ['mermaid.min.js']],
     ['echarts', '{"series":[{"type":"bar","data":[1,2]}]}', ['echarts.min.js']],
     ['abc', 'X:1\nT:Test\nM:4/4\nK:C\nCDEF|', ['abcjs-basic-min.js']],
     ['graphviz', 'digraph { A -> B }', ['viz.js', 'full.render.js']],
     ['flowchart', 'st=>start: Start\ne=>end: End\nst->e', ['raphael.min.js', 'flowchart.min.js']],
-    ['plantuml', '@startuml\nAlice -> Bob: hello\n@enduml', ['pako.min.js']],
+    ['plantuml', '@startuml\nAlice -> Bob: hello\n@enduml', []],
   ];
   for (const [language, source, expected] of cases) {
     const fixture = await page('```' + language + '\n' + source + '\n```');
@@ -127,8 +127,16 @@ async function page(raw) {
       assert.equal(fixture.renders(), 1);
       assert.equal(fixture.errors.length, 0, String(fixture.errors));
       assert(fixture.w.document.querySelector('.md-diagram, .mermaid'), `${language} is enhanced`);
+      assert(Array.from(fixture.w.document.querySelectorAll('img')).every(image => !image.getAttribute('src') || image.src.startsWith('data:') || new URL(image.src).origin === fixture.w.location.origin), `${language}: diagram source never enters an external image URL`);
+      if (language === 'plantuml') assert(fixture.w.document.querySelector('.md-diagram').textContent.includes(source));
     } finally { fixture.close(); }
   }
+  const failed = await page('```mermaid\ngraph LR\nA-->B\n```', {failMermaid: true});
+  try {
+    await waitFor(() => failed.w.document.querySelector('.md-diagram--mermaid pre'), 'local Mermaid failure fallback');
+    assert(failed.w.document.querySelector('.md-diagram--mermaid').textContent.includes('A-->B'));
+    assert.equal(failed.w.document.querySelector('.md-diagram--mermaid').querySelectorAll('img').length, 0);
+  } finally { failed.close(); }
   // Validate the real bundled Graphviz exports as well as the loader fixtures.
   // This build attaches render/Module to Viz, not to the window object.
   const graphvizDom = new JSDOM('<body></body>', {runScripts: 'outside-only'});

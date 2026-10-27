@@ -9,7 +9,7 @@ function handle_api(string $path): void {
     $user = require_api_user();
     $pdo = db();
     global $config;
-    maybe_cleanup_chunks();
+    maybe_cleanup_chunks(str_ends_with($path, '/init'));
 
     if ($path === '/api/v1/auth/verify') {
         [$minChunk, $maxChunk] = chunk_size_limits();
@@ -177,7 +177,7 @@ function handle_api(string $path): void {
             hard_delete_share($shareId);
             api_response(200, ['ok' => true, 'hard' => true]);
         }
-        $stmt = $pdo->prepare('UPDATE shares SET deleted_at = :deleted_at WHERE id = :id AND user_id = :uid');
+        $stmt = $pdo->prepare('UPDATE shares SET revision = revision + 1, deleted_at = :deleted_at WHERE id = :id AND user_id = :uid');
         $stmt->execute([
             ':deleted_at' => now(),
             ':id' => $shareId,
@@ -234,7 +234,7 @@ function handle_api(string $path): void {
             $newSlug = $slug;
         }
 
-        $stmt = $pdo->prepare('UPDATE shares SET slug = :slug, password_hash = :password_hash, expires_at = :expires_at, visitor_limit = :visitor_limit, updated_at = :updated_at WHERE id = :id AND user_id = :uid');
+        $stmt = $pdo->prepare('UPDATE shares SET revision = revision + 1, slug = :slug, password_hash = :password_hash, expires_at = :expires_at, visitor_limit = :visitor_limit, updated_at = :updated_at WHERE id = :id AND user_id = :uid AND revision = :revision');
         $stmt->execute([
             ':slug' => $newSlug,
             ':password_hash' => $passwordHash,
@@ -243,7 +243,9 @@ function handle_api(string $path): void {
             ':updated_at' => now(),
             ':id' => $shareId,
             ':uid' => $user['id'],
+            ':revision' => (int)$share['revision'],
         ]);
+        if ($stmt->rowCount() !== 1) api_response(409, null, 'Share changed; refresh before updating access settings');
 
         api_response(200, ['share' => [
             'id' => (int)$share['id'],
@@ -473,46 +475,12 @@ function handle_api(string $path): void {
                 : ['enabled' => false, 'deletedDocIds' => [], 'deletedAssetPaths' => []],
             JSON_UNESCAPED_SLASHES
         );
-        $uploadId = generate_upload_id();
-        $stmt = $pdo->prepare('INSERT INTO share_uploads (upload_id, user_id, share_id, type, doc_id, slug, title, password_hash, expires_at, visitor_limit, asset_manifest, doc_manifest, upload_mode, patch_manifest, status, created_at, updated_at)
-            VALUES (:upload_id, :user_id, :share_id, "doc", :doc_id, :slug, :title, :password_hash, :expires_at, :visitor_limit, :asset_manifest, :doc_manifest, :upload_mode, :patch_manifest, "pending", :created_at, :updated_at)');
-        $stmt->execute([
-            ':upload_id' => $uploadId,
-            ':user_id' => $user['id'],
-            ':share_id' => $existing ? (int)$existing['id'] : null,
-            ':doc_id' => $docId,
-            ':slug' => $finalSlug,
-            ':title' => $finalTitle,
-            ':password_hash' => $passwordHash,
-            ':expires_at' => $expiresValue,
-            ':visitor_limit' => $visitorValue,
-            ':asset_manifest' => json_encode($assets, JSON_UNESCAPED_SLASHES),
-            ':doc_manifest' => json_encode($docChunks, JSON_UNESCAPED_SLASHES),
-            ':upload_mode' => $uploadMode,
-            ':patch_manifest' => $patchManifest,
-            ':created_at' => now(),
-            ':updated_at' => now(),
-        ]);
-        $insertDoc = $pdo->prepare('INSERT INTO share_upload_docs (upload_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, content_hash, meta_hash, created_at, updated_at)
-            VALUES (:upload_id, :doc_id, :title, :icon, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :content_hash, :meta_hash, :created_at, :updated_at)');
-        foreach ($docRows as $row) {
-            $insertDoc->execute([
-                ':upload_id' => $uploadId,
-                ':doc_id' => $row['docId'],
-                ':title' => $row['title'],
-                ':icon' => $row['icon'] !== '' ? $row['icon'] : null,
-                ':hpath' => $row['hPath'],
-                ':parent_id' => $row['parentId'] !== '' ? $row['parentId'] : null,
-                ':sort_index' => $row['sortIndex'],
-                ':markdown' => $row['markdown'],
-                ':sort_order' => $row['sortOrder'],
-                ':size_bytes' => $row['size'],
-                ':content_hash' => normalize_hash_hex($row['contentHash'] ?? ''),
-                ':meta_hash' => normalize_hash_hex($row['metaHash'] ?? ''),
-                ':created_at' => now(),
-                ':updated_at' => now(),
-            ]);
-        }
+        $uploadId = create_upload_session($user, $existing, [
+            'type' => 'doc', 'doc_id' => $docId,
+            'slug' => $finalSlug, 'title' => $finalTitle, 'password_hash' => $passwordHash,
+            'expires_at' => $expiresValue, 'visitor_limit' => $visitorValue,
+            'upload_mode' => $uploadMode, 'patch_manifest' => $patchManifest,
+        ], $docRows, $assets, $docChunks);
         api_response(200, ['uploadId' => $uploadId, 'slug' => $finalSlug]);
     }
 
@@ -661,46 +629,12 @@ function handle_api(string $path): void {
                 : ['enabled' => false, 'deletedDocIds' => [], 'deletedAssetPaths' => []],
             JSON_UNESCAPED_SLASHES
         );
-        $uploadId = generate_upload_id();
-        $stmt = $pdo->prepare('INSERT INTO share_uploads (upload_id, user_id, share_id, type, notebook_id, slug, title, password_hash, expires_at, visitor_limit, asset_manifest, doc_manifest, upload_mode, patch_manifest, status, created_at, updated_at)
-            VALUES (:upload_id, :user_id, :share_id, "notebook", :notebook_id, :slug, :title, :password_hash, :expires_at, :visitor_limit, :asset_manifest, :doc_manifest, :upload_mode, :patch_manifest, "pending", :created_at, :updated_at)');
-        $stmt->execute([
-            ':upload_id' => $uploadId,
-            ':user_id' => $user['id'],
-            ':share_id' => $existing ? (int)$existing['id'] : null,
-            ':notebook_id' => $notebookId,
-            ':slug' => $finalSlug,
-            ':title' => $finalTitle,
-            ':password_hash' => $passwordHash,
-            ':expires_at' => $expiresValue,
-            ':visitor_limit' => $visitorValue,
-            ':asset_manifest' => json_encode($assets, JSON_UNESCAPED_SLASHES),
-            ':doc_manifest' => json_encode($docChunks, JSON_UNESCAPED_SLASHES),
-            ':upload_mode' => $uploadMode,
-            ':patch_manifest' => $patchManifest,
-            ':created_at' => now(),
-            ':updated_at' => now(),
-        ]);
-        $stmt = $pdo->prepare('INSERT INTO share_upload_docs (upload_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, content_hash, meta_hash, created_at, updated_at)
-            VALUES (:upload_id, :doc_id, :title, :icon, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :content_hash, :meta_hash, :created_at, :updated_at)');
-        foreach ($docRows as $row) {
-            $stmt->execute([
-                ':upload_id' => $uploadId,
-                ':doc_id' => $row['docId'],
-                ':title' => $row['title'],
-                ':icon' => $row['icon'] !== '' ? $row['icon'] : null,
-                ':hpath' => $row['hPath'],
-                ':parent_id' => $row['parentId'] !== '' ? $row['parentId'] : null,
-                ':sort_index' => $row['sortIndex'],
-                ':markdown' => $row['markdown'],
-                ':sort_order' => $row['sortOrder'],
-                ':size_bytes' => $row['size'],
-                ':content_hash' => normalize_hash_hex($row['contentHash'] ?? ''),
-                ':meta_hash' => normalize_hash_hex($row['metaHash'] ?? ''),
-                ':created_at' => now(),
-                ':updated_at' => now(),
-            ]);
-        }
+        $uploadId = create_upload_session($user, $existing, [
+            'type' => 'notebook', 'notebook_id' => $notebookId,
+            'slug' => $finalSlug, 'title' => $finalTitle, 'password_hash' => $passwordHash,
+            'expires_at' => $expiresValue, 'visitor_limit' => $visitorValue,
+            'upload_mode' => $uploadMode, 'patch_manifest' => $patchManifest,
+        ], $docRows, $assets, $docChunks);
         api_response(200, ['uploadId' => $uploadId, 'slug' => $finalSlug]);
     }
 
@@ -713,6 +647,7 @@ function handle_api(string $path): void {
         if ($uploadId === '' || $assetPath === '' || $chunkIndex < 0 || $totalChunks <= 0 || $chunkIndex >= $totalChunks) {
             api_response(400, null, 'Invalid chunk request');
         }
+        $uploadLock = lock_upload_session($uploadId);
         $check = $pdo->prepare('SELECT * FROM share_uploads WHERE upload_id = :upload_id AND user_id = :uid AND status = "pending" LIMIT 1');
         $check->execute([
             ':upload_id' => $uploadId,
@@ -769,9 +704,24 @@ function handle_api(string $path): void {
             api_response(400, null, 'Invalid chunk upload');
         }
 
+        $expectedSize = max(0, (int)($manifestItem['size'] ?? 0));
+        if ($totalChunks > max(1, (int)ceil($expectedSize / max(1, $minChunk)))
+            || $chunkSize > $expectedSize) api_response(413, null, 'Chunk exceeds declared asset size');
+        try { require_upload_space($chunkSize); }
+        catch (RuntimeException $error) { api_response(413, null, $error->getMessage()); }
         $chunkDir = upload_chunks_dir($uploadId);
         $chunkPath = $chunkDir . '/' . $assetPath . '.part' . $chunkIndex;
         ensure_dir(dirname($chunkPath));
+        $stored = 0;
+        $partPrefix = basename($assetPath) . '.part';
+        foreach (new DirectoryIterator(dirname($chunkPath)) as $partFile) {
+            $name = $partFile->getFilename();
+            if ($partFile->isFile() && str_starts_with($name, $partPrefix)
+                && ctype_digit(substr($name, strlen($partPrefix)))) $stored += $partFile->getSize();
+        }
+        if ($stored - (is_file($chunkPath) ? (int)filesize($chunkPath) : 0) + $chunkSize > $expectedSize) {
+            api_response(413, null, 'Chunks exceed declared asset size');
+        }
         if (!move_uploaded_file($tmp, $chunkPath)) {
             api_response(500, null, 'Chunk save failed');
         }
@@ -806,17 +756,16 @@ function handle_api(string $path): void {
                     fclose($out);
                     api_response(500, null, 'Failed to read chunk');
                 }
-                while (!feof($in)) {
-                    $buffer = fread($in, 1048576);
-                    if ($buffer === false) {
-                        break;
-                    }
-                    fwrite($out, $buffer);
-                }
+                $copied = stream_copy_to_stream($in, $out);
                 fclose($in);
-                @unlink($part);
+                if ($copied === false || $copied !== filesize($part)) {
+                    fclose($out);
+                    @unlink($targetFile);
+                    api_response(500, null, 'Chunk assembly failed');
+                }
             }
-            fclose($out);
+            if (!fclose($out)) api_response(500, null, 'Chunk flush failed');
+            for ($i = 0; $i < $totalChunks; $i++) @unlink($chunkDir . '/' . $assetPath . '.part' . $i);
             $complete = true;
         }
         $stmt = $pdo->prepare('UPDATE share_uploads SET updated_at = :updated_at WHERE upload_id = :upload_id');
@@ -833,6 +782,7 @@ function handle_api(string $path): void {
         if ($uploadId === '') {
             api_response(400, null, 'Missing upload id');
         }
+        $uploadLock = lock_upload_session($uploadId);
         $stmt = $pdo->prepare('SELECT * FROM share_uploads WHERE upload_id = :upload_id AND user_id = :uid AND status = "pending" LIMIT 1');
         $stmt->execute([
             ':upload_id' => $uploadId,
@@ -854,7 +804,6 @@ function handle_api(string $path): void {
         $docStmt->execute([':upload_id' => $uploadId]);
         $docRows = [];
         $docSizeTotal = 0;
-        $chunkFilesToClean = [];
         while ($row = $docStmt->fetch(PDO::FETCH_ASSOC)) {
             $docIdKey = trim((string)($row['doc_id'] ?? ''));
             $docTitle = (string)($row['title'] ?? '');
@@ -889,7 +838,6 @@ function handle_api(string $path): void {
                     }
                 }
                 $chunkFilePath = $fullChunkPath;
-                $chunkFilesToClean[] = $fullChunkPath;
 
             } else {
 
@@ -956,12 +904,12 @@ function handle_api(string $path): void {
                 api_response(400, null, 'Missing asset: ' . $path);
             }
             $size = (int)filesize($full);
+            if ($size !== (int)$item['size']) api_response(400, null, 'Asset size mismatch: ' . $path);
             $assetSizeTotal += $size;
             $assetHash = normalize_hash_hex($item['hash'] ?? '');
-            if ($assetHash === '') {
-                $computed = @hash_file('sha256', $full);
-                $assetHash = normalize_hash_hex($computed ?: '');
-            }
+            $computed = normalize_hash_hex(hash_file('sha256', $full));
+            if ($assetHash !== '' && $assetHash !== $computed) api_response(400, null, 'Asset hash mismatch: ' . $path);
+            $assetHash = $computed;
             $manifestEntries[] = [
                 'path' => $path,
                 'docId' => isset($item['docId']) ? trim((string)$item['docId']) : null,
@@ -1102,10 +1050,29 @@ function handle_api(string $path): void {
         $docId = trim((string)($upload['doc_id'] ?? ''));
         $notebookId = trim((string)($upload['notebook_id'] ?? ''));
 
-        $pdo->beginTransaction();
+        $fileWrite = new ShareFileWrite($pdo);
         try {
             if ($share) {
-                $update = $pdo->prepare('UPDATE shares SET title = :title, slug = :slug, password_hash = :password_hash, expires_at = :expires_at, visitor_limit = :visitor_limit, updated_at = :updated_at, deleted_at = NULL WHERE id = :id');
+                $fresh = $pdo->prepare('SELECT * FROM shares WHERE id = ? AND user_id = ?');
+                $fresh->execute([$shareId, $user['id']]);
+                $current = $fresh->fetch(PDO::FETCH_ASSOC);
+                if (!$current || (int)$current['revision'] !== (int)$upload['share_revision']) {
+                    throw new RuntimeException('Share changed during upload; restart the upload', 409);
+                }
+                $share = $current;
+            } else {
+                $sameRoot = $pdo->prepare('SELECT 1 FROM shares WHERE user_id = ? AND type = ? AND ' . ($type === 'doc' ? 'doc_id' : 'notebook_id') . ' = ? LIMIT 1');
+                $sameRoot->execute([$user['id'], $type, $type === 'doc' ? $docId : $notebookId]);
+                if ($sameRoot->fetchColumn()) throw new RuntimeException('Share was created during upload; restart the upload', 409);
+            }
+            $currentUsed = recalculate_user_storage((int)$user['id']);
+            $replacementSize = $uploadMode === 'full' ? $newShareSize : $projectedSize;
+            if ($limit > 0 && max(0, $currentUsed - $existingSize) + $replacementSize > $limit) {
+                throw new RuntimeException('Storage limit reached', 413);
+            }
+            if ($share) {
+                $fileWrite->rememberShare($shareId);
+                $update = $pdo->prepare('UPDATE shares SET revision = revision + 1, title = :title, slug = :slug, password_hash = :password_hash, expires_at = :expires_at, visitor_limit = :visitor_limit, updated_at = :updated_at, deleted_at = NULL WHERE id = :id');
                 $update->execute([
                     ':title' => $title !== '' ? $title : ($share['title'] ?? $slug),
                     ':slug' => $slug,
@@ -1117,8 +1084,7 @@ function handle_api(string $path): void {
                 ]);
                 $shareId = (int)$share['id'];
                 if ($uploadMode === 'full') {
-                    purge_share_assets($shareId);
-                    purge_share_chunks($shareId);
+                    $pdo->prepare('DELETE FROM share_assets WHERE share_id = ?')->execute([$shareId]);
                     $pdo->prepare('DELETE FROM share_docs WHERE share_id = :share_id')->execute([':share_id' => $shareId]);
                 }
             } else {
@@ -1160,8 +1126,10 @@ function handle_api(string $path): void {
                 }
             }
 
-            $targetDir = $config['uploads_dir'] . '/shares/' . $shareId;
-            ensure_dir($targetDir);
+            $assetFiles = [];
+            foreach ($manifestEntries as $entry) {
+                $assetFiles[$entry['path']] = $fileWrite->stage($stagingDir . '/' . $entry['path'], $shareId, $entry['path']);
+            }
             if ($uploadMode === 'full') {
                 $insertDoc = $pdo->prepare('INSERT INTO share_docs (share_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, content_hash, meta_hash, created_at, updated_at)
                     VALUES (:share_id, :doc_id, :title, :icon, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :content_hash, :meta_hash, :created_at, :updated_at)');
@@ -1169,7 +1137,8 @@ function handle_api(string $path): void {
                 foreach ($docRows as $row) {
                     $docMarkdown = '';
                     if (!empty($row['_chunk_file']) && is_file($row['_chunk_file'])) {
-                        $docMarkdown = (string)@file_get_contents($row['_chunk_file']);
+                        $docMarkdown = file_get_contents($row['_chunk_file']);
+                        if ($docMarkdown === false) throw new RuntimeException('Document staging read failed');
                     } else {
                         $fetchMdStmt->execute([':id' => (int)$row['_upload_row_id']]);
                         $docMarkdown = (string)($fetchMdStmt->fetchColumn() ?: '');
@@ -1192,14 +1161,6 @@ function handle_api(string $path): void {
                     ]);
                     unset($docMarkdown);
                 }
-                foreach ($chunkFilesToClean as $cf) {
-                    if (is_file($cf)) {
-                        @unlink($cf);
-                    }
-                }
-                if (is_dir($stagingDir)) {
-                    move_dir($stagingDir, $targetDir);
-                }
                 if (!empty($manifestEntries)) {
                     $assetStmt = $pdo->prepare('INSERT OR REPLACE INTO share_assets (share_id, doc_id, asset_path, file_path, size_bytes, asset_hash, created_at)
                         VALUES (:share_id, :doc_id, :asset_path, :file_path, :size_bytes, :asset_hash, :created_at)');
@@ -1208,7 +1169,7 @@ function handle_api(string $path): void {
                             ':share_id' => $shareId,
                             ':doc_id' => $entry['docId'] !== '' ? $entry['docId'] : null,
                             ':asset_path' => $entry['path'],
-                            ':file_path' => 'shares/' . $shareId . '/' . $entry['path'],
+                            ':file_path' => $assetFiles[$entry['path']],
                             ':size_bytes' => $entry['size'],
                             ':asset_hash' => normalize_hash_hex($entry['hash'] ?? ''),
                             ':created_at' => now(),
@@ -1242,7 +1203,8 @@ function handle_api(string $path): void {
                     }
                     $docMarkdown = '';
                     if (!empty($row['_chunk_file']) && is_file($row['_chunk_file'])) {
-                        $docMarkdown = (string)@file_get_contents($row['_chunk_file']);
+                        $docMarkdown = file_get_contents($row['_chunk_file']);
+                        if ($docMarkdown === false) throw new RuntimeException('Document staging read failed');
                     } else {
                         $fetchMdStmt2->execute([':id' => (int)$row['_upload_row_id']]);
                         $docMarkdown = (string)($fetchMdStmt2->fetchColumn() ?: '');
@@ -1277,25 +1239,11 @@ function handle_api(string $path): void {
                         ]));
                     }
                 }
-                foreach ($chunkFilesToClean as $cf) {
-                    if (is_file($cf)) {
-                        @unlink($cf);
-                    }
-                }
 
                 if (!empty($deletedAssetPaths)) {
                     $placeholders = implode(',', array_fill(0, count($deletedAssetPaths), '?'));
                     $params = $deletedAssetPaths;
                     array_unshift($params, $shareId);
-                    $select = $pdo->prepare('SELECT file_path FROM share_assets WHERE share_id = ? AND asset_path IN (' . $placeholders . ')');
-                    $select->execute($params);
-                    $files = $select->fetchAll(PDO::FETCH_COLUMN);
-                    foreach ($files as $filePath) {
-                        $fullPath = $config['uploads_dir'] . '/' . ltrim((string)$filePath, '/');
-                        if ($fullPath !== '' && is_file($fullPath)) {
-                            @unlink($fullPath);
-                        }
-                    }
                     $deleteAsset = $pdo->prepare('DELETE FROM share_assets WHERE share_id = ? AND asset_path IN (' . $placeholders . ')');
                     $deleteAsset->execute($params);
                 }
@@ -1304,23 +1252,11 @@ function handle_api(string $path): void {
                     $assetStmt = $pdo->prepare('INSERT OR REPLACE INTO share_assets (share_id, doc_id, asset_path, file_path, size_bytes, asset_hash, created_at)
                         VALUES (:share_id, :doc_id, :asset_path, :file_path, :size_bytes, :asset_hash, :created_at)');
                     foreach ($manifestEntries as $entry) {
-                        $source = $stagingDir . '/' . $entry['path'];
-                        if (!is_file($source)) {
-                            continue;
-                        }
-                        $targetFile = $targetDir . '/' . $entry['path'];
-                        ensure_dir(dirname($targetFile));
-                        if (!@rename($source, $targetFile)) {
-                            if (!@copy($source, $targetFile)) {
-                                continue;
-                            }
-                            @unlink($source);
-                        }
                         $assetStmt->execute([
                             ':share_id' => $shareId,
                             ':doc_id' => $entry['docId'] !== '' ? $entry['docId'] : null,
                             ':asset_path' => $entry['path'],
-                            ':file_path' => 'shares/' . $shareId . '/' . $entry['path'],
+                            ':file_path' => $assetFiles[$entry['path']],
                             ':size_bytes' => $entry['size'],
                             ':asset_hash' => normalize_hash_hex($entry['hash'] ?? ''),
                             ':created_at' => now(),
@@ -1332,18 +1268,12 @@ function handle_api(string $path): void {
 
             $pdo->prepare('DELETE FROM share_upload_docs WHERE upload_id = :upload_id')->execute([':upload_id' => $uploadId]);
             $pdo->prepare('DELETE FROM share_uploads WHERE upload_id = :upload_id')->execute([':upload_id' => $uploadId]);
-            $pdo->commit();
-            foreach ($chunkFilesToClean as $chunkFile) {
-                if (is_file($chunkFile)) {
-                    @unlink($chunkFile);
-                }
-            }
+            $fileWrite->commit();
         } catch (Throwable $e) {
-            if ($pdo->inTransaction()) {
-                $pdo->rollBack();
-            }
+            $fileWrite->rollback();
             error_log('Upload finalize failed for uploadId=' . $uploadId . ': ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
-            api_response(500, null, 'Upload finalize failed: ' . $e->getMessage());
+            $status = in_array($e->getCode(), [409, 413], true) ? $e->getCode() : 500;
+            api_response($status, null, $status === 500 ? 'Upload finalize failed' : $e->getMessage());
         }
 
         purge_upload_session_files($uploadId);
@@ -1361,6 +1291,7 @@ function handle_api(string $path): void {
         if ($uploadId === '') {
             api_response(400, null, 'Missing upload id');
         }
+        $uploadLock = lock_upload_session($uploadId);
         $stmt = $pdo->prepare('SELECT id FROM share_uploads WHERE upload_id = :upload_id AND user_id = :uid LIMIT 1');
         $stmt->execute([
             ':upload_id' => $uploadId,
@@ -1483,6 +1414,8 @@ function handle_api(string $path): void {
                 'metaHash' => $docMetaHash,
             ];
         }
+        $fileWrite = new ShareFileWrite($pdo);
+        try {
         $baseShareSize = $docSizeTotal + $assetSize;
         $stmt = $pdo->prepare('SELECT * FROM shares WHERE user_id = :uid AND type = "doc" AND doc_id = :doc_id ORDER BY id DESC LIMIT 1');
         $stmt->execute([':uid' => $user['id'], ':doc_id' => $docId]);
@@ -1520,7 +1453,7 @@ function handle_api(string $path): void {
                 ensure_share_slug_available_or_fail($pdo, $slug, (int)$existing['id']);
             }
             $newSlug = $slug ?: $existing['slug'];
-            $stmt = $pdo->prepare('UPDATE shares SET title = :title, slug = :slug, password_hash = :password_hash, expires_at = :expires_at, visitor_limit = :visitor_limit, updated_at = :updated_at, deleted_at = NULL WHERE id = :id');
+            $stmt = $pdo->prepare('UPDATE shares SET revision = revision + 1, title = :title, slug = :slug, password_hash = :password_hash, expires_at = :expires_at, visitor_limit = :visitor_limit, updated_at = :updated_at, deleted_at = NULL WHERE id = :id');
             $stmt->execute([
                 ':title' => $title ?: $existing['title'],
                 ':slug' => $newSlug,
@@ -1573,7 +1506,8 @@ function handle_api(string $path): void {
         }
 
         if ($existing) {
-            purge_share_assets($shareId);
+            $fileWrite->rememberShare($shareId);
+            $pdo->prepare('DELETE FROM share_assets WHERE share_id = ?')->execute([$shareId]);
         }
 
         $pdo->prepare('DELETE FROM share_docs WHERE share_id = :share_id')->execute([':share_id' => $shareId]);
@@ -1598,7 +1532,7 @@ function handle_api(string $path): void {
             ]);
         }
 
-        $actualAssets = handle_asset_uploads($shareId, $entries);
+        $actualAssets = handle_asset_uploads($shareId, $entries, $fileWrite);
         $finalSize = $docSizeTotal + $actualAssets;
         $stmt = $pdo->prepare('UPDATE shares SET size_bytes = :size_bytes, updated_at = :updated_at WHERE id = :id');
         $stmt->execute([
@@ -1607,6 +1541,13 @@ function handle_api(string $path): void {
             ':id' => $shareId,
         ]);
         recalculate_user_storage((int)$user['id']);
+
+        $fileWrite->commit();
+        } catch (Throwable $error) {
+            $fileWrite->rollback();
+            error_log('Direct upload failed: ' . $error->getMessage());
+            api_response(500, null, 'Upload failed; previous share preserved');
+        }
 
         api_response(200, ['share' => [
             'id' => $shareId,
@@ -1692,6 +1633,8 @@ function handle_api(string $path): void {
         if (empty($docRows)) {
             api_response(400, null, '没有可用的文档');
         }
+        $fileWrite = new ShareFileWrite($pdo);
+        try {
         $baseShareSize = $docSizeTotal + $assetSize;
         $stmt = $pdo->prepare('SELECT * FROM shares WHERE user_id = :uid AND type = "notebook" AND notebook_id = :nid ORDER BY id DESC LIMIT 1');
         $stmt->execute([':uid' => $user['id'], ':nid' => $notebookId]);
@@ -1729,7 +1672,7 @@ function handle_api(string $path): void {
                 ensure_share_slug_available_or_fail($pdo, $slug, (int)$existing['id']);
             }
             $newSlug = $slug ?: $existing['slug'];
-            $stmt = $pdo->prepare('UPDATE shares SET title = :title, slug = :slug, password_hash = :password_hash, expires_at = :expires_at, visitor_limit = :visitor_limit, updated_at = :updated_at, deleted_at = NULL WHERE id = :id');
+            $stmt = $pdo->prepare('UPDATE shares SET revision = revision + 1, title = :title, slug = :slug, password_hash = :password_hash, expires_at = :expires_at, visitor_limit = :visitor_limit, updated_at = :updated_at, deleted_at = NULL WHERE id = :id');
             $stmt->execute([
                 ':title' => $title ?: $existing['title'],
                 ':slug' => $newSlug,
@@ -1782,7 +1725,8 @@ function handle_api(string $path): void {
         }
 
         if ($existing) {
-            purge_share_assets($shareId);
+            $fileWrite->rememberShare($shareId);
+            $pdo->prepare('DELETE FROM share_assets WHERE share_id = ?')->execute([$shareId]);
         }
 
         $pdo->prepare('DELETE FROM share_docs WHERE share_id = :share_id')->execute([':share_id' => $shareId]);
@@ -1807,7 +1751,7 @@ function handle_api(string $path): void {
             ]);
         }
 
-        $actualAssets = handle_asset_uploads($shareId, $entries);
+        $actualAssets = handle_asset_uploads($shareId, $entries, $fileWrite);
         $finalSize = $docSizeTotal + $actualAssets;
         $stmt = $pdo->prepare('UPDATE shares SET size_bytes = :size_bytes, updated_at = :updated_at WHERE id = :id');
         $stmt->execute([
@@ -1816,6 +1760,13 @@ function handle_api(string $path): void {
             ':id' => $shareId,
         ]);
         recalculate_user_storage((int)$user['id']);
+
+        $fileWrite->commit();
+        } catch (Throwable $error) {
+            $fileWrite->rollback();
+            error_log('Direct upload failed: ' . $error->getMessage());
+            api_response(500, null, 'Upload failed; previous share preserved');
+        }
 
         api_response(200, ['share' => [
             'id' => $shareId,

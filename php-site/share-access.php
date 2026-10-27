@@ -136,3 +136,35 @@ function register_share_visitor(int $shareId, string $visitorId): void {
         ':created_at' => now(),
     ]);
 }
+
+/** Reserve a reader slot under the same write lock that checks the current limit. */
+function share_has_current_read_access(array $share): bool {
+    if (share_is_expired($share)) return false;
+    if (!share_requires_password($share)) return true;
+    $entry = $_SESSION['share_access'][(int)$share['id']] ?? '';
+    $token = is_array($entry) ? ($entry['token'] ?? '') : $entry;
+    return is_string($token) && hash_equals(share_access_signature((string)$share['password_hash']), $token);
+}
+
+function admit_share_visitor(int $shareId): bool {
+    $pdo = db();
+    $share = find_share_by_id($shareId);
+    if (!$share || !share_has_current_read_access($share)) return false;
+    // Unlimited shares remain read-only. Limited shares re-read after taking the write lock.
+    if (share_visitor_limit($share) === 0) return true;
+    $visitorId = get_visitor_id();
+    $pdo->exec('BEGIN IMMEDIATE');
+    try {
+        $share = find_share_by_id($shareId);
+        $allowed = $share && share_has_current_read_access($share);
+        if ($allowed && share_visitor_limit($share) > 0) {
+            $allowed = !share_visitor_limit_reached($share);
+            if ($allowed) register_share_visitor($shareId, $visitorId);
+        }
+        $pdo->exec('COMMIT');
+        return (bool)$allowed;
+    } catch (Throwable $error) {
+        $pdo->exec('ROLLBACK');
+        throw $error;
+    }
+}

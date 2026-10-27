@@ -3,8 +3,8 @@ declare(strict_types=1);
 
 // Attachment storage, upload staging, chunk cleanup and sync metadata.
 function ensure_dir(string $path): void {
-    if (!is_dir($path)) {
-        mkdir($path, 0775, true);
+    if (!is_dir($path) && !@mkdir($path, 0775, true) && !is_dir($path)) {
+        throw new RuntimeException('Unable to create storage directory');
     }
 }
 
@@ -34,30 +34,27 @@ function move_dir(string $source, string $target): bool {
     if (!is_dir($source)) {
         return false;
     }
-    if (is_dir($target)) {
-        remove_dir($target);
-    }
+    if (file_exists($target)) return false;
     ensure_dir(dirname($target));
     if (@rename($source, $target)) {
         return true;
     }
     ensure_dir($target);
-    $items = scandir($source);
-    if ($items === false) {
-        return false;
-    }
-    foreach ($items as $item) {
-        if ($item === '.' || $item === '..') {
-            continue;
+    $copy = function (string $from, string $to) use (&$copy): bool {
+        $items = scandir($from);
+        if ($items === false) return false;
+        foreach ($items as $item) {
+            if ($item === '.' || $item === '..') continue;
+            $src = $from . DIRECTORY_SEPARATOR . $item;
+            $dst = $to . DIRECTORY_SEPARATOR . $item;
+            if (is_dir($src)) {
+                ensure_dir($dst);
+                if (!$copy($src, $dst)) return false;
+            } elseif (!@copy($src, $dst) || hash_file('sha256', $src) !== hash_file('sha256', $dst)) return false;
         }
-        $src = $source . DIRECTORY_SEPARATOR . $item;
-        $dst = $target . DIRECTORY_SEPARATOR . $item;
-        if (is_dir($src)) {
-            move_dir($src, $dst);
-        } else {
-            @copy($src, $dst);
-        }
-    }
+        return true;
+    };
+    if (!$copy($source, $target)) return false;
     remove_dir($source);
     return true;
 }
@@ -127,6 +124,12 @@ function cleanup_stale_dirs(string $base, int $ttl, int $limit): void {
         if (!is_dir($path)) {
             continue;
         }
+        // Session-aware cleanup owns these directories and honors in-flight request locks.
+        if (sanitize_upload_id($dir) !== '') {
+            $check = db()->prepare('SELECT 1 FROM share_uploads WHERE upload_id = ?');
+            $check->execute([$dir]);
+            if ($check->fetchColumn()) continue;
+        }
         $mtime = latest_mtime($path);
         if ($mtime <= 0 || ($now - $mtime) < $ttl) {
             continue;
@@ -139,16 +142,18 @@ function cleanup_stale_dirs(string $base, int $ttl, int $limit): void {
     }
 }
 
-function maybe_cleanup_chunks(): void {
+function maybe_cleanup_chunks(bool $force = false): void {
     global $config;
     [$ttl, $prob, $limit] = chunk_cleanup_settings();
-    if ($prob <= 0 || $ttl <= 0 || $limit <= 0) {
+    if ((!$force && $prob <= 0) || $ttl <= 0 || $limit <= 0) {
         return;
     }
     $rand = mt_rand() / mt_getrandmax();
-    if ($rand > $prob) {
+    if (!$force && $rand > $prob) {
         return;
     }
+    cleanup_stale_uploads($ttl, $limit);
+    cleanup_asset_generations($ttl, $limit);
     cleanup_stale_dirs($config['uploads_dir'] . '/chunks', $ttl, $limit);
     cleanup_stale_dirs($config['uploads_dir'] . '/staging', $ttl, $limit);
 }
@@ -266,7 +271,7 @@ function hard_delete_share(int $shareId): ?int {
     return $userId;
 }
 
-function handle_asset_uploads(int $shareId, array $entries): int {
+function handle_asset_uploads(int $shareId, array $entries, ShareFileWrite $write): int {
     global $config;
     if (empty($entries)) {
         return 0;
@@ -280,19 +285,15 @@ function handle_asset_uploads(int $shareId, array $entries): int {
         $assetPath = trim(str_replace('\\', '/', $assetPath));
         $assetPath = ltrim($assetPath, '/');
         if ($assetPath === '' || substr($assetPath, -1) === '/') {
-            continue;
+            throw new RuntimeException('Invalid attachment path');
         }
         if (!is_uploaded_file($tmp)) {
-            continue;
+            throw new RuntimeException('Invalid attachment upload');
         }
         $docId = $entry['docId'] ?? null;
         $size = (int)($entry['size'] ?? 0);
-        $targetDir = $config['uploads_dir'] . '/shares/' . $shareId . '/' . dirname($assetPath);
-        ensure_dir($targetDir);
-        $targetFile = $config['uploads_dir'] . '/shares/' . $shareId . '/' . $assetPath;
-        if (!move_uploaded_file($tmp, $targetFile)) {
-            continue;
-        }
+        $filePath = $write->stage($tmp, $shareId, $assetPath, true);
+        $targetFile = $config['uploads_dir'] . '/' . $filePath;
         $actualSize = $size;
         if ($actualSize <= 0 && is_file($targetFile)) {
             $actualSize = (int)filesize($targetFile);
@@ -309,7 +310,7 @@ function handle_asset_uploads(int $shareId, array $entries): int {
             ':share_id' => $shareId,
             ':doc_id' => $docId,
             ':asset_path' => $assetPath,
-            ':file_path' => 'shares/' . $shareId . '/' . $assetPath,
+            ':file_path' => $filePath,
             ':size_bytes' => $actualSize,
             ':asset_hash' => $assetHash !== '' ? $assetHash : null,
             ':created_at' => now(),

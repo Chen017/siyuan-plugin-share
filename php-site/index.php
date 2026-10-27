@@ -51,6 +51,7 @@ require_once __DIR__ . '/pdf-export.php';
 require_once __DIR__ . '/legacy-cleanup.php';
 require_once __DIR__ . '/database.php';
 require_once __DIR__ . '/storage.php';
+require_once __DIR__ . '/upload-safety.php';
 require_once __DIR__ . '/sync.php';
 require_once __DIR__ . '/markdown.php';
 require_once __DIR__ . '/share-access.php';
@@ -506,6 +507,9 @@ function render_share_not_found_page(): void {
     render_page('分享不存在', $content, null);
 }
 
+const SHARE_SLUG_MIN_LENGTH = 6;
+const SHARE_SLUG_MAX_LENGTH = 32;
+
 function sanitize_slug(string $slug): string {
     return strtolower(trim($slug));
 }
@@ -538,14 +542,14 @@ function share_slug_exists(PDO $pdo, string $slug, int $excludeShareId = 0): boo
         return false;
     }
     if ($excludeShareId > 0) {
-        $stmt = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL AND id != :id LIMIT 1');
+        $stmt = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND id != :id LIMIT 1');
         $stmt->execute([
             ':slug' => $slug,
             ':id' => $excludeShareId,
         ]);
         return !!$stmt->fetchColumn();
     }
-    $stmt = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug AND deleted_at IS NULL LIMIT 1');
+    $stmt = $pdo->prepare('SELECT id FROM shares WHERE slug = :slug LIMIT 1');
     $stmt->execute([':slug' => $slug]);
     return !!$stmt->fetchColumn();
 }
@@ -659,6 +663,9 @@ function handle_share_search(string $slug): void {
     $q = trim((string)($_GET['q'] ?? ''));
     if (mb_strlen($q) < 1) {
         api_response(200, ['results' => []]);
+    }
+    if (!admit_share_visitor((int)$share['id'])) {
+        api_response(403, null, 'Share access changed or the visitor limit was reached');
     }
     $pdo = db();
     $shareId = (int)$share['id'];

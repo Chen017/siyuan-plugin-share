@@ -25,6 +25,7 @@ import uuid
 from pdf_export import PdfExportTests
 from pdf_release import PdfReleaseTests
 from pdf_cookie import PdfCookieTests
+from selected_fixes import SelectedFixTests
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = """<?php
@@ -80,7 +81,7 @@ class Client:
         return self.request(path, {'csrf': match[1].decode(), **fields})
 
 
-class Regression(PdfCookieTests, PdfReleaseTests, PdfExportTests, unittest.TestCase):
+class Regression(SelectedFixTests, PdfCookieTests, PdfReleaseTests, PdfExportTests, unittest.TestCase):
     base = ''
     docker = False
     container = None

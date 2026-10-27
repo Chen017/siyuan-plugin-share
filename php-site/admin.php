@@ -187,7 +187,7 @@ if (in_array($path, ['/admin/share-delete', '/admin/share-restore', '/admin/shar
     if ($share) {
         if ($path === '/admin/share-hard-delete') hard_delete_share($id);
         else {
-            db()->prepare('UPDATE shares SET deleted_at = ?, updated_at = ? WHERE id = ?')->execute([$path === '/admin/share-delete' ? now() : null, now(), $id]);
+            db()->prepare('UPDATE shares SET revision = revision + 1, deleted_at = ?, updated_at = ? WHERE id = ?')->execute([$path === '/admin/share-delete' ? now() : null, now(), $id]);
             recalculate_user_storage((int)$share['user_id']);
         }
         flash('info', 'Share updated.');
