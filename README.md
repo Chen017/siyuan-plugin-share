@@ -6,12 +6,6 @@ Share SiYuan documents and notebooks through a web reader with passwords, expira
 
 Maintained by [Chen017](https://github.com/Chen017/siyuan-plugin-share), based on [b8l8u8e8/siyuan-plugin-share](https://github.com/b8l8u8e8/siyuan-plugin-share). Original copyright and the [MIT license](LICENSE) are retained.
 
-## What's changed
-
-- **Reader:** Source / Preview switching keeps the page in place. Footnotes open after a short hover, with controls to pin or dismiss the preview. Motion is brief and respects reduced-motion settings.
-- **Share administration:** Manage each share from the website, including its title, link, expiration, visitor limit and password. The list shows useful access and size details, and deleted shares can be restored or permanently removed.
-- **Settings:** The admin navigation and controls are streamlined; plugin connection details are tucked into Site settings, while storage limits remain available.
-
 ## Docker Compose
 
 Docker Engine and Docker Compose are required. Run from the repository root:
