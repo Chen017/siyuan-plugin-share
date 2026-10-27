@@ -6,6 +6,12 @@
 
 由 [Chen017](https://github.com/Chen017/siyuan-plugin-share) 维护，基于 [b8l8u8e8/siyuan-plugin-share](https://github.com/b8l8u8e8/siyuan-plugin-share)。保留原作者版权及 [MIT 许可证](LICENSE)。
 
+## 最近更新
+
+- **阅读体验：** 切换 Source / Preview 时页面位置保持稳定。鼠标悬停片刻即可预览脚注，也可以固定或关闭卡片。动效简短，并遵循减少动态效果设置。
+- **分享管理：** 可在网站后台管理每项分享的标题、链接、有效期、访客上限和密码。列表展示访问与大小信息；删除的分享可以恢复，也可以永久删除。
+- **网站设置：** 精简后台导航与控件布局；插件连接信息收纳在 Site settings 中，同时保留存储限制设置。
+
 ## Docker Compose 部署
 
 需要安装 Docker Engine 和 Docker Compose，在仓库根目录执行：
@@ -55,6 +61,8 @@ bash backup-volumes.sh siyuan-share-web "$PWD/backups"
 ```
 
 脚本短暂停止写入，保存配置、数据与回退镜像，校验解压文件哈希和 SQLite 完整性后恢复服务。妥善保存 `BACKUP_DIR` 对应目录及其 `VERIFIED` 标记。
+
+备份保留策略：只保留最新的一份已验证备份。新备份创建并验证成功后，手动删除旧备份；新备份验证失败时，保留原有备份。当前脚本不会自动清理旧备份。
 
 ```sh
 git pull --ff-only
