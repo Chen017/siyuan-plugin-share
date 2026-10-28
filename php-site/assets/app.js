@@ -126,6 +126,7 @@
       const input = document.querySelector("[data-share-search-input]");
       if (!input || document.querySelector("dialog[open], .image-viewer:not([hidden])")) return;
       event.preventDefault();
+      document.dispatchEvent(new Event("sps:reader-show-sidebar"));
       document.querySelector("[data-reader-show-tree]")?.click();
       if (!document.body.classList.contains("share-side-open") && matchMedia("(max-width: 960px)").matches) {
         document.querySelector("[data-share-drawer-open]")?.click();
@@ -300,18 +301,22 @@
     applyState();
   };
 
+  const positionedTreeDocuments = new WeakMap();
   const initDocTreeScroll = () => {
     const sidebar = document.querySelector(".kb-side-body");
     if (!sidebar) return;
     const active = sidebar.querySelector(".kb-tree-item.is-active");
-    if (!active) return;
+    if (!active || !sidebar.clientHeight || sidebar.closest('[hidden]')) return;
+    const documentKey = active.dataset.docId || active.getAttribute('href');
+    if (positionedTreeDocuments.get(sidebar) === documentKey) return;
+    positionedTreeDocuments.set(sidebar, documentKey);
     const sidebarRect = sidebar.getBoundingClientRect();
     const itemRect = active.getBoundingClientRect();
     if (itemRect.top >= sidebarRect.top && itemRect.bottom <= sidebarRect.bottom) {
       return;
     }
     const offset = itemRect.top - sidebarRect.top - sidebar.clientHeight / 3;
-    sidebar.scrollTo({top: sidebar.scrollTop + offset, behavior: scrollBehavior()});
+    sidebar.scrollTo({top: sidebar.scrollTop + offset, behavior: "auto"});
   };
 
   const initShareToc = () => {
@@ -504,8 +509,28 @@
         }
         return index;
       };
+      // A user's navigation scroll owns this pane until they scroll the article again.
+      let followingPaused = false;
+      const onPaneInput = () => { followingPaused = true; };
+      const onArticleInput = event => {
+        if (!container.contains(event.target)) followingPaused = false;
+      };
+      const onPaneKey = event => {
+        if (['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key)) followingPaused = true;
+      };
+      const onTocClick = event => {
+        if (event.target.closest('.share-toc-link')) followingPaused = false;
+      };
+      scrollBox.addEventListener('wheel', onPaneInput, {passive:true});
+      scrollBox.addEventListener('touchstart', onPaneInput, {passive:true});
+      scrollBox.addEventListener('pointerdown', onPaneInput);
+      scrollBox.addEventListener('keydown', onPaneKey);
+      scrollBox.addEventListener('click', onTocClick, true);
+      document.addEventListener('wheel', onArticleInput, {passive:true});
+      document.addEventListener('touchstart', onArticleInput, {passive:true});
+      document.addEventListener('keydown', onArticleInput);
       const ensureVisible = (element) => {
-        if (!scrollBox || !element) return;
+        if (!scrollBox || !element || followingPaused || !scrollBox.clientHeight || container.closest('[hidden]')) return;
         const box = scrollBox.getBoundingClientRect();
         const rect = element.getBoundingClientRect();
         if (rect.top >= box.top && rect.bottom <= box.bottom) {
@@ -514,7 +539,7 @@
         const offset = rect.top - box.top - 24;
         scrollBox.scrollTo({
           top: scrollBox.scrollTop + offset,
-          behavior: scrollBehavior(),
+          behavior: "auto",
         });
       };
       body.innerHTML = "";
@@ -764,18 +789,14 @@
         scrollOffset: 0,
         target: null,
       };
+      let lastActiveLink = null;
       const setActiveLink = (link) => {
-        body.querySelectorAll(".share-toc-link").forEach((item) => {
-          item.classList.remove("is-active");
-        });
-        body.querySelectorAll(".share-toc-row").forEach((row) => {
-          row.classList.remove("is-active");
-        });
-        if (link) {
-          link.classList.add("is-active");
-          const row = link.closest(".share-toc-row");
-          if (row) row.classList.add("is-active");
-        }
+        if (link === lastActiveLink) return;
+        lastActiveLink?.classList.remove('is-active');
+        lastActiveLink?.closest('.share-toc-row')?.classList.remove('is-active');
+        link?.classList.add('is-active');
+        link?.closest('.share-toc-row')?.classList.add('is-active');
+        lastActiveLink = link;
       };
       body.querySelectorAll(".share-toc-link").forEach((link) => {
         const href = link.getAttribute("href") || "";
@@ -1039,6 +1060,14 @@
       updateActiveByScroll();
 
       tocCleanupMap.set(container, () => {
+        scrollBox.removeEventListener('wheel', onPaneInput);
+        scrollBox.removeEventListener('touchstart', onPaneInput);
+        scrollBox.removeEventListener('pointerdown', onPaneInput);
+        scrollBox.removeEventListener('keydown', onPaneKey);
+        scrollBox.removeEventListener('click', onTocClick, true);
+        document.removeEventListener('wheel', onArticleInput);
+        document.removeEventListener('touchstart', onArticleInput);
+        document.removeEventListener('keydown', onArticleInput);
         scrollBox.removeEventListener("mousedown", onMouseDown);
         scrollBox.removeEventListener("mousemove", onMouseMove);
         scrollBox.removeEventListener("mouseup", stopDrag);
@@ -2557,12 +2586,25 @@
     if (!frame || frame.querySelector('[data-reader-sidebar-resizer]')) return;
     const desktop = window.matchMedia('(min-width: 961px)');
     const cookieName = 'sps_reader_sidebar_width';
-    const minimum = 220;
-    const limit = () => Math.max(minimum, Math.min(640, (frame.getBoundingClientRect().width || innerWidth) - 360));
+    const readCookie = name => document.cookie.split(';').map(part => part.trim()).find(part => part.startsWith(name + '='))?.slice(name.length + 1);
+    const saved = readCookie(cookieName);
+    let preference = /^\d{3}$/.test(saved || '') && Number(saved) >= 220 && Number(saved) <= 640 ? Number(saved) : null;
+    let collapsed = readCookie('sps_reader_sidebar_collapsed') === '1';
+    let minimum = 256;
+    let pointer = null, startPreference = null, startWidth = 0, rawWidth = null;
+    const number = value => Number.parseFloat(value) || 0;
+    const horizontalSpace = node => { const css = getComputedStyle(node); return number(css.paddingLeft) + number(css.paddingRight) + number(css.borderLeftWidth) + number(css.borderRightWidth); };
+    const measureMinimum = () => {
+      if (!desktop.matches || collapsed || pointer !== null) return;
+      const tabs = sidebar.querySelector('[data-share-tabs]');
+      if (!tabs?.getBoundingClientRect().width) return;
+      const buttons = [...tabs.querySelectorAll('.kb-side-tab, .kb-side-action')];
+      const required = buttons.reduce((sum, button) => sum + Math.max(button.scrollWidth, button.getBoundingClientRect().width, number(getComputedStyle(button).width)), 0);
+      const actions = tabs.querySelector('.kb-side-actions');
+      minimum = Math.ceil(Math.max(256, horizontalSpace(sidebar) + horizontalSpace(tabs) + required + (actions ? horizontalSpace(actions) : 0) + 8));
+    };
+    const limit = () => Math.max(minimum, Math.min(640, (frame.clientWidth || innerWidth) - 360));
     const clamp = width => Math.max(minimum, Math.min(limit(), width));
-    const saved = document.cookie.split(';').map(part => part.trim()).find(part => part.startsWith(cookieName + '='))?.slice(cookieName.length + 1);
-    let preference = /^\d{3}$/.test(saved || '') && Number(saved) >= minimum && Number(saved) <= 640 ? Number(saved) : null;
-    let pointer = null, startPreference = null;
     const divider = document.createElement('div');
     divider.className = 'reader-sidebar-resizer';
     divider.dataset.readerSidebarResizer = '';
@@ -2572,36 +2614,66 @@
     divider.setAttribute('aria-label', 'Document tree width');
     sidebar.id ||= 'reader-navigation';
     divider.setAttribute('aria-controls', sidebar.id);
-    divider.title = 'Drag to resize. Double-click or press Enter to reset.';
+    divider.title = 'Drag to resize; drag past the minimum to hide. Double-click or press Enter to reset.';
     frame.append(divider);
+    const reopen = document.createElement('button');
+    reopen.type = 'button'; reopen.className = 'reader-sidebar-reopen';
+    reopen.dataset.readerSidebarReopen = '';
+    reopen.setAttribute('aria-label', 'Show navigation');
+    reopen.setAttribute('aria-controls', sidebar.id);
+    reopen.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16m4-11 3 3-3 3"/></svg><span>Navigation</span>';
+    document.body.append(reopen);
     const current = () => Math.round(sidebar.getBoundingClientRect().width || preference || 256);
     const update = () => {
-      if (preference !== null) frame.style.setProperty('--sidebar-width', `${clamp(preference)}px`);
-      else frame.style.removeProperty('--sidebar-width');
+      frame.classList.toggle('reader-sidebar-collapsed', collapsed);
+      measureMinimum();
+      frame.style.setProperty('--sidebar-min-width', `${minimum}px`);
+      if (preference !== null) {
+        const value = `${clamp(preference)}px`;
+        if (frame.style.getPropertyValue('--sidebar-width') !== value) frame.style.setProperty('--sidebar-width', value);
+      } else frame.style.removeProperty('--sidebar-width');
+      const width = current();
       divider.setAttribute('aria-valuemin', String(minimum));
       divider.setAttribute('aria-valuemax', String(Math.round(limit())));
-      divider.setAttribute('aria-valuenow', String(current()));
-      divider.setAttribute('aria-valuetext', `${current()} pixels. Press Enter to reset.`);
-      divider.hidden = !desktop.matches;
+      divider.setAttribute('aria-valuenow', String(width));
+      divider.setAttribute('aria-valuetext', `${width} pixels. Drag further left to hide, or press Enter to reset.`);
+      divider.hidden = !desktop.matches || collapsed;
+      reopen.hidden = !desktop.matches || !collapsed;
+      reopen.setAttribute('aria-expanded', String(!collapsed));
+      if (desktop.matches) {
+        sidebar.inert = collapsed;
+        sidebar.setAttribute('aria-hidden', String(collapsed));
+      }
+    };
+    const writeCookie = (name, value) => {
+      document.cookie = `${name}=${value ?? ''}; Max-Age=${value === null ? 0 : 31536000}; Path=/; SameSite=Lax${location.protocol === 'https:' ? '; Secure' : ''}`;
     };
     const persist = () => {
-      document.cookie = `${cookieName}=${preference === null ? '' : Math.round(preference)}; Max-Age=${preference === null ? 0 : 31536000}; Path=/; SameSite=Lax${location.protocol === 'https:' ? '; Secure' : ''}`;
+      writeCookie(cookieName, preference === null ? null : Math.round(preference));
+      writeCookie('sps_reader_sidebar_collapsed', collapsed ? '1' : null);
     };
-    const reset = () => { preference = null; update(); persist(); };
+    const setCollapsed = (value, focus = false) => {
+      collapsed = value; update(); persist();
+      if (focus) (collapsed ? reopen : divider).focus({preventScroll:true});
+    };
+    const reset = () => { preference = null; collapsed = false; update(); persist(); };
     const finish = (cancel = false) => {
       if (pointer === null) return;
       const id = pointer; pointer = null;
+      const hide = !cancel && rawWidth !== null && rawWidth < minimum - 24;
       if (cancel) preference = startPreference;
-      divider.classList.remove('is-dragging');
+      if (hide) preference = startPreference ?? startWidth;
+      rawWidth = null;
+      divider.classList.remove('is-dragging', 'will-collapse');
       document.body.classList.remove('reader-is-resizing');
       if (divider.hasPointerCapture?.(id)) divider.releasePointerCapture(id);
-      update();
-      if (!cancel) persist();
+      if (hide) setCollapsed(true, true);
+      else { update(); if (!cancel) persist(); }
     };
     divider.addEventListener('pointerdown', event => {
       if (!desktop.matches || event.button !== 0 || event.isPrimary === false) return;
       event.preventDefault();
-      startPreference = preference; pointer = event.pointerId;
+      startPreference = preference; startWidth = current(); rawWidth = null; pointer = event.pointerId;
       divider.setPointerCapture?.(pointer);
       divider.classList.add('is-dragging');
       document.body.classList.add('reader-is-resizing');
@@ -2609,7 +2681,11 @@
     });
     divider.addEventListener('pointermove', event => {
       if (pointer !== event.pointerId) return;
-      preference = Math.round(clamp(event.clientX - frame.getBoundingClientRect().left - frame.clientLeft));
+      const bounds = frame.getBoundingClientRect();
+      rawWidth = event.clientX - bounds.left - frame.clientLeft;
+      divider.style.setProperty('--collapse-hint-y', `${Math.min(innerHeight - 44, Math.max(12, event.clientY + 12)) - bounds.top}px`);
+      preference = Math.round(clamp(rawWidth));
+      divider.classList.toggle('will-collapse', rawWidth < minimum - 24);
       update();
     });
     divider.addEventListener('pointerup', () => finish());
@@ -2622,13 +2698,22 @@
       if (event.key === 'Enter') { event.preventDefault(); reset(); return; }
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
       event.preventDefault();
+      if (event.key === 'ArrowLeft' && current() <= minimum) { setCollapsed(true, true); return; }
       preference = event.key === 'Home' ? minimum : event.key === 'End' ? limit() : clamp(current() + (event.key === 'ArrowRight' ? 1 : -1) * (event.shiftKey ? 32 : 16));
       update(); persist();
     });
-    const resize = () => { if (!desktop.matches) finish(); update(); };
+    reopen.addEventListener('click', () => setCollapsed(false, true));
+    document.addEventListener('sps:reader-show-sidebar', () => { if (desktop.matches && collapsed) setCollapsed(false); });
+    const resize = () => { if (!desktop.matches) finish(true); update(); };
     desktop.addEventListener?.('change', resize);
     window.addEventListener('resize', resize, {passive: true});
-    if (window.ResizeObserver) new ResizeObserver(resize).observe(frame);
+    if (window.ResizeObserver) {
+      let lastWidth = -1;
+      new ResizeObserver(entries => {
+        const width = entries[0]?.contentRect.width;
+        if (width !== lastWidth) { lastWidth = width; resize(); }
+      }).observe(frame);
+    }
     update();
   };
 
@@ -2651,8 +2736,9 @@
     let returnFocus = null;
     const updateAccessibility = (open) => {
       const modal = mq.matches && open;
-      sidebar.inert = mq.matches && !open;
-      sidebar.setAttribute("aria-hidden", mq.matches && !open ? "true" : "false");
+      const collapsed = !mq.matches && sidebar.closest('.reader-sidebar-collapsed');
+      sidebar.inert = !!collapsed || (mq.matches && !open);
+      sidebar.setAttribute("aria-hidden", collapsed || (mq.matches && !open) ? "true" : "false");
       if (modal) {
         sidebar.setAttribute("role", "dialog");
         sidebar.setAttribute("aria-modal", "true");
@@ -2702,6 +2788,7 @@
       const target = event.target;
       if (target.closest(".kb-sidebar a, .share-toc a") && !event.ctrlKey && !event.metaKey && !event.shiftKey) setOpen(false, false);
       if (target.closest("[data-reader-show-tree]")) {
+        document.dispatchEvent(new Event('sps:reader-show-sidebar'));
         document.querySelector('[data-share-tab="tree"]')?.click();
         setOpen(true);
         const current = sidebar.querySelector('.kb-tree-item.is-active, .kb-tree-item');

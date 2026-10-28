@@ -194,7 +194,9 @@ class Regression(AdminShareTests, SelectedFixTests, PdfCookieTests, PdfReleaseTe
         path = '/s/' + share['slug']
         status, _, page = Client(self.base).request(path, headers={'Cookie': 'sps_reader_sidebar_width=420'})
         self.assertEqual(status, 200)
-        self.assertIn(b"class='reader-frame' style='--sidebar-width:clamp(220px,420px,", page)
+        self.assertIn(b"class='reader-frame' style='--sidebar-width:clamp(256px,420px,", page)
+        _, _, collapsed_page = Client(self.base).request(path, headers={'Cookie': 'sps_reader_sidebar_width=420; sps_reader_sidebar_collapsed=1'})
+        self.assertIn(b"class='reader-frame reader-sidebar-collapsed'", collapsed_page)
         for width in ['219', '641', '999', 'garbage']:
             _, _, page = Client(self.base).request(path, headers={'Cookie': 'sps_reader_sidebar_width=' + width})
             self.assertIn(b"<div class='reader-frame'>", page)

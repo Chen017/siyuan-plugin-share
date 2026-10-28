@@ -365,8 +365,11 @@ function render_page(string $title, string $content, ?array $user = null, string
         if (empty($options['pdf_export'])) {
             $widthCookie = $_COOKIE['sps_reader_sidebar_width'] ?? '';
             $width = is_string($widthCookie) && preg_match('/^[0-9]{3}$/D', $widthCookie) ? (int)$widthCookie : 0;
-            $frameStyle = $width >= 220 && $width <= 640 ? " style='--sidebar-width:clamp(220px,{$width}px,min(640px,calc(100vw - 410px)))'" : '';
-            echo "<div class='reader-frame'{$frameStyle}>";
+            $frameStyle = $width >= 220 && $width <= 640 ? " style='--sidebar-width:clamp(256px,{$width}px,min(640px,calc(100vw - 410px)))'" : '';
+            $collapsed = ($_COOKIE['sps_reader_sidebar_collapsed'] ?? '') === '1' && str_contains($content, 'data-share-sidebar');
+            $frameClass = 'reader-frame' . ($collapsed ? ' reader-sidebar-collapsed' : '');
+            if ($collapsed) echo "<noscript><style>@media(min-width:961px){.reader-frame.reader-sidebar-collapsed{--reader-column:max(var(--sidebar-width),256px)!important}.reader-sidebar-collapsed .kb-sidebar{display:flex!important}}</style></noscript>";
+            echo "<div class='{$frameClass}'{$frameStyle}>";
         }
         echo "<header class='reader-mobile-bar'><button class='reader-nav-button' type='button' data-share-drawer-open aria-label='Open navigation' aria-expanded='false'><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='currentColor' d='M4 6h16v2H4zM4 11h16v2H4zM4 16h16v2H4z'/></svg><span>Navigation</span></button><span class='reader-mobile-title' data-reader-mobile-title>{$pageTitle}</span></header>";
         echo $content;
