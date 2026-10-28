@@ -560,6 +560,7 @@ function route_share(string $slug, ?string $docId = null): void {
                     'title' => $docTitleRaw,
                     'docId' => $activeDocId,
                     'html' => $mainHtml,
+                    'diagramPreloads' => array_map(static fn($file) => site_asset_url('vendor/' . $file), diagram_preload_files($mainHtml)),
                 ]);
             }
             $content = '<div class="share-shell share-shell--notebook" data-share-doc-id="' . htmlspecialchars($activeDocId) . '">';
@@ -673,6 +674,7 @@ function route_share(string $slug, ?string $docId = null): void {
                     'title' => $docTitleRaw,
                     'docId' => $docId,
                     'html' => $mainHtml,
+                    'diagramPreloads' => array_map(static fn($file) => site_asset_url('vendor/' . $file), diagram_preload_files($mainHtml)),
                 ]);
             }
             $content = '<div class="share-shell share-shell--notebook" data-share-doc-id="' . htmlspecialchars((string)$docId) . '">';
@@ -690,6 +692,7 @@ function route_share(string $slug, ?string $docId = null): void {
                     'title' => $shareTitleRaw,
                     'docId' => '',
                     'html' => $mainHtml,
+                    'diagramPreloads' => array_map(static fn($file) => site_asset_url('vendor/' . $file), diagram_preload_files($mainHtml)),
                 ]);
             }
             $content = '<div class="share-shell share-shell--notebook" data-share-doc-id="">';

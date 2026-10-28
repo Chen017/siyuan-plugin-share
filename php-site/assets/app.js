@@ -152,14 +152,16 @@
   const tocCleanupMap = new WeakMap();
   const renderedMarkdown = new WeakMap();
   const diagramScripts = new Map();
-  const appScriptUrl = document.currentScript?.src ||
-    document.querySelector("script[src*='/assets/app.js']")?.src || "";
+  const appScript = document.currentScript || document.querySelector("script[src*='/assets/app.js']");
+  const appScriptUrl = appScript?.src || "";
+  let diagramVersions = {};
+  try { diagramVersions = JSON.parse(appScript?.dataset?.diagramVersions || "{}"); } catch {}
   const loadDiagramScript = (file, ready) => {
     if (ready()) return Promise.resolve();
     if (diagramScripts.has(file)) return diagramScripts.get(file);
     const promise = new Promise((resolve, reject) => {
       const url = new URL(`vendor/${file}`, appScriptUrl || document.baseURI);
-      const version = appScriptUrl ? new URL(appScriptUrl).searchParams.get("v") : "";
+      const version = diagramVersions[file] || (appScriptUrl ? new URL(appScriptUrl).searchParams.get("v") : "");
       if (version) url.searchParams.set("v", version);
       const script = document.createElement("script");
       script.src = url.href;
@@ -2924,6 +2926,17 @@
           throw new Error(payload?.msg || "Failed to load doc.");
         }
         if (currentId !== requestId) return;
+        // Begin fetching known diagram dependencies before rendering the new document.
+        for (const href of payload.data.diagramPreloads || []) {
+          try {
+            const asset = new URL(href, location.href);
+            if (asset.origin !== location.origin || !asset.pathname.includes('/assets/vendor/')) continue;
+            if ([...document.querySelectorAll('link[rel="preload"][as="script"]')].some(link => link.href === asset.href)) continue;
+            const link = document.createElement('link');
+            link.rel = 'preload'; link.as = 'script'; link.href = asset.href;
+            document.head.appendChild(link);
+          } catch {}
+        }
         updateAfterLoad(payload.data, url, pushState);
       } catch (err) {
         if (err?.name === "AbortError") return;
@@ -4769,20 +4782,28 @@ const initImageViewer = () => {
               (lang === "flowchart" && isMermaidFlowchart(code.textContent));
           });
         const dependencies = [];
-        if (wantsMermaid) dependencies.push(loadDiagramScript("mermaid.min.js", () => !!window.mermaid));
+        const runWhenReady = (promise, render) => {
+          dependencies.push(promise.then(() => {
+            if (target.isConnected && renderedMarkdown.get(target) === raw) render();
+          }).catch(error => { console.error(error); }));
+        };
+        if (wantsMermaid) runWhenReady(loadDiagramScript("mermaid.min.js", () => !!window.mermaid), () => {
+          renderMindmap(target);
+          renderMermaidWithFonts(target);
+        });
         if (languages.has("echarts") || target.querySelector(".md-diagram--echarts")) {
-          dependencies.push(loadDiagramScript("echarts.min.js", () => !!window.echarts));
+          runWhenReady(loadDiagramScript("echarts.min.js", () => !!window.echarts), () => { renderEcharts(target); rehydrateEcharts(target); });
         }
-        if (languages.has("abc")) dependencies.push(loadDiagramScript("abcjs-basic-min.js", () => !!window.ABCJS));
+        if (languages.has("abc")) runWhenReady(loadDiagramScript("abcjs-basic-min.js", () => !!window.ABCJS), () => renderAbc(target));
         if (languages.has("graphviz") || languages.has("dot")) {
-          dependencies.push(loadDiagramScript("viz.js", () => !!window.Viz)
+          runWhenReady(loadDiagramScript("viz.js", () => !!window.Viz)
             .then(() => loadDiagramScript("full.render.js", () =>
-              typeof window.Viz?.render === "function" || typeof window.render === "function")));
+              typeof window.Viz?.render === "function" || typeof window.render === "function")), () => renderGraphviz(target));
         }
         if (languages.has("flowchart") && !codes.every(code =>
           getLanguage(code) !== "flowchart" || isMermaidFlowchart(code.textContent))) {
-          dependencies.push(loadDiagramScript("raphael.min.js", () => !!window.Raphael)
-            .then(() => loadDiagramScript("flowchart.min.js", () => !!window.flowchart)));
+          runWhenReady(loadDiagramScript("raphael.min.js", () => !!window.Raphael)
+            .then(() => loadDiagramScript("flowchart.min.js", () => !!window.flowchart)), () => renderFlowchart(target));
         }
         const finish = () => {
           if (!target.isConnected || renderedMarkdown.get(target) !== raw) return;

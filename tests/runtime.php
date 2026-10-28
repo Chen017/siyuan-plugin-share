@@ -38,6 +38,11 @@ check($pdo->query('PRAGMA integrity_check')->fetchColumn() === 'ok', 'SQLite int
 check((int)$pdo->query('PRAGMA foreign_keys')->fetchColumn() === 1, 'Foreign keys enabled');
 check(password_verify('123456', $pdo->query('SELECT password_hash FROM users')->fetchColumn()), 'Seed password hashing');
 
+$diagramSource = '<textarea class="markdown-source" data-md-id="doc">' . htmlspecialchars("\$x^2\$\n\n```mermaid\ngraph LR\nA--&gt;B\n```\n\n```echarts\n{}\n```", ENT_QUOTES) . '</textarea>';
+$preloads = diagram_preload_files($diagramSource);
+check(in_array('mermaid.min.js', $preloads, true) && in_array('echarts.min.js', $preloads, true), 'Mixed diagram preload hints');
+check(diagram_preload_files('<textarea class="markdown-source">ordinary $x^2$</textarea>') === [], 'Math-only note does not preload diagram engines');
+check(site_asset_version('vendor/katex.min.js') === substr(hash_file('sha256', dirname($argv[1]) . '/assets/vendor/katex.min.js'), 0, 16), 'Asset version hashes final content');
 check(mb_strlen('思源笔记') === 4, 'UTF-8 mbstring');
 check(compute_doc_content_hash('笔记') === hash('sha256', '笔记'), 'Content hashing');
 check(sanitize_asset_path('../private.db') === '', 'Reject traversal');

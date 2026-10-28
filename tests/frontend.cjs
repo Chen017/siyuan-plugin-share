@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {JSDOM, VirtualConsole} = require('jsdom');
 const assets = path.join(__dirname, '../php-site/assets');
-const app = fs.readFileSync(path.join(assets, 'app.js'), 'utf8');
+const app = fs.readFileSync(process.env.SPS_TEST_APP || path.join(assets, 'app.js'), 'utf8');
 const escape = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
 const core = ['markdown-it.min.js', 'markdown-it-task-lists.min.js',
   'markdown-it-emoji.min.js', 'markdown-it-footnote.min.js',
@@ -23,7 +23,7 @@ async function waitFor(condition, message) {
   }
 }
 
-async function page(raw, {failMermaid = false} = {}) {
+async function page(raw, {failMermaid = false, slowGraphviz = false} = {}) {
   const dom = new JSDOM(`<body class="layout-share"><div class="share-shell"><aside data-share-sidebar><div data-share-tabs data-share-default="toc"><button data-share-tab="toc">目录</button></div><div data-share-panel="toc"><div data-share-toc="doc"></div></div></aside>${main(raw)}</div><a data-share-nav="doc" href="/s/test?doc=next">Next</a><script src="https://reader.test/assets/app.js?v=fixture"></script></body>`, {
     url: 'https://reader.test/s/test', runScripts: 'outside-only',
     pretendToBeVisual: true, virtualConsole: new VirtualConsole(),
@@ -47,6 +47,7 @@ async function page(raw, {failMermaid = false} = {}) {
   };
   w.markdownit.prototype = originalMd.prototype;
   const requests = [];
+  const events = [];
   const append = w.document.head.appendChild.bind(w.document.head);
   const svg = () => w.document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   w.document.head.appendChild = node => {
@@ -60,21 +61,21 @@ async function page(raw, {failMermaid = false} = {}) {
       switch (file) {
         case 'mermaid.min.js': w.mermaid = {initialize() {}, render: async () => { if (failMermaid) throw new Error('Synthetic renderer failure'); return {svg: '<svg xmlns="http://www.w3.org/2000/svg"><text>diagram</text></svg>'}; }}; break;
         case 'pako.min.js': w.pako = {deflate: () => new Uint8Array([1, 2, 3])}; break;
-        case 'echarts.min.js': w.echarts = {init: () => ({setOption() {}, resize() {}})}; break;
+        case 'echarts.min.js': w.echarts = {init: () => ({setOption() { events.push('echarts-rendered'); }, resize() {}})}; break;
         case 'abcjs-basic-min.js': w.ABCJS = {renderAbc: id => w.document.getElementById(id).appendChild(svg())}; break;
         case 'viz.js': w.Viz = function() {this.renderSVGElement = async () => svg();}; break;
-        case 'full.render.js': assert(w.Viz, 'Viz wrapper loads first'); w.Viz.render = () => {}; w.Viz.Module = () => {}; break;
+        case 'full.render.js': events.push('graphviz-loaded'); assert(w.Viz, 'Viz wrapper loads first'); w.Viz.render = () => {}; w.Viz.Module = () => {}; break;
         case 'raphael.min.js': w.Raphael = () => {}; break;
         case 'flowchart.min.js': assert(w.Raphael, 'Raphael loads first'); w.flowchart = {parse: () => ({drawSVG: id => w.document.getElementById(id).appendChild(svg())})}; break;
         default: throw new Error(`Unexpected remote script: ${file}`);
       }
       node.onload();
-    }, 0);
+    }, slowGraphviz && file === 'full.render.js' ? 250 : 0);
     return result;
   };
   w.eval(app);
   await waitFor(() => w.document.querySelector('.markdown-body')?.dataset.spsRendered === '1', 'initial note enhancement');
-  return {w, requests, errors, renders: () => renders, close: () => w.close(),
+  return {w, requests, errors, events, renders: () => renders, close: () => w.close(),
     async navigate(next) {
       const before = renders;
       w.fetch = async () => ({ok: true, json: async () => ({code: 0, data: {html: main(next), title: 'Next note', docId: 'next'}})});
@@ -131,6 +132,13 @@ async function page(raw, {failMermaid = false} = {}) {
       if (language === 'plantuml') assert(fixture.w.document.querySelector('.md-diagram').textContent.includes(source));
     } finally { fixture.close(); }
   }
+  const mixed = await page('```echarts\n{"series":[]}\n```\n\n```dot\ndigraph { A -> B }\n```', {slowGraphviz: true});
+  try {
+    assert(mixed.events.indexOf('echarts-rendered') >= 0);
+    assert(mixed.events.indexOf('echarts-rendered') < mixed.events.indexOf('graphviz-loaded'), 'A slow graph library does not hold up ECharts');
+    assert(mixed.w.document.querySelector('.md-diagram--graphviz svg'), 'Graphviz still completes');
+  } finally { mixed.close(); }
+
   const failed = await page('```mermaid\ngraph LR\nA-->B\n```', {failMermaid: true});
   try {
     await waitFor(() => failed.w.document.querySelector('.md-diagram--mermaid pre'), 'local Mermaid failure fallback');

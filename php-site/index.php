@@ -282,20 +282,35 @@ function render_share_icon_defs(): string {
 SVG;
 }
 
-function site_asset_version(): string {
-    static $version = null;
-    if ($version !== null) return $version;
-    $paths = array_merge(glob(__DIR__ . '/assets/*.*') ?: [], glob(__DIR__ . '/assets/vendor/*.*') ?: []);
-    $parts = [];
-    foreach ($paths as $path) {
-        if (is_file($path)) $parts[] = basename($path) . ':' . filemtime($path) . ':' . filesize($path);
+function site_asset_version(string $path): string {
+    static $versions = null;
+    if ($versions === null) {
+        $manifest = @file_get_contents(__DIR__ . '/assets/.asset-versions.json');
+        $versions = is_string($manifest) ? json_decode($manifest, true) : [];
+        if (!is_array($versions)) $versions = [];
     }
-    sort($parts);
-    return $version = substr(hash('sha256', implode('|', $parts)), 0, 16);
+    if (!isset($versions[$path])) {
+        $file = __DIR__ . '/assets/' . $path;
+        $versions[$path] = is_file($file) ? substr(hash_file('sha256', $file), 0, 16) : 'missing';
+    }
+    return $versions[$path];
 }
 
 function site_asset_url(string $path): string {
-    return base_path() . '/assets/' . $path . '?v=' . site_asset_version();
+    return base_path() . '/assets/' . $path . '?v=' . site_asset_version($path);
+}
+
+// Hints are conservative: false positives cost a download; the renderer remains authoritative.
+function diagram_preload_files(string $content): array {
+    if (!preg_match_all('~<textarea\b[^>]*class="[^"]*markdown-source[^"]*"[^>]*>(.*?)</textarea>~is', $content, $matches)) return [];
+    $source = html_entity_decode(implode("\n", $matches[1]), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $files = [];
+    if (preg_match('/(?:```|~~~)\s*(?:mermaid|mindmap|flowchart)\b|(?:```|~~~)\s*\R\s*(?:graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|erDiagram|journey|gantt|gitGraph|mindmap|timeline|pie|quadrantChart|requirementDiagram|c4Context|c4Container|c4Component|c4Dynamic|zenuml|xychart)\b/i', $source)) $files[] = 'mermaid.min.js';
+    if (preg_match('/(?:```|~~~)\s*echarts\b/i', $source)) $files[] = 'echarts.min.js';
+    if (preg_match('/(?:```|~~~)\s*abc\b/i', $source)) $files[] = 'abcjs-basic-min.js';
+    if (preg_match('/(?:```|~~~)\s*(?:graphviz|dot)\b/i', $source)) array_push($files, 'viz.js', 'full.render.js');
+    if (preg_match('/(?:```|~~~)\s*flowchart\b/i', $source)) array_push($files, 'raphael.min.js', 'flowchart.min.js');
+    return $files;
 }
 
 function render_page(string $title, string $content, ?array $user = null, string $baseHref = '', array $options = []): void {
@@ -326,6 +341,11 @@ function render_page(string $title, string $content, ?array $user = null, string
     if ($baseHref !== '') {
         $safeBase = htmlspecialchars($baseHref);
         echo "<base href='{$safeBase}'>";
+    }
+    if ($includeMarkdown) {
+        foreach (diagram_preload_files($content) as $file) {
+            echo "<link rel='preload' as='script' href='" . htmlspecialchars(site_asset_url('vendor/' . $file), ENT_QUOTES, 'UTF-8') . "'>";
+        }
     }
     if ($includeMarkdown) {
         echo "<link rel='stylesheet' href='" . htmlspecialchars(site_asset_url('vendor/github-markdown.min.css'), ENT_QUOTES, 'UTF-8') . "'>";
@@ -430,7 +450,12 @@ function render_page(string $title, string $content, ?array $user = null, string
     }
     echo "<script defer src='" . htmlspecialchars(site_asset_url('controls.js'), ENT_QUOTES, 'UTF-8') . "'></script>";
     $appJsUrl = htmlspecialchars(site_asset_url('app.js'), ENT_QUOTES, 'UTF-8');
-    echo "<script defer src='{$appJsUrl}'></script>";
+    $diagramVersions = [];
+    foreach (['mermaid.min.js', 'echarts.min.js', 'abcjs-basic-min.js', 'viz.js', 'full.render.js', 'raphael.min.js', 'flowchart.min.js'] as $file) {
+        $diagramVersions[$file] = site_asset_version('vendor/' . $file);
+    }
+    $versionJson = htmlspecialchars(json_encode($diagramVersions, JSON_UNESCAPED_SLASHES), ENT_QUOTES, 'UTF-8');
+    echo "<script defer src='{$appJsUrl}' data-diagram-versions='{$versionJson}'></script>";
     $siteCustomJsEnabled = get_bool_setting('site_custom_js_enabled', false);
     $siteCustomJs = (string)get_setting('site_custom_js', '');
     if ($siteCustomJsEnabled && trim($siteCustomJs) !== '') {

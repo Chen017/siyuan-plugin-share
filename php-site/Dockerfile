@@ -1,3 +1,14 @@
+# Build the same source files served by the PHP image, retaining their URLs.
+FROM node:24-alpine AS asset-build
+WORKDIR /build
+RUN npm install --no-save --no-package-lock terser@5.44.0 clean-css-cli@5.6.3
+COPY php-site/assets/ /build/assets/
+RUN set -e; for f in app.js controls.js pdf-export.js pdf-text-layer.js; do \
+      ./node_modules/.bin/terser "assets/$f" --compress --mangle --output "assets/$f.min" && mv "assets/$f.min" "assets/$f"; \
+    done && for f in style.css controls.css pdf-export.css; do \
+      ./node_modules/.bin/cleancss -o "assets/$f.min" "assets/$f" && mv "assets/$f.min" "assets/$f"; \
+    done
+
 FROM php:8.3.36-fpm-alpine
 
 # Install runtime packages + build deps, compile PHP extensions, then remove build deps
@@ -30,6 +41,9 @@ WORKDIR /var/www/html
 
 # Copy app files with runtime owner
 COPY --chown=www-data:www-data php-site/ /var/www/html/
+COPY --from=asset-build --chown=www-data:www-data /build/assets/ /var/www/html/assets/
+# Hash the final bytes, so independent assets retain their cache keys across releases.
+RUN php -r '$root="/var/www/html/assets/"; $it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS)); $out=[]; foreach($it as $file) { if ($file->isFile()) { $path=substr($file->getPathname(), strlen($root)); $out[$path]=substr(hash_file("sha256", $file->getPathname()),0,16); } } file_put_contents($root.".asset-versions.json", json_encode($out));'
 
 # Build context files may come from a private umask-077 checkout. Nginx and FPM
 # run as different users; normalize shipped code/assets, excluding mounted private data/config.
