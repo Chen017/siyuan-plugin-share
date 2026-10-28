@@ -2551,6 +2551,87 @@
     else window.addEventListener("resize", positionIndicator, {passive: true});
   };
 
+  const initReaderSidebarResize = () => {
+    const sidebar = document.querySelector('.kb-sidebar[data-share-sidebar]');
+    const frame = sidebar?.closest('.reader-frame');
+    if (!frame || frame.querySelector('[data-reader-sidebar-resizer]')) return;
+    const desktop = window.matchMedia('(min-width: 961px)');
+    const cookieName = 'sps_reader_sidebar_width';
+    const minimum = 220;
+    const limit = () => Math.max(minimum, Math.min(640, (frame.getBoundingClientRect().width || innerWidth) - 360));
+    const clamp = width => Math.max(minimum, Math.min(limit(), width));
+    const saved = document.cookie.split(';').map(part => part.trim()).find(part => part.startsWith(cookieName + '='))?.slice(cookieName.length + 1);
+    let preference = /^\d{3}$/.test(saved || '') && Number(saved) >= minimum && Number(saved) <= 640 ? Number(saved) : null;
+    let pointer = null, startPreference = null;
+    const divider = document.createElement('div');
+    divider.className = 'reader-sidebar-resizer';
+    divider.dataset.readerSidebarResizer = '';
+    divider.tabIndex = 0;
+    divider.setAttribute('role', 'separator');
+    divider.setAttribute('aria-orientation', 'vertical');
+    divider.setAttribute('aria-label', 'Document tree width');
+    sidebar.id ||= 'reader-navigation';
+    divider.setAttribute('aria-controls', sidebar.id);
+    divider.title = 'Drag to resize. Double-click or press Enter to reset.';
+    frame.append(divider);
+    const current = () => Math.round(sidebar.getBoundingClientRect().width || preference || 256);
+    const update = () => {
+      if (preference !== null) frame.style.setProperty('--sidebar-width', `${clamp(preference)}px`);
+      else frame.style.removeProperty('--sidebar-width');
+      divider.setAttribute('aria-valuemin', String(minimum));
+      divider.setAttribute('aria-valuemax', String(Math.round(limit())));
+      divider.setAttribute('aria-valuenow', String(current()));
+      divider.setAttribute('aria-valuetext', `${current()} pixels. Press Enter to reset.`);
+      divider.hidden = !desktop.matches;
+    };
+    const persist = () => {
+      document.cookie = `${cookieName}=${preference === null ? '' : Math.round(preference)}; Max-Age=${preference === null ? 0 : 31536000}; Path=/; SameSite=Lax${location.protocol === 'https:' ? '; Secure' : ''}`;
+    };
+    const reset = () => { preference = null; update(); persist(); };
+    const finish = (cancel = false) => {
+      if (pointer === null) return;
+      const id = pointer; pointer = null;
+      if (cancel) preference = startPreference;
+      divider.classList.remove('is-dragging');
+      document.body.classList.remove('reader-is-resizing');
+      if (divider.hasPointerCapture?.(id)) divider.releasePointerCapture(id);
+      update();
+      if (!cancel) persist();
+    };
+    divider.addEventListener('pointerdown', event => {
+      if (!desktop.matches || event.button !== 0 || event.isPrimary === false) return;
+      event.preventDefault();
+      startPreference = preference; pointer = event.pointerId;
+      divider.setPointerCapture?.(pointer);
+      divider.classList.add('is-dragging');
+      document.body.classList.add('reader-is-resizing');
+      divider.focus({preventScroll: true});
+    });
+    divider.addEventListener('pointermove', event => {
+      if (pointer !== event.pointerId) return;
+      preference = Math.round(clamp(event.clientX - frame.getBoundingClientRect().left - frame.clientLeft));
+      update();
+    });
+    divider.addEventListener('pointerup', () => finish());
+    divider.addEventListener('pointercancel', () => finish(true));
+    divider.addEventListener('lostpointercapture', () => finish());
+    window.addEventListener('blur', () => finish());
+    divider.addEventListener('dblclick', reset);
+    divider.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && pointer !== null) { event.preventDefault(); finish(true); return; }
+      if (event.key === 'Enter') { event.preventDefault(); reset(); return; }
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      preference = event.key === 'Home' ? minimum : event.key === 'End' ? limit() : clamp(current() + (event.key === 'ArrowRight' ? 1 : -1) * (event.shiftKey ? 32 : 16));
+      update(); persist();
+    });
+    const resize = () => { if (!desktop.matches) finish(); update(); };
+    desktop.addEventListener?.('change', resize);
+    window.addEventListener('resize', resize, {passive: true});
+    if (window.ResizeObserver) new ResizeObserver(resize).observe(frame);
+    update();
+  };
+
   const initShareDrawer = () => {
     const openBtn = document.querySelector("[data-share-drawer-open]");
     const backdrop = document.querySelector("[data-share-drawer-close]");
@@ -5293,6 +5374,7 @@ const initImageViewer = () => {
   initShareSearch();
   initSearchHighlight();
   initShareSidebarTabs();
+  initReaderSidebarResize();
   initShareDrawer();
   initReaderBehavior();
   initShareDocNavigation();

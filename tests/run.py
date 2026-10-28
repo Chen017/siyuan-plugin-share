@@ -186,6 +186,19 @@ class Regression(AdminShareTests, SelectedFixTests, PdfCookieTests, PdfReleaseTe
             self.assertNotIn('data-reader-pages', body.decode())
             self.assertNotIn('reader-subpages', body.decode())
 
+    def test_reader_sidebar_cookie_is_bounded_and_escaped(self):
+        share = self.api('shares/notebook', {'notebookId': self.name + '-width', 'title': 'Resizable tree', 'docs': [
+            {'docId': self.name + '-root', 'title': 'Root', 'markdown': 'Body'},
+            {'docId': self.name + '-child', 'parentId': self.name + '-root', 'title': 'Child', 'markdown': 'Child body'},
+        ]})['share']
+        path = '/s/' + share['slug']
+        status, _, page = Client(self.base).request(path, headers={'Cookie': 'sps_reader_sidebar_width=420'})
+        self.assertEqual(status, 200)
+        self.assertIn(b"class='reader-frame' style='--sidebar-width:clamp(220px,420px,", page)
+        for width in ['219', '641', '999', 'garbage']:
+            _, _, page = Client(self.base).request(path, headers={'Cookie': 'sps_reader_sidebar_width=' + width})
+            self.assertIn(b"<div class='reader-frame'>", page)
+
     def test_reader_home_setting_and_share_root_matching(self):
         notebook = self.api('shares/notebook', {
             'notebookId': self.name, 'title': 'Home notebook',

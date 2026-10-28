@@ -110,16 +110,16 @@ if ($path === '/dashboard') {
         $deleted = !empty($share['deleted_at']);
         $title = htmlspecialchars($share['title']);
         $manage = $base . '/admin/share?share_id=' . (int)$share['id'];
-        $content .= '<article class="share-card" role="listitem"><div class="share-title-cell">' . ($deleted ? '<strong>' . $title . '</strong>' : '<a class="share-title-link" href="' . $manage . '">' . $title . '</a>') . '<small>' . ($share['type'] === 'notebook' ? 'Notebook' : 'Document') . ' · /s/' . htmlspecialchars($share['slug']) . '</small></div>';
+        $content .= '<article class="share-card" role="listitem"><div class="share-card-heading"><div class="share-title-cell">' . ($deleted ? '<strong>' . $title . '</strong>' : '<a class="share-title-link" href="' . $manage . '">' . $title . '</a>') . '<small>' . ($share['type'] === 'notebook' ? 'Notebook' : 'Document') . ' · /s/' . htmlspecialchars($share['slug']) . '</small></div><span class="share-card-size">' . format_bytes((int)$share['size_bytes']) . '</span></div>';
         $statusLabel = $deleted ? 'Deleted' : (share_is_expired($share) ? 'Expired' : (share_requires_password($share) ? 'Password protected' : 'Anyone with the link'));
-        $content .= '<div class="share-card-meta"><div><span class="share-access-status">' . $statusLabel . '</span><small>' . (!empty($share['expires_at']) ? 'Expires ' . date('Y-m-d H:i', (int)$share['expires_at']) . ' (UTC+8)' : 'No expiry') . '</small></div><span class="share-card-size">' . format_bytes((int)$share['size_bytes']) . '</span></div><div class="table-actions">';
+        $content .= '<div class="share-card-bottom"><div class="share-card-meta"><span class="share-access-status">' . $statusLabel . '</span><small>' . (!empty($share['expires_at']) ? 'Expires ' . date('Y-m-d H:i', (int)$share['expires_at']) . ' (UTC+8)' : 'No expiry') . '</small></div><div class="table-actions">';
         if (!$deleted) $content .= '<a class="button" href="' . $manage . '">Manage</a>';
         $actions = $deleted ? ['restore' => 'Restore', 'hard-delete' => 'Delete permanently'] : ['delete' => 'Delete'];
         foreach ($actions as $action => $label) {
             $confirm = $action === 'hard-delete' ? ' data-confirm-message="Permanently delete this share and its files?"' : '';
             $content .= '<form class="inline-form" method="post" action="' . $base . '/admin/share-' . $action . '"' . $confirm . '>' . render_hidden_inputs(['csrf' => csrf_token(), 'share_id' => $share['id']]) . '<button class="button' . ($action === 'restore' ? '' : ' danger') . '" type="submit">' . $label . '</button></form>';
         }
-        $content .= '</div></article>';
+        $content .= '</div></div></article>';
     }
     if (!$listedShares) $content .= '<p class="admin-empty">' . ($search !== '' ? 'No shares match your search.' : ($status === 'deleted' ? 'No deleted shares.' : 'No shared notes yet. Share a notebook from the SiYuan plugin to begin.')) . '</p>';
     $content .= '</div></div>';

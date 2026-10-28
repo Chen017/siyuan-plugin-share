@@ -308,7 +308,7 @@ function render_doc_tree(array $nodes, string $slug, ?string $activeId = null, i
             $html .= render_doc_tree_icon($doc, $assetBasePath);
             $html .= '<span class="kb-tree-label">' . $docTitle . '</span></a>';
         } else {
-            $html .= '<div class="kb-tree-folder">';
+            $html .= '<div class="kb-tree-folder" title="' . htmlspecialchars((string)$node['title'], ENT_QUOTES, 'UTF-8') . '">';
             $html .= render_doc_tree_icon(null, $assetBasePath);
             $html .= '<span class="kb-tree-label">' . htmlspecialchars((string)$node['title']) . '</span></div>';
         }

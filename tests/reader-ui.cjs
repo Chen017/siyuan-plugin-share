@@ -8,7 +8,7 @@ const source = fs.readFileSync(path.join(__dirname, '../php-site/assets/app.js')
 const delay = (ms = 35) => new Promise(resolve => setTimeout(resolve, ms));
 const main = (title = '笔记本', welcome = false) => `<main class="kb-main"><section class="share-article"><h1 class="kb-title">${title}</h1>${welcome ? '<div data-notebook-welcome><button data-reader-show-tree>展开文档树</button><a data-reader-resume hidden><span></span></a></div>' : '<button data-share-toggle aria-pressed="false"><svg aria-hidden="true"></svg><span data-share-toggle-label>Source</span></button><textarea class="markdown-source" readonly aria-label="Markdown source">## Chapter</textarea><div class="markdown-body" data-sps-rendered="1"><h2 id="chapter">Chapter</h2></div>'}</section></main>`;
 function page({mobile = false, reduced = false, record, welcome = true} = {}) {
-  const dom = new JSDOM(`<body class="layout-share"><header><button data-share-drawer-open>导航</button><span data-reader-mobile-title>笔记本</span></header><div class="share-shell" data-share-doc-id="${welcome ? '' : 'a'}"><aside class="kb-sidebar" data-share-sidebar data-share-slug="book"><div data-share-search><input data-share-search-input><button data-share-search-clear hidden>清除</button><div data-share-search-results hidden></div></div><div data-share-tabs data-share-default="tree"><button data-share-tab="tree">文档树</button><button data-share-tab="toc">目录</button></div><div data-share-panel="tree"><div class="kb-side-body"><ul><li class="kb-tree-node is-collapsed" data-tree-key="doc:a"><button class="kb-tree-toggle" aria-expanded="false">展开</button><a class="kb-tree-item" href="/s/book/a" data-doc-id="a" data-share-nav="doc">课程 A</a><ul class="kb-tree-children"><li><a class="kb-tree-item" href="/s/book/b" data-doc-id="b" data-share-nav="doc">课程 B</a></li></ul></li></ul></div></div><div data-share-panel="toc" hidden></div></aside>${main(welcome ? '笔记本' : '课程 A', welcome)}</div><footer class="share-footer"></footer><div data-share-drawer-close></div><p data-reader-status role="status"></p></body>`, {url: 'https://reader.test/s/book', runScripts: 'outside-only', pretendToBeVisual: true, virtualConsole: new VirtualConsole()});
+  const dom = new JSDOM(`<body class="layout-share"><header><button data-share-drawer-open>导航</button><span data-reader-mobile-title>笔记本</span></header><div class="reader-frame"><div class="share-shell" data-share-doc-id="${welcome ? '' : 'a'}"><aside class="kb-sidebar" data-share-sidebar data-share-slug="book"><div data-share-search><input data-share-search-input><button data-share-search-clear hidden>清除</button><div data-share-search-results hidden></div></div><div data-share-tabs data-share-default="tree"><button data-share-tab="tree">文档树</button><button data-share-tab="toc">目录</button></div><div data-share-panel="tree"><div class="kb-side-body"><ul><li class="kb-tree-node is-collapsed" data-tree-key="doc:a"><button class="kb-tree-toggle" aria-expanded="false">展开</button><a class="kb-tree-item" href="/s/book/a" data-doc-id="a" data-share-nav="doc">课程 A</a><ul class="kb-tree-children"><li><a class="kb-tree-item" href="/s/book/b" data-doc-id="b" data-share-nav="doc">课程 B</a></li></ul></li></ul></div></div><div data-share-panel="toc" hidden></div></aside>${main(welcome ? '笔记本' : '课程 A', welcome)}</div><footer class="share-footer"></footer></div><div data-share-drawer-close></div><p data-reader-status role="status"></p></body>`, {url: 'https://reader.test/s/book', runScripts: 'outside-only', pretendToBeVisual: true, virtualConsole: new VirtualConsole()});
   const w = dom.window, errors = [];
   w.surfaceAnimations = [];
   w.HTMLElement.prototype.animate = function(frames, options) {
@@ -17,7 +17,7 @@ function page({mobile = false, reduced = false, record, welcome = true} = {}) {
     return animation;
   };
   w.console.error = e => errors.push(e);
-  w.matchMedia = q => ({matches: q.includes('reduced-motion') ? reduced : q.includes('max-width: 960px') && mobile, addEventListener() {}});
+  w.matchMedia = q => ({matches: q.includes('reduced-motion') ? reduced : q.includes('min-width: 961px') ? !mobile : q.includes('max-width: 960px') && mobile, addEventListener() {}});
   w.HTMLElement.prototype.scrollTo = () => {};
   w.HTMLElement.prototype.scrollIntoView = function(options) { w.lastScrollBehavior = options?.behavior; };
   w.scrollTo = options => { w.lastScroll = options; };
@@ -94,6 +94,19 @@ const payload = title => ({ok: true, json: async () => ({code: 0, data: {html: m
     assert(racing.w.surfaceAnimations.every(animation => animation.frames.every(frame => Object.keys(frame).every(key => ['opacity', 'transform'].includes(key)))), 'Surface motion does not animate layout dimensions');
   } finally { racing.close(); }
 
+  const resize = page();
+  try {
+    const divider = resize.doc.querySelector('[data-reader-sidebar-resizer]');
+    assert(divider && !divider.hidden);
+    divider.dispatchEvent(new resize.w.KeyboardEvent('keydown', {key:'ArrowRight',bubbles:true}));
+    assert(resize.doc.cookie.includes('sps_reader_sidebar_width=272'));
+    assert.equal(resize.doc.querySelector('.reader-frame').style.getPropertyValue('--sidebar-width'),'272px');
+    divider.dispatchEvent(new resize.w.KeyboardEvent('keydown', {key:'Home',bubbles:true}));
+    assert(resize.doc.cookie.includes('sps_reader_sidebar_width=220'));
+    divider.dispatchEvent(new resize.w.KeyboardEvent('keydown', {key:'Enter',bubbles:true}));
+    assert(!resize.doc.cookie.includes('sps_reader_sidebar_width'));
+    assert.equal(resize.doc.querySelector('.reader-frame').style.getPropertyValue('--sidebar-width'),'');
+  } finally { resize.close(); }
   const search = page({mobile: true, reduced: true});
   try {
     const input = search.doc.querySelector('input'), results = search.doc.querySelector('[data-share-search-results]');

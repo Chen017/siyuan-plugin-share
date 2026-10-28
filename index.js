@@ -1738,9 +1738,9 @@ class SiYuanSharePlugin extends Plugin {
   loadInterfaceControls() {
     const base = `/plugins/${this.name}/resources/`;
     const style = document.createElement("link");
-    style.rel = "stylesheet"; style.href = base + "controls.css?v=0.5.7";
+    style.rel = "stylesheet"; style.href = base + "controls.css?v=0.5.8";
     const script = document.createElement("script");
-    script.src = base + "controls.js?v=0.5.7";
+    script.src = base + "controls.js?v=0.5.8";
     script.onload = () => {
       if (this.isUnloading) return;
       this.disposeInterfaceControls = window.SPSControls?.mount(document.body, 'select.sps-site-select, input#sps-share-expires');
