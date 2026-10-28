@@ -50,9 +50,9 @@ class SelectedFixTests:
                 expires = int(time.time()) + 3600
                 self.api('shares/access/update', {'shareId': share['id'], 'password': 'KeepSecret!', 'expiresAt': expires, 'visitorLimit': 2})
                 self.api('shares/upload/complete', {'uploadId': init['uploadId']}, status=409)
-                row = self.rows(f"SELECT password_hash,expires_at,visitor_limit FROM shares WHERE id={int(share['id'])}")[0]
+                row = self.rows(f"SELECT password_hash,expires_at FROM shares WHERE id={int(share['id'])}")[0]
                 self.assertTrue(row['password_hash'])
-                self.assertEqual((row['expires_at'], row['visitor_limit']), (expires, 2))
+                self.assertEqual(row['expires_at'], expires)
                 self.assertNotIn(b'OLD_BODY', self.client.__class__(self.base).request('/s/' + share['slug'])[2])
                 self.api('shares/upload/cancel', {'uploadId': init['uploadId']})
                 init = self.api('shares/' + kind + '/init', {'metadata': meta})
@@ -142,22 +142,23 @@ class SelectedFixTests:
         """, share['id'])
         self.assertEqual(result, [True, False, True, False])
 
-    def test_fixes_search_and_atomic_visitor_admission(self):
+    def test_fixes_search_and_concurrent_read_access_without_admission(self):
         share = self.share(visitorLimit=1)
-        visitor = self.client.__class__(self.base)
         path = '/s/' + share['slug']
-        self.assertIn(b'PHP83_MARKER', visitor.request(path + '/search?q=PHP83_MARKER')[2])
-        self.assertEqual(self.rows(f"SELECT COUNT(*) AS n FROM share_visitors WHERE share_id={int(share['id'])}")[0]['n'], 1)
-        self.assertEqual(self.client.__class__(self.base).request(path + '/search?q=PHP83_MARKER')[0], 403)
-        self.assertIn(b'PHP83_MARKER', visitor.request(path)[2])
-        share = self.api('shares/doc', {'docId': self.name + 'race', 'markdown': 'body', 'visitorLimit': 1})['share']
+        for _ in range(3):
+            client = self.client.__class__(self.base)
+            self.assertIn(b'PHP83_MARKER', client.request(path + '/search?q=PHP83_MARKER')[2])
+            self.assertIn(b'PHP83_MARKER', client.request(path)[2])
+        self.assertFalse(self.rows("SELECT name FROM sqlite_master WHERE name='share_visitors'"))
         barrier = time.time() + 1.5
-        code = "$_COOKIE['sps_uv']='slot-'.$argv[3];db();while(microtime(true)<(float)$argv[4])usleep(1000);echo admit_share_visitor((int)$argv[2])?'accepted':'limited';"
+        code = "db();while(microtime(true)<(float)$argv[4])usleep(1000);echo share_read_access_allowed((int)$argv[2])?'accepted':'denied';"
         workers = [subprocess.Popen(self.fixes_php_command(code, share['id'], i, barrier), stdout=subprocess.PIPE, stderr=subprocess.PIPE) for i in range(8)]
-        outputs = []
         for worker in workers:
             out, err = worker.communicate(timeout=20)
-            self.assertEqual((worker.returncode, err), (0, b''), err)
-            outputs.append(out.decode())
-        self.assertEqual(outputs.count('accepted'), 1, outputs)
-        self.assertEqual(outputs.count('limited'), 7, outputs)
+            self.assertEqual((worker.returncode, err, out), (0, b'', b'accepted'))
+        self.api('shares/access/update', {'shareId': share['id'], 'password': 'New-Pass!', 'visitorLimit': 17})
+        self.assertNotIn(b'PHP83_MARKER', client.request(path)[2])
+        self.api('shares/access/update', {'shareId': share['id'], 'clearPassword': True, 'expiresAt': (int(time.time()) - 3600) * 1000})
+        self.assertNotIn(b'PHP83_MARKER', client.request(path)[2])
+        self.api('shares/access/update', {'shareId': share['id'], 'clearExpires': True, 'clearVisitorLimit': True})
+        self.assertIn(b'PHP83_MARKER', client.request(path)[2])

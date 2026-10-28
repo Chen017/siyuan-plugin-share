@@ -98,7 +98,7 @@ function host({ mobile = false, locale = 'en_US', stored = {} } = {}) {
   const oldShare = { id: 'share-old', type: 'doc', docId: '20261027000000-aaaaaaa', slug: 'kept' };
   const fixture = host({ mobile: true, stored: {
     settings: { siteUrl: 'https://notes.invalid', apiKey: 'existing-key' },
-    shares: [oldShare],
+    shares: [{...oldShare,visitorLimit:1,visitorCount:4}],
   } });
   try {
     const { plugin, storage, requests, sandbox, timers } = fixture;
@@ -107,6 +107,7 @@ function host({ mobile = false, locale = 'en_US', stored = {} } = {}) {
     assert(siteId);
     assert.equal(plugin.settings.apiKey, 'existing-key');
     assert.deepEqual(plain(plugin.shares), [oldShare]);
+    assert.deepEqual(plain(storage.get('shares')), [oldShare], 'Retire only visitor fields in legacy share cache');
     assert.deepEqual(storage.get('sharesBySite')[siteId], [oldShare]);
     await plugin.loadState();
     assert.equal(plugin.settings.activeSiteId, siteId, 'Old settings migration is idempotent');

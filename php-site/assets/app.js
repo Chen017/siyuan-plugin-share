@@ -2623,9 +2623,12 @@
       if (target.closest("[data-reader-show-tree]")) {
         document.querySelector('[data-share-tab="tree"]')?.click();
         setOpen(true);
-        const toggle = sidebar.querySelector('.kb-tree-toggle[aria-expanded="false"]');
-        toggle?.click();
-        (sidebar.querySelector(".kb-tree-toggle, .kb-tree-item, [data-share-search-input]") || heading.querySelector("button")).focus({preventScroll: true});
+        const current = sidebar.querySelector('.kb-tree-item.is-active, .kb-tree-item');
+        if (current?.dataset.docId) readerRevealDocument(current.dataset.docId);
+        else sidebar.querySelector('.kb-tree-toggle[aria-expanded="false"]')?.click();
+        current?.scrollIntoView?.({block: "nearest", behavior: "auto"});
+        revealSurface(sidebar.querySelector('[data-share-panel="tree"]'));
+        (sidebar.querySelector(".kb-tree-item.is-active, .kb-tree-item, .kb-tree-toggle") || heading.querySelector("button")).focus({preventScroll: true});
       }
     });
     if (openBtn && sidebar) {
@@ -2874,14 +2877,39 @@
   };
 
   const initFormConfirm = () => {
-    document.querySelectorAll("form[data-confirm-message]").forEach((form) => {
-      form.addEventListener("submit", (event) => {
-        const message = form.getAttribute("data-confirm-message");
-        if (message && !window.confirm(message)) {
-          event.preventDefault();
-        }
-      });
+    let pending = null;
+    const dialog = document.createElement("dialog");
+    dialog.className = "confirm-dialog";
+    dialog.innerHTML = '<form method="dialog"><h2 id="confirm-title">Confirm action</h2><p id="confirm-description"></p><div class="form-actions"><button class="button" value="cancel" autofocus>Cancel</button><button class="button danger" value="confirm">Confirm</button></div></form>';
+    dialog.setAttribute("aria-labelledby", "confirm-title");
+    dialog.setAttribute("aria-describedby", "confirm-description");
+    document.body.append(dialog);
+    dialog.addEventListener("close", () => {
+      const saved = pending; pending = null;
+      if (!saved) return;
+      saved.trigger?.focus({preventScroll: true});
+      if (dialog.returnValue === "confirm") {
+        saved.form.dataset.confirmed = "true";
+        saved.form.requestSubmit(saved.trigger?.type === "submit" ? saved.trigger : undefined);
+      }
     });
+    document.addEventListener("submit", event => {
+      const form = event.target;
+      if (!form.matches("form[data-confirm-message]")) return;
+      if (form.dataset.confirmed) { delete form.dataset.confirmed; return; }
+      event.preventDefault();
+      if (pending) return;
+      pending = {form, trigger: event.submitter || document.activeElement};
+      dialog.querySelector("p").textContent = form.dataset.confirmMessage;
+      dialog.querySelector('[value="confirm"]').textContent = event.submitter?.textContent.trim() || "Confirm";
+      dialog.returnValue = "";
+      dialog.showModal();
+      revealSurface(dialog);
+    });
+    dialog.addEventListener("click", event => { if (event.target === dialog) {
+      const rect = dialog.getBoundingClientRect();
+      if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog.close("cancel");
+    }});
   };
 
   const initFlashToast = () => {
@@ -5257,7 +5285,8 @@ const initImageViewer = () => {
   initKnowledgeTree();
   initActionTableOverflowState();
 
-  initFormConfirm();
+  window.SPSControls?.mount();
+  if (document.querySelector("form[data-confirm-message]")) initFormConfirm();
 
   initFlashToast();
 

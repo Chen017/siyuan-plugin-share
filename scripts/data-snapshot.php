@@ -15,15 +15,11 @@ if ($pdo->query('PRAGMA integrity_check')->fetchAll(PDO::FETCH_COLUMN) !== ['ok'
 $result = ['integrity' => 'ok', 'foreign_key_violations' => count($pdo->query('PRAGMA foreign_key_check')->fetchAll()), 'counts' => [], 'fingerprints' => []];
 $queries = [
     'users' => 'SELECT id, username, password_hash, role, disabled, api_key_hash, api_key_prefix, api_key_last4, must_change_password FROM users ORDER BY id',
-    'shares' => 'SELECT id, user_id, type, slug, title, doc_id, notebook_id, password_hash, expires_at, visitor_limit, deleted_at FROM shares ORDER BY id',
+    'shares' => 'SELECT id, user_id, type, slug, title, doc_id, notebook_id, password_hash, expires_at, deleted_at FROM shares ORDER BY id',
     'share_docs' => 'SELECT * FROM share_docs ORDER BY id',
     'share_assets' => 'SELECT * FROM share_assets ORDER BY id',
 ];
 if ($coreOnly) {
-    $hasLogs = (bool)$pdo->query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='share_access_logs'")->fetchColumn();
-    $queries['share_visitors'] = 'SELECT share_id, visitor_id FROM share_visitors'
-        . ($hasLogs ? ' UNION SELECT l.share_id, l.visitor_id FROM share_access_logs l JOIN shares s ON s.id=l.share_id WHERE l.visitor_id IS NOT NULL AND l.visitor_id != ""' : '')
-        . ' ORDER BY share_id, visitor_id';
     $queries['settings'] = "SELECT key,value FROM settings WHERE key IN ('site_base_url','reader_home_url','site_head_html',
         'site_custom_css_enabled','site_custom_css','site_custom_js_enabled','site_custom_js','default_storage_limit_bytes')
         OR key LIKE 'pdf_export_%' ORDER BY key";

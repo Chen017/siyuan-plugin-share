@@ -401,15 +401,6 @@ function route_share(string $slug, ?string $docId = null): void {
         return;
     }
 
-    if (share_visitor_limit_reached($share)) {
-        $content = '<div class="share-shell share-shell--single">';
-        $content .= '<div class="share-content" role="main">';
-        $content .= '<div class="share-header"><h1>' . $shareTitle . '</h1></div>';
-        $content .= '<div class="share-empty">This share has reached its visitor limit.</div>';
-        $content .= '</div></div>';
-        render_page($shareTitleRaw, $content, null, '', ['layout' => 'share']);
-        return;
-    }
 
     if (share_requires_password($share) && !share_access_granted($shareId)) {
         $error = '';
@@ -461,18 +452,18 @@ function route_share(string $slug, ?string $docId = null): void {
         render_share_not_found_page();
         return;
     }
-    $visitorRegistered = false;
-    $registerShareVisitor = function () use (&$visitorRegistered, $share, $shareId): void {
-        if ($visitorRegistered) {
+    $accessChecked = false;
+    $checkShareAccess = function () use (&$accessChecked, $share, $shareId): void {
+        if ($accessChecked) {
             return;
         }
-        if (!admit_share_visitor($shareId)) {
-            if (is_share_partial_request()) api_response(403, null, 'Share access changed or the visitor limit was reached');
+        if (!share_read_access_allowed($shareId)) {
+            if (is_share_partial_request()) api_response(403, null, 'Share access changed');
             http_response_code(403);
-            render_page('Share unavailable', '<p>This share is no longer available or has reached its visitor limit.</p>', null, '', ['layout' => 'share']);
+            render_page('Share unavailable', '<p>This share is no longer available.</p>', null, '', ['layout' => 'share']);
             exit;
         }
-        $visitorRegistered = true;
+        $accessChecked = true;
     };
 
     $assetBasePath = base_path() . '/uploads/shares/' . $shareId . '/';
@@ -507,7 +498,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $markdown = strip_duplicate_title_heading($markdown, $docTitleRaw);
             $markdown = replace_custom_emoji_tokens($markdown, (int)$shareId, $assetBasePath);
             $markdown = insert_adjacent_emoji_image_spacing($markdown);
-            $registerShareVisitor();
+            $checkShareAccess();
             $documentTree = build_doc_tree($docs, $activeDocId);
             $treeHtml = render_doc_tree($documentTree, $slug, $activeDocId, 0, '', $assetBasePath);
             $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
@@ -587,7 +578,7 @@ function route_share(string $slug, ?string $docId = null): void {
         $markdown = strip_duplicate_title_heading($markdown, $docTitleRaw);
         $markdown = replace_custom_emoji_tokens($markdown, (int)$shareId, $assetBasePath);
         $markdown = insert_adjacent_emoji_image_spacing($markdown);
-        $registerShareVisitor();
+        $checkShareAccess();
         $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
         $sidebar .= render_reader_library($shareTitleRaw, $slug);
         $sidebar .= render_share_search_box();
@@ -656,7 +647,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $markdown = strip_duplicate_title_heading($markdown, $docTitleRaw);
             $markdown = replace_custom_emoji_tokens($markdown, (int)$shareId, $assetBasePath);
             $markdown = insert_adjacent_emoji_image_spacing($markdown);
-            $registerShareVisitor();
+            $checkShareAccess();
             $crumbs = build_breadcrumbs((string)($doc['hpath'] ?? ''));
             if (!empty($crumbs)) {
                 array_pop($crumbs);
@@ -692,7 +683,7 @@ function route_share(string $slug, ?string $docId = null): void {
         }
 
         if (!$docId) {
-            $registerShareVisitor();
+            $checkShareAccess();
             $mainHtml = render_notebook_welcome($shareTitleRaw, $slug);
             if ($isPartial) {
                 api_response(200, [

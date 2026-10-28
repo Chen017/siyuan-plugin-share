@@ -11,7 +11,7 @@ with tempfile.TemporaryDirectory(prefix='siyuan-package-') as directory:
     subprocess.run([sys.executable, str(root / 'scripts/package.py'), '--output', directory, '--version', 'test'], check=True)
     with zipfile.ZipFile(Path(directory) / 'package.zip') as archive:
         assert archive.testzip() is None
-        assert {'index.js', 'index.css', 'plugin.json', 'i18n/en_US.json', 'i18n/zh_CN.json'} <= set(archive.namelist())
+        assert {'index.js', 'index.css', 'plugin.json', 'i18n/en_US.json', 'i18n/zh_CN.json', 'resources/controls.js', 'resources/controls.css'} <= set(archive.namelist())
         assert not any(name.startswith(('php-site/', 'tests/', '.git/', '.test-output/')) for name in archive.namelist())
     with zipfile.ZipFile(Path(directory) / 'php-site-test.zip') as archive:
         names = set(archive.namelist())

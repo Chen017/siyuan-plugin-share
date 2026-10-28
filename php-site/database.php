@@ -48,7 +48,6 @@ function migrate(PDO $pdo): void {
         notebook_id TEXT,
         password_hash TEXT,
         expires_at INTEGER,
-        visitor_limit INTEGER NOT NULL DEFAULT 0,
         size_bytes INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
@@ -102,7 +101,6 @@ function migrate(PDO $pdo): void {
         title TEXT,
         password_hash TEXT,
         expires_at INTEGER,
-        visitor_limit INTEGER NOT NULL DEFAULT 0,
         asset_manifest TEXT,
         doc_manifest TEXT,
         upload_mode TEXT,
@@ -132,15 +130,6 @@ function migrate(PDO $pdo): void {
         updated_at TEXT NOT NULL
     );');
 
-    $pdo->exec('CREATE TABLE IF NOT EXISTS share_visitors (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        share_id INTEGER NOT NULL,
-        visitor_id TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        UNIQUE(share_id, visitor_id),
-        FOREIGN KEY(share_id) REFERENCES shares(id)
-    );');
-    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_share_visitors_share ON share_visitors (share_id)');
 
     $pdo->exec('CREATE TABLE IF NOT EXISTS recycled_share_ids (
         share_id INTEGER PRIMARY KEY,
@@ -158,9 +147,7 @@ function migrate(PDO $pdo): void {
     ensure_column($pdo, 'users', 'must_change_password', 'INTEGER NOT NULL DEFAULT 0');
     ensure_column($pdo, 'shares', 'password_hash', 'TEXT');
     ensure_column($pdo, 'shares', 'expires_at', 'INTEGER');
-    ensure_column($pdo, 'shares', 'visitor_limit', 'INTEGER NOT NULL DEFAULT 0');
     ensure_column($pdo, 'shares', 'size_bytes', 'INTEGER NOT NULL DEFAULT 0');
-    ensure_column($pdo, 'share_uploads', 'visitor_limit', 'INTEGER NOT NULL DEFAULT 0');
     ensure_column($pdo, 'share_uploads', 'upload_mode', 'TEXT');
     ensure_column($pdo, 'share_uploads', 'patch_manifest', 'TEXT');
     ensure_column($pdo, 'share_uploads', 'doc_manifest', 'TEXT');
@@ -192,6 +179,7 @@ function migrate(PDO $pdo): void {
     seed_default_settings($pdo);
     seed_default_admin($pdo);
     retire_legacy_modules($pdo);
+    retire_share_visitors($pdo);
 }
 
 function table_has_column(PDO $pdo, string $table, string $column): bool {
@@ -267,4 +255,18 @@ function seed_default_admin(PDO $pdo): void {
         ':created_at' => $now,
         ':updated_at' => $now,
     ]);
+}
+
+/** Retire only share admission data; PDF quota identities use separate tables. */
+function retire_share_visitors(PDO $pdo): void {
+    if (fetch_setting($pdo, 'share_visitors_retired_v1') === '1') return;
+    $pdo->exec('BEGIN IMMEDIATE');
+    try {
+        $pdo->exec('DROP TABLE IF EXISTS share_visitors');
+        foreach (['shares', 'share_uploads'] as $table) {
+            if (table_has_column($pdo, $table, 'visitor_limit')) $pdo->exec('ALTER TABLE ' . $table . ' DROP COLUMN visitor_limit');
+        }
+        ensure_setting($pdo, 'share_visitors_retired_v1', '1');
+        $pdo->exec('COMMIT');
+    } catch (Throwable $error) { $pdo->exec('ROLLBACK'); throw $error; }
 }

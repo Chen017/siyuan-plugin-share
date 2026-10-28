@@ -2,7 +2,7 @@
 
 [English](README.md) · [简体中文](README_zh_CN.md)
 
-Share a SiYuan document, a document tree or a notebook through a web link, with passwords, expiration dates, visitor limits and incremental sync.
+Share a SiYuan document, a document tree or a notebook through a web link, with passwords, expiration dates, incremental sync.
 
 This is **[Chen017](https://github.com/Chen017)'s personal fork** of [b8l8u8e8/siyuan-plugin-share](https://github.com/b8l8u8e8/siyuan-plugin-share). The original sharing features come from upstream; this fork focuses on reading, rendering fixes and self-hosting. Original copyright and the [MIT license](LICENSE) are retained.
 
@@ -15,10 +15,10 @@ This is **[Chen017](https://github.com/Chen017)'s personal fork** of [b8l8u8e8/s
 | Reading | Neutral surfaces, clear blue links, rounded press feedback and short motion with reduced-motion support. Notebook landing pages offer Browse documents and local Continue reading, without duplicating the document tree. Reader controls use English. Footer links lead with this fork and credit upstream. |
 | UI & motion | Source / Preview switching keeps its position. Footnotes open after a short hover and can be pinned; transitions stay brief and respect reduced-motion settings. The admin share manager edits share details and access rules in one place. |
 | Home navigation | Configurable reader home URL. Other shares show Home / Return to home; documents, query strings and anchors within the same home share do not. |
-| Administrator-only backend | Streamlined admin navigation and settings; manage share titles, links, expiration, visitor limits and passwords. Deleted shares can be restored or permanently removed. Plugin connection details live in Site settings, and storage quotas remain available. Public registration and multi-user management are removed. |
+| Administrator-only backend | Streamlined admin navigation and settings; manage share titles, links, expiration and passwords. Deleted shares can be restored or permanently removed. Plugin connection details live in Site settings, and storage quotas remain available. Public registration and multi-user management are removed. |
 | Removed services | Access analytics and logs, admin KPI/charts, instance statistics/heartbeats, SMTP/email flows, comments, reports, announcements, moderation/scanning, ordinary CAPTCHA, ICP/contact settings, manual chunk cleanup and the global data-reset endpoint. PDF CAPTCHA and automatic upload cleanup remain. |
 | Configuration | Website/share URL prefix, HTML Head insertion and custom CSS/JS switches, editors, help and injection remain available. Upstream release checks and update prompts are removed; attribution remains. |
-| Data migration | Retired module data is removed once. Notes, share URLs, ownership, API keys and referenced attachments are preserved; historical visitor limits carry forward and storage usage is recalculated. [Scope and migration](docs/FOCUS_SIMPLIFICATION.md). |
+| Data migration | Retired module data is removed once. Notes, share URLs, ownership, API keys and referenced attachments are preserved; share visitor limits and history are removed and storage usage is recalculated. [Scope and migration](docs/FOCUS_SIMPLIFICATION.md). |
 | Rendering | SiYuan table-cell alignment fixes, on-demand diagram engines and one Markdown render per document. Math, footnotes and diagrams remain available. |
 | PDF export | Single/batch downloads in a dialog, selectable text, hidden attribution and visitor quota indicators. [Details](docs/GUEST_PDF_EXPORT.md). |
 | Accessibility & SEO | Clearer links, correct button states and TOC focus, main landmarks, working image-download controls, page descriptions, robots.txt and real 404 responses. |
@@ -57,7 +57,7 @@ Keep these paths when updating. Do not replace an existing configuration with th
 
 1. Install the Siyuan Share plugin, then enter your server URL and an API key generated in the administrator backend.
 2. Right-click a document or notebook to create a share.
-3. Set its password, expiration date or visitor limit, then copy the link.
+3. Set its password, expiration date, then copy the link.
 
 Updating an existing share preserves its URL. Automatic updates, incremental sync, document trees, search, math, footnotes and diagrams remain supported.
 

@@ -7,13 +7,6 @@ function retire_legacy_modules(PDO $pdo): void {
     $tables = $pdo->query("SELECT name FROM sqlite_master WHERE type='table'")->fetchAll(PDO::FETCH_COLUMN);
     $pdo->beginTransaction();
     try {
-        // Preserve visitor limits before retiring analytics. Future reads use only share_visitors.
-        if (in_array('share_access_logs', $tables, true)) {
-            $pdo->exec('INSERT OR IGNORE INTO share_visitors (share_id, visitor_id, created_at)
-                SELECT l.share_id, l.visitor_id, MIN(l.created_at) FROM share_access_logs l
-                JOIN shares s ON s.id = l.share_id WHERE l.visitor_id IS NOT NULL AND l.visitor_id != ""
-                GROUP BY l.share_id, l.visitor_id');
-        }
         retire_unreferenced_comment_files($pdo);
         foreach (['share_access_logs', 'share_access_geo_cache', 'user_settings', 'share_comments', 'share_reports',
             'announcements', 'email_codes', 'password_resets', 'instance_heartbeats'] as $table) {

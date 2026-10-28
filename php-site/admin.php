@@ -100,50 +100,41 @@ if ($path === '/dashboard') {
     $where = $status === 'active' ? 'deleted_at IS NULL' : ($status === 'deleted' ? 'deleted_at IS NOT NULL' : '1=1');
     $params = [];
     if ($search !== '') { $where .= ' AND (title LIKE ? OR slug LIKE ?)'; $params = ['%' . $search . '%', '%' . $search . '%']; }
-    $stmt = db()->prepare('SELECT COUNT(*) FROM shares WHERE ' . $where);
+    $stmt = db()->prepare('SELECT * FROM shares WHERE ' . $where . ' ORDER BY updated_at DESC, id DESC');
     $stmt->execute($params);
-    [$page, $size, $pages, $offset] = paginate((int)$stmt->fetchColumn(), max(1, (int)($_GET['share_page'] ?? 1)), normalize_page_size($_GET['share_size'] ?? 10));
-    $stmt = db()->prepare('SELECT shares.*, (SELECT COUNT(*) FROM share_visitors WHERE share_id = shares.id) AS visitor_count FROM shares WHERE ' . $where . ' ORDER BY updated_at DESC LIMIT ? OFFSET ?');
-    foreach ($params as $i => $value) $stmt->bindValue($i + 1, $value);
-    $stmt->bindValue(count($params) + 1, $size, PDO::PARAM_INT);
-    $stmt->bindValue(count($params) + 2, $offset, PDO::PARAM_INT);
-    $stmt->execute();
     $content .= '<div class="card" id="shares"><h2>Shares</h2><form class="share-filter-form" method="get"><label>Search<input class="input" name="share_search" value="' . htmlspecialchars($search) . '"></label><label>Status<select class="input" name="status">';
     foreach (['active' => 'Active', 'deleted' => 'Deleted', 'all' => 'All'] as $value => $label) $content .= '<option value="' . $value . '"' . ($status === $value ? ' selected' : '') . '>' . $label . '</option>';
-    $content .= '</select></label><button class="button" type="submit">Search</button></form><div class="table-scroll table-scroll-has-actions"><table class="table table-has-actions admin-shares"><thead><tr><th>Share</th><th>Access</th><th>Visitors</th><th>Size</th><th class="actions">Manage</th></tr></thead><tbody>';
+    $content .= '</select></label><button class="button" type="submit">Search</button></form><div class="share-grid" role="list" aria-label="Shared notes">';
     $listedShares = $stmt->fetchAll(PDO::FETCH_ASSOC);
     foreach ($listedShares as $share) {
         $deleted = !empty($share['deleted_at']);
         $title = htmlspecialchars($share['title']);
         $manage = $base . '/admin/share?share_id=' . (int)$share['id'];
-        $content .= '<tr><td class="share-title-cell">' . ($deleted ? '<strong>' . $title . '</strong>' : '<a class="share-title-link" href="' . $manage . '">' . $title . '</a>') . '<small>' . ($share['type'] === 'notebook' ? 'Notebook' : 'Document') . ' · /s/' . htmlspecialchars($share['slug']) . '</small></td>';
+        $content .= '<article class="share-card" role="listitem"><div class="share-title-cell">' . ($deleted ? '<strong>' . $title . '</strong>' : '<a class="share-title-link" href="' . $manage . '">' . $title . '</a>') . '<small>' . ($share['type'] === 'notebook' ? 'Notebook' : 'Document') . ' · /s/' . htmlspecialchars($share['slug']) . '</small></div>';
         $statusLabel = $deleted ? 'Deleted' : (share_is_expired($share) ? 'Expired' : (share_requires_password($share) ? 'Password protected' : 'Anyone with the link'));
-        $content .= '<td><span class="share-access-status">' . $statusLabel . '</span><small>' . (!empty($share['expires_at']) ? 'Expires ' . date('Y-m-d H:i', (int)$share['expires_at']) . ' (UTC+8)' : 'No expiry') . '</small></td><td data-label="Visitors">' . (int)$share['visitor_count'] . ' / ' . ((int)$share['visitor_limit'] ?: 'Unlimited') . '</td><td data-label="Size">' . format_bytes((int)$share['size_bytes']) . '</td><td class="actions"><div class="table-actions">';
+        $content .= '<div class="share-card-meta"><div><span class="share-access-status">' . $statusLabel . '</span><small>' . (!empty($share['expires_at']) ? 'Expires ' . date('Y-m-d H:i', (int)$share['expires_at']) . ' (UTC+8)' : 'No expiry') . '</small></div><span class="share-card-size">' . format_bytes((int)$share['size_bytes']) . '</span></div><div class="table-actions">';
         if (!$deleted) $content .= '<a class="button" href="' . $manage . '">Manage</a>';
         $actions = $deleted ? ['restore' => 'Restore', 'hard-delete' => 'Delete permanently'] : ['delete' => 'Delete'];
         foreach ($actions as $action => $label) {
             $confirm = $action === 'hard-delete' ? ' data-confirm-message="Permanently delete this share and its files?"' : '';
             $content .= '<form class="inline-form" method="post" action="' . $base . '/admin/share-' . $action . '"' . $confirm . '>' . render_hidden_inputs(['csrf' => csrf_token(), 'share_id' => $share['id']]) . '<button class="button' . ($action === 'restore' ? '' : ' danger') . '" type="submit">' . $label . '</button></form>';
         }
-        $content .= '</div></td></tr>';
+        $content .= '</div></article>';
     }
-    if (!$listedShares) $content .= '<tr><td colspan="5" class="admin-empty">' . ($search !== '' ? 'No shares match your search.' : ($status === 'deleted' ? 'No deleted shares.' : 'No shared notes yet. Share a notebook from the SiYuan plugin to begin.')) . '</td></tr>';
-    $content .= '</tbody></table></div><p>Page ' . $page . ' / ' . $pages . '</p>';
-    if ($page > 1) $content .= '<a class="button" href="' . htmlspecialchars(build_dashboard_query_url(['share_page' => $page - 1]), ENT_QUOTES) . '">Previous</a> ';
-    if ($page < $pages) $content .= '<a class="button" href="' . htmlspecialchars(build_dashboard_query_url(['share_page' => $page + 1]), ENT_QUOTES) . '">Next</a>';
-    $content .= '</div>';
+    if (!$listedShares) $content .= '<p class="admin-empty">' . ($search !== '' ? 'No shares match your search.' : ($status === 'deleted' ? 'No deleted shares.' : 'No shared notes yet. Share a notebook from the SiYuan plugin to begin.')) . '</p>';
+    $content .= '</div></div>';
     render_page('Shares', $content, $user, '', ['nav' => 'dashboard']);
 }
 
 if ($path === '/admin') {
     $user = require_admin();
-    $content = '<div class="admin-page-heading"><div><p class="admin-eyebrow">Preferences</p><h1>Site settings</h1><p class="muted">Reading, storage and appearance.</p></div></div><div class="card settings-section" id="settings"><h2>General & appearance</h2>';
+    $content = '<div class="admin-page-heading"><div><p class="admin-eyebrow">Preferences</p><h1>Site settings</h1><p class="muted">Reading, storage and appearance.</p></div></div><div class="card settings-section" id="settings"><h2>Storage</h2>';
     foreach (['error', 'info'] as $kind) if ($message = flash($kind)) $content .= '<p class="flash">' . htmlspecialchars($message) . '</p>';
     $content .= '<form class="settings-form" method="post" action="' . $base . '/admin/settings">' . render_hidden_inputs(['csrf' => csrf_token()]);
-    $content .= '<label>Storage limit (MB)<input class="input" type="number" min="0" name="default_storage_limit_mb" value="' . mb_from_bytes(default_storage_limit_bytes()) . '"></label><p class="muted">0 means unlimited. Stored notes and attachments count toward the limit.</p>';
+    $content .= '<label for="storage-limit">Storage limit <span class="field-unit">(MB)</span></label><input id="storage-limit" aria-describedby="storage-limit-hint" class="input" type="number" min="0" name="default_storage_limit_mb" value="' . mb_from_bytes(default_storage_limit_bytes()) . '"><p class="field-hint" id="storage-limit-hint">0 means unlimited. Stored notes and attachments count toward the limit.</p><section class="settings-group"><h2>Reading & links</h2>';
     $content .= '<label for="site-base-url">Website URL / share link prefix</label><input class="input" id="site-base-url" name="site_base_url" type="url" value="' . htmlspecialchars((string)get_setting('site_base_url', ''), ENT_QUOTES) . '"><details><summary>About the share link prefix</summary><p>Use the public website address, including any subdirectory. This is useful when HTTPS terminates at a reverse proxy. Leave empty to use the request address.</p></details>';
     $content .= '<label for="reader-home-url">Reader home URL</label><input class="input" id="reader-home-url" type="url" name="reader_home_url" value="' . htmlspecialchars((string)get_setting('reader_home_url', ''), ENT_QUOTES) . '"><p class="muted">Other shares show Home. Documents and anchors within the home share do not. Leave empty to disable.</p>';
-    $content .= '<label for="site-head-html">HTML Head insertion</label><textarea class="input code-input" id="site-head-html" name="site_head_html" rows="4">' . htmlspecialchars((string)get_setting('site_head_html', '')) . '</textarea><p class="muted">Inserted into the document head. Use only code you trust.</p>';
+    $content .= '</section><section class="settings-group"><h2>Appearance & customization</h2><label for="site-head-html">HTML Head insertion</label><textarea class="input code-input" id="site-head-html" name="site_head_html" rows="4">' . htmlspecialchars((string)get_setting('site_head_html', '')) . '</textarea><p class="muted">Inserted into the document head. Use only code you trust.</p>';
     foreach (['css' => true, 'js' => false] as $kind => $default) {
         $upper = strtoupper($kind);
         $enabled = get_bool_setting('site_custom_' . $kind . '_enabled', $default);
@@ -152,7 +143,7 @@ if ($path === '/admin') {
         $example = $kind === 'css' ? 'body.layout-share .markdown-body { max-width: 980px; }' : 'document.querySelectorAll(".markdown-body a").forEach((link) => { link.rel = "noopener"; });';
         $content .= '<details><summary>Custom ' . $upper . ' help and example</summary><p>' . ($kind === 'css' ? 'Scope selectors to body.layout-share or body.layout-app. Rules load after the site stylesheet.' : 'JavaScript runs after DOMContentLoaded. It is disabled by default. Use only trusted scripts.') . '</p><pre class="help-code">' . htmlspecialchars($example) . '</pre></details>';
     }
-    $content .= '<button class="button primary" type="submit">Save settings</button></form></div>';
+    $content .= '</section><button class="button primary" type="submit">Save settings</button></form></div>';
     $content .= render_pdf_export_settings();
     $key = (string)($_SESSION['api_key_plain'] ?? '');
     unset($_SESSION['api_key_plain']);

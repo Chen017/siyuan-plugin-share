@@ -80,106 +80,7 @@
       return btoa(binary);
     }).catch((error) => { font = null; throw error; }));
     window.SPSPdfFont().catch(() => {});
-    // Keep native selects as the form's source of truth, with themed controls
-    // when JavaScript is available. The option list stays in flow inside iframes.
-    const selectMenus = Array.from(form.querySelectorAll('select'), (select, index) => {
-      const wrapper = document.createElement('div');
-      wrapper.className = 'pdf-select';
-      wrapper.dataset.pdfSelect = '';
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'pdf-select-trigger';
-      button.setAttribute('role', 'combobox');
-      button.setAttribute('aria-haspopup', 'listbox');
-      button.setAttribute('aria-expanded', 'false');
-      button.setAttribute('aria-label', select.closest('label').firstChild.textContent.trim());
-      const list = document.createElement('div');
-      list.id = `pdf-select-${index}`;
-      list.className = 'pdf-select-options';
-      list.setAttribute('role', 'listbox');
-      list.setAttribute('aria-label', button.getAttribute('aria-label'));
-      list.hidden = true;
-      button.setAttribute('aria-controls', list.id);
-      let active = select.selectedIndex;
-      let search = '';
-      let searchedAt = 0;
-      const options = Array.from(select.options, (option, position) => {
-        const item = document.createElement('div');
-        item.id = `${list.id}-${position}`;
-        item.className = 'pdf-select-option';
-        item.setAttribute('role', 'option');
-        item.dataset.value = option.value;
-        item.textContent = option.text;
-        list.append(item);
-        return item;
-      });
-      const close = () => {
-        list.hidden = true;
-        button.setAttribute('aria-expanded', 'false');
-        button.removeAttribute('aria-activedescendant');
-      };
-      const highlight = (position) => {
-        active = (position + options.length) % options.length;
-        options.forEach((item, i) => item.toggleAttribute('data-active', i === active));
-        button.setAttribute('aria-activedescendant', options[active].id);
-        options[active].scrollIntoView({ block: 'nearest' });
-      };
-      const sync = () => {
-        button.textContent = select.options[select.selectedIndex].text;
-        options.forEach((item, i) => item.setAttribute('aria-selected', String(i === select.selectedIndex)));
-      };
-      const open = () => {
-        selectMenus.forEach((menu) => menu.close());
-        list.hidden = false;
-        button.setAttribute('aria-expanded', 'true');
-        highlight(select.selectedIndex);
-      };
-      const choose = (position) => {
-        select.selectedIndex = position;
-        select.dispatchEvent(new Event('change', { bubbles: true }));
-        close();
-        button.focus({ preventScroll: true });
-      };
-      button.addEventListener('click', () => list.hidden ? open() : close());
-      button.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape' && !list.hidden) {
-          event.preventDefault(); event.stopPropagation(); close(); return;
-        }
-        if (event.key === 'Tab') { close(); return; }
-        if (['ArrowDown', 'ArrowUp', 'Home', 'End', 'Enter', ' '].includes(event.key)) {
-          event.preventDefault();
-          const wasOpen = !list.hidden;
-          if (!wasOpen) open();
-          if (event.key === 'ArrowDown') highlight(active + 1);
-          else if (event.key === 'ArrowUp') highlight(active - 1);
-          else if (event.key === 'Home') highlight(0);
-          else if (event.key === 'End') highlight(options.length - 1);
-          else if (wasOpen) choose(active);
-        } else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
-          event.preventDefault();
-          search = Date.now() - searchedAt < 700 ? search + event.key : event.key;
-          searchedAt = Date.now();
-          if (list.hidden) open();
-          const position = options.findIndex((item) => item.textContent.toLocaleLowerCase().startsWith(search.toLocaleLowerCase()));
-          if (position >= 0) highlight(position);
-        }
-      });
-      // Keep focus on the combobox until click selects an option. Otherwise
-      // mousedown blurs the trigger and collapses the list before mouseup.
-      list.addEventListener('mousedown', (event) => event.preventDefault());
-      list.addEventListener('click', (event) => {
-        const item = event.target.closest('[role=option]');
-        if (item) { event.preventDefault(); choose(options.indexOf(item)); }
-      });
-      wrapper.addEventListener('focusout', (event) => { if (!wrapper.contains(event.relatedTarget)) close(); });
-      document.addEventListener('pointerdown', (event) => { if (!wrapper.contains(event.target)) close(); });
-      select.addEventListener('change', sync);
-      wrapper.append(button, list);
-      select.after(wrapper);
-      select.hidden = true;
-      sync();
-      return { close };
-    });
+    // app.js mounts the shared progressive select controls for this form.
     const scope = form.querySelector("[data-pdf-scope]");
     const updateScope = () => {
       form.querySelector("[data-pdf-selection]").hidden = scope.value !== "selected";
@@ -212,8 +113,8 @@
       submit.disabled = next === 'checking' || next === 'running';
       submit.textContent = next === 'running' ? 'Exporting…' : next === 'retry' ? 'Retry remaining documents' : next === 'done' ? 'Export again' : 'Export';
       form.setAttribute('aria-busy', String(submit.disabled));
-      selectMenus.forEach((menu) => menu.close());
-      form.querySelectorAll('[data-pdf-select], [data-pdf-scope], [data-pdf-root], [data-pdf-selection], [data-pdf-challenge]').forEach((node) => { node.inert = ['checking', 'running', 'retry'].includes(next); });
+      document.dispatchEvent(new Event('sps:controls-close'));
+      form.querySelectorAll('.sps-select-trigger, [data-pdf-scope], [data-pdf-root], [data-pdf-selection], [data-pdf-challenge]').forEach((node) => { node.inert = ['checking', 'running', 'retry'].includes(next); });
     };
     const showQuota = (value) => {
       const next = value.next_recovery_at ? `Next recovery: ${new Date(value.next_recovery_at * 1000).toLocaleString('en-GB')} (${value.next_recovery_count} documents, local time). ` : 'Full quota available. ';
@@ -251,7 +152,7 @@
       const resize = () => window.parent.postMessage({ type: 'sps-pdf-dialog-size', height: document.querySelector('.pdf-export-panel').getBoundingClientRect().height + 2 }, location.origin);
       new ResizeObserver(resize).observe(document.querySelector('.pdf-export-panel'));
       resize();
-      document.addEventListener('keydown', (event) => { if (event.key === 'Escape') window.parent.postMessage({ type: 'sps-pdf-dialog-close' }, location.origin); });
+      document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !event.defaultPrevented) window.parent.postMessage({ type: 'sps-pdf-dialog-close' }, location.origin); });
     }
     window.addEventListener('message', (message) => {
       if (message.origin !== location.origin || message.source !== worker.contentWindow || message.data?.type !== 'sps-pdf-export') return;

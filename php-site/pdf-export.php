@@ -208,7 +208,6 @@ function pdf_export_share(string $slug): array {
     $share = find_share_by_slug($slug);
     if (!$share) pdf_export_fail(404, '分享不存在。');
     if (share_is_expired($share)) pdf_export_fail(410, '分享已过期。');
-    if (share_visitor_limit_reached($share)) pdf_export_fail(403, '访客数已达上限。');
     if (share_requires_password($share)) {
         // Compare with this fresh row, not the request-local password hash cache.
         $entry = $_SESSION['share_access'][(int)$share['id']] ?? '';
@@ -273,8 +272,6 @@ function pdf_export_admit(int $shareId, string $fingerprint, int $documentCount 
         $share = find_share_by_id($shareId);
         if (!$share) throw new RuntimeException('分享不存在。', 404);
         if (share_is_expired($share)) throw new RuntimeException('分享已过期。', 410);
-        if (share_visitor_limit_reached($share)) throw new RuntimeException('访客数已达上限。', 403);
-        if (share_visitor_limit($share) > 0) register_share_visitor($shareId, get_visitor_id());
         $token = bin2hex(random_bytes(24));
         $pdo->prepare('INSERT INTO pdf_export_events(ip_hash, fingerprint_hash, created_at, visitor_hash, doc_count, job_token) VALUES (?, ?, ?, ?, 0, ?)')->execute([$ip, $fp, $now, $visitor, $token]);
         $pdo->prepare('INSERT INTO pdf_export_leases(token, share_id, session_hash, ip_hash, fingerprint_hash, expires_at, visitor_hash, document_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')->execute([

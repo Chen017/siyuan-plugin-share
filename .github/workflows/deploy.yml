@@ -89,6 +89,8 @@ jobs:
             docker exec siyuan-share-web php /tmp/core-data-snapshot.php /var/www/html/storage/app.db --core-only > "$verification/core-after.json"
             cmp "$verification/core-before.json" "$verification/core-after.json"
             docker exec siyuan-share-web php -r '$p=new PDO("sqlite:/var/www/html/storage/app.db"); $p->exec("PRAGMA query_only=ON"); if ($p->query("PRAGMA integrity_check")->fetchColumn() !== "ok" || $p->query("PRAGMA foreign_key_check")->fetchAll()) exit(1); echo "SQLITE_INTEGRITY_OK=1\n";'
+            docker cp scripts/verify-retired-visitors.php siyuan-share-web:/tmp/verify-retired-visitors.php
+            docker exec siyuan-share-web php /tmp/verify-retired-visitors.php /var/www/html/storage/app.db
             echo 'CORE_DATA_PRESERVED=1; no rollback image or persistent backup retained.'
             if [ '${{ github.event_name == 'workflow_dispatch' && inputs.apply_pdf_limits && 'yes' || 'no' }}' = yes ]; then
               docker exec --user www-data -i siyuan-share-web php /dev/stdin /var/www/html 60 120 < scripts/configure-pdf-limits.php

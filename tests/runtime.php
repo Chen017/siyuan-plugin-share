@@ -43,7 +43,7 @@ check(compute_doc_content_hash('笔记') === hash('sha256', '笔记'), 'Content 
 check(sanitize_asset_path('../private.db') === '', 'Reject traversal');
 check(sanitize_asset_path('assets/image.png') === 'assets/image.png', 'Allow normal asset path');
 check(parse_expires_at(null) === null, 'No expiration');
-check(parse_visitor_limit(4) === 4, 'Visitor limit');
+check(!function_exists('parse_visitor_limit'), 'Share visitor parsing is retired');
 
 $markdown = "# 中文标题\n\n**加粗** and [link](https://example.com)\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n- parent\n  - child\n\n```php\necho 1;\n```";
 $html = render_markdown($markdown);

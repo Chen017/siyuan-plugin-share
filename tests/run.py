@@ -350,13 +350,15 @@ class Regression(AdminShareTests, SelectedFixTests, PdfCookieTests, PdfReleaseTe
         self.api('shares/access/update', {'shareId': share['id'], 'clearExpires': True})
         self.assertIn(b'PHP83_MARKER', Client(self.base).request(path)[2])
 
-    def test_visitor_limit(self):
+    def test_legacy_visitor_limit_is_ignored(self):
         share = self.share(visitorLimit=1)
         path = '/s/' + share['slug']
         first = Client(self.base)
         self.assertIn(b'PHP83_MARKER', first.request(path)[2])
         self.assertIn(b'PHP83_MARKER', first.request(path)[2])
-        self.assertNotIn(b'PHP83_MARKER', Client(self.base).request(path)[2])
+        self.assertIn(b'PHP83_MARKER', Client(self.base).request(path)[2])
+        self.assertNotIn('visitorLimit', share)
+        self.assertFalse(any(cookie.name == 'sps_uv' for cookie in first.cookies))
 
     def test_notebook_tree_and_search(self):
         docs = [{'docId': self.name + str(i), 'title': '文档' + str(i), 'markdown': 'SEARCH_MARKER_' + str(i), 'parentId': self.name + '0' if i else ''} for i in range(2)]

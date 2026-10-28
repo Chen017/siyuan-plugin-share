@@ -1542,7 +1542,6 @@ function getShareSignature(shares) {
       notebookId: String(share?.notebookId || ""),
       updatedAt: String(share?.updatedAt || ""),
       expiresAt: String(share?.expiresAt || ""),
-      visitorLimit: String(share?.visitorLimit || ""),
       title: String(share?.title || ""),
     }))
     .filter((row) => row.id);
@@ -1690,6 +1689,7 @@ class SiYuanSharePlugin extends Plugin {
 
   onload() {
     this.isUnloading = false;
+    this.loadInterfaceControls();
     setGlobalI18nProvider(this.t.bind(this));
     const bootstrap = async () => {
       await this.clearExportRetryCacheOnStartup();
@@ -1735,7 +1735,24 @@ class SiYuanSharePlugin extends Plugin {
     void this.refreshCurrentDocContext();
   }
 
+  loadInterfaceControls() {
+    const base = `/plugins/${this.name}/resources/`;
+    const style = document.createElement("link");
+    style.rel = "stylesheet"; style.href = base + "controls.css?v=0.5.7";
+    const script = document.createElement("script");
+    script.src = base + "controls.js?v=0.5.7";
+    script.onload = () => {
+      if (this.isUnloading) return;
+      this.disposeInterfaceControls = window.SPSControls?.mount(document.body, 'select.sps-site-select, input#sps-share-expires');
+    };
+    script.onerror = () => { script.remove(); style.remove(); };
+    document.head.append(style, script);
+    this.interfaceAssets = [style, script];
+  }
+
   onunload() {
+    this.disposeInterfaceControls?.();
+    this.interfaceAssets?.forEach(node => node.remove());
     this.isUnloading = true;
     setGlobalI18nProvider(null);
     this.closeAutoUpdateStatusDialog();
@@ -3556,18 +3573,10 @@ class SiYuanSharePlugin extends Plugin {
       const hasPassword = !!share?.hasPassword;
       const expiresAt = normalizeTimestampMs(share?.expiresAt || 0);
       const expiresInputValue = expiresAt ? toDateTimeLocalInput(expiresAt) : "";
-      const visitorLimitValue = Number.isFinite(Number(share?.visitorLimit))
-        ? Math.max(0, Math.floor(Number(share.visitorLimit)))
-        : 0;
-      const visitorInputValue = visitorLimitValue > 0 ? String(visitorLimitValue) : "";
       const currentPasswordLabel = hasPassword
         ? t("siyuanShare.label.passwordSet")
         : t("siyuanShare.label.passwordNotSet");
       const currentExpiresLabel = expiresAt ? this.formatTime(expiresAt) : t("siyuanShare.label.expiresNotSet");
-      const currentVisitorLabel =
-        visitorLimitValue > 0
-          ? t("siyuanShare.label.visitorLimitCount", {count: visitorLimitValue})
-          : t("siyuanShare.label.visitorLimitNotSet");
       const passwordInputValue = share && hasPassword ? passwordKeepToken : "";
       const passwordPlaceholder = share
         ? (hasPassword ? t("siyuanShare.hint.passwordKeep") : t("siyuanShare.label.passwordNotSet"))
@@ -3593,11 +3602,8 @@ class SiYuanSharePlugin extends Plugin {
         share,
         url,
         expiresInputValue,
-        visitorLimitValue,
-        visitorInputValue,
         currentPasswordLabel,
         currentExpiresLabel,
-        currentVisitorLabel,
         slugInputValue,
         passwordInputValue,
         passwordPlaceholder,
@@ -3612,10 +3618,8 @@ class SiYuanSharePlugin extends Plugin {
       const share = state.share;
       const url = state.url;
       const expiresInputValue = state.expiresInputValue;
-      const visitorInputValue = state.visitorInputValue;
       const currentPasswordLabel = state.currentPasswordLabel;
       const currentExpiresLabel = state.currentExpiresLabel;
-      const currentVisitorLabel = state.currentVisitorLabel;
       const slugInputValue = state.slugInputValue;
       const passwordInputValue = state.passwordInputValue;
       const passwordPlaceholder = state.passwordPlaceholder;
@@ -3672,13 +3676,9 @@ class SiYuanSharePlugin extends Plugin {
         passwordInputValue,
       )}" placeholder="${escapeAttr(passwordPlaceholder)}" />
       <div class="siyuan-plugin-share__muted">${escapeHtml(t("siyuanShare.label.expiresAt"))}</div>
-      <input id="sps-share-expires" type="datetime-local" step="60" class="b3-text-field" value="${escapeAttr(
+      <input id="sps-share-expires" aria-label="${escapeAttr(t("siyuanShare.label.expiresAt"))}" type="datetime-local" step="60" class="b3-text-field" value="${escapeAttr(
         expiresInputValue,
       )}" />
-      <div class="siyuan-plugin-share__muted">${escapeHtml(t("siyuanShare.label.visitorLimit"))}</div>
-      <input id="sps-share-visitor-limit" type="number" min="0" step="1" class="b3-text-field" value="${escapeAttr(
-        visitorInputValue,
-      )}" placeholder="${escapeAttr(t("siyuanShare.hint.visitorLimit"))}" />
       <div class="siyuan-plugin-share__muted">${escapeHtml(t("siyuanShare.label.linkSuffix"))}</div>
       <input id="sps-share-slug" type="text" class="b3-text-field" value="${escapeAttr(
         slugInputValue,
@@ -3691,7 +3691,7 @@ class SiYuanSharePlugin extends Plugin {
     </div>
     <div class="siyuan-plugin-share__muted">${escapeHtml(
       currentPasswordLabel,
-    )} | ${escapeHtml(currentExpiresLabel)} | ${escapeHtml(currentVisitorLabel)}</div>
+    )} | ${escapeHtml(currentExpiresLabel)}</div>
   </div>
   ${
     showDocOptions || showExcludeOptions
@@ -3870,21 +3870,14 @@ class SiYuanSharePlugin extends Plugin {
     const readShareOptions = (root, currentShare) => {
       const passwordInput = root?.querySelector?.("#sps-share-password");
       const expiresInput = root?.querySelector?.("#sps-share-expires");
-      const visitorInput = root?.querySelector?.("#sps-share-visitor-limit");
       const slugInput = root?.querySelector?.("#sps-share-slug");
       const includeChildrenInput = root?.querySelector?.("#sps-share-include-children");
       const excludedInput = root?.querySelector?.("#sps-share-excluded-doc-ids");
       const passwordRaw = (passwordInput?.value || "").trim();
       const expiresAt = parseDateTimeLocalInput(expiresInput?.value || "");
-      const visitorRaw = (visitorInput?.value || "").trim();
-      const visitorParsed = Number(visitorRaw);
-      const visitorLimit = Number.isFinite(visitorParsed)
-        ? Math.max(0, Math.floor(visitorParsed))
-        : null;
       const excludedDocIds = normalizeDocIdList(excludedInput?.value || "");
       const hasExistingPassword = !!currentShare?.hasPassword;
       const hasExistingExpires = normalizeTimestampMs(currentShare?.expiresAt || 0) > 0;
-      const hasExistingVisitorLimit = Number(currentShare?.visitorLimit || 0) > 0;
       const currentSlug = normalizeShareSlugInput(currentShare?.slug || "");
       const requestedSlug = normalizeShareSlugInput(slugInput?.value || "");
       const password = passwordRaw === passwordKeepToken ? "" : passwordRaw;
@@ -3895,8 +3888,6 @@ class SiYuanSharePlugin extends Plugin {
         clearPassword: !!currentShare && hasExistingPassword && passwordRaw === "",
         expiresAt,
         clearExpires: !!currentShare && hasExistingExpires && !expiresAt,
-        visitorLimit,
-        clearVisitorLimit: !!currentShare && hasExistingVisitorLimit && visitorRaw === "",
         includeChildren,
         excludedDocIds,
       };
@@ -5212,6 +5203,23 @@ class SiYuanSharePlugin extends Plugin {
       siteShares[activeSiteId] = legacyShares;
       persistShares = true;
     }
+    // One-time cleanup of retired fields in cached shares, without changing connection settings.
+    const retireAdmissionFields = (rows) => {
+      let changed = false;
+      if (!Array.isArray(rows)) return changed;
+      for (const share of rows) {
+        if (!share || typeof share !== "object") continue;
+        for (const key of ["visitorLimit", "visitorCount", "clearVisitorLimit"]) {
+          if (Object.prototype.hasOwnProperty.call(share, key)) { delete share[key]; changed = true; }
+        }
+      }
+      return changed;
+    };
+    if (retireAdmissionFields(legacyShares)) {
+      await this.saveData(STORAGE_SHARES, legacyShares);
+      persistShares = true;
+    }
+    for (const rows of Object.values(siteShares)) if (retireAdmissionFields(rows)) persistShares = true;
     this.siteShares = siteShares;
     this.shareOptions = shareOptions;
     this.incrementalCursorBySite = incrementalCursorBySite;
@@ -5261,6 +5269,7 @@ class SiYuanSharePlugin extends Plugin {
     const t = this.t.bind(this);
     const siteSelect = document.createElement("select");
     siteSelect.className = "b3-select sps-setting-field sps-site-select sps-site-select--setting";
+    siteSelect.setAttribute("aria-label", t("siyuanShare.label.site"));
     siteSelect.addEventListener("change", this.onSiteSelectChange);
 
     const siteNameInput = document.createElement("input");
@@ -7443,11 +7452,6 @@ class SiYuanSharePlugin extends Plugin {
       ? t("siyuanShare.label.passwordSet")
       : t("siyuanShare.label.passwordNotSet");
     const expiresLabel = share?.expiresAt ? this.formatTime(share.expiresAt) : t("siyuanShare.label.expiresNotSet");
-    const visitorLimitValue = Number(share?.visitorLimit) || 0;
-    const visitorLabel =
-      visitorLimitValue > 0
-        ? t("siyuanShare.label.visitorLimitCount", {count: visitorLimitValue})
-        : t("siyuanShare.label.visitorLimitNotSet");
     wrap.innerHTML = `<div class="siyuan-plugin-share__section">
   <div class="siyuan-plugin-share__title">${escapeHtml(
     share ? t("siyuanShare.label.sharedDoc") : t("siyuanShare.label.unsharedDoc"),
@@ -7467,7 +7471,7 @@ class SiYuanSharePlugin extends Plugin {
         )}</div>
   <div class="siyuan-plugin-share__muted">${escapeHtml(
           passwordLabel,
-        )} | ${escapeHtml(expiresLabel)} | ${escapeHtml(visitorLabel)}</div>
+        )} | ${escapeHtml(expiresLabel)}</div>
   <div class="siyuan-plugin-share__actions" style="align-items: center;">
     <input class="b3-text-field fn__flex-1 siyuan-plugin-share__mono" readonly value="${escapeAttr(url)}" />
     <span class="sps-qr-btn" data-action="show-qr" data-url="${escapeAttr(url)}" title="${escapeAttr(t("siyuanShare.qr.title"))}">${SPS_QR_ICON_SVG}</span>
@@ -7506,11 +7510,6 @@ class SiYuanSharePlugin extends Plugin {
         const idLabel = s.type === SHARE_TYPES.NOTEBOOK ? s.notebookId : s.docId;
         const passwordLabel = s.hasPassword ? t("siyuanShare.label.passwordYes") : t("siyuanShare.label.passwordNo");
         const expiresLabel = s.expiresAt ? this.formatTime(s.expiresAt) : t("siyuanShare.label.expiresNotSet");
-        const visitorLimitValue = Number(s.visitorLimit) || 0;
-        const visitorLabel =
-          visitorLimitValue > 0
-            ? t("siyuanShare.label.visitorLimitCount", {count: visitorLimitValue})
-            : t("siyuanShare.label.visitorLimitNotSet");
         return `<div class="sps-share-item ${isCurrent ? "sps-share-item--current" : ""}">
   <div class="sps-share-item__main">
     <div class="sps-share-item__title" title="${escapeAttr(s.title || "")}">${escapeHtml(
@@ -7532,7 +7531,7 @@ class SiYuanSharePlugin extends Plugin {
           t("siyuanShare.label.accessSettings"),
         )}">${escapeHtml(
           passwordLabel,
-        )} | ${escapeHtml(expiresLabel)} | ${escapeHtml(visitorLabel)}</span>
+        )} | ${escapeHtml(expiresLabel)}</span>
       <span class="siyuan-plugin-share__muted siyuan-plugin-share__mono" title="${escapeAttr(
           t("siyuanShare.label.id"),
         )}">${escapeHtml(
@@ -8695,8 +8694,6 @@ class SiYuanSharePlugin extends Plugin {
       clearPassword = false,
       expiresAt = null,
       clearExpires = false,
-      visitorLimit = null,
-      clearVisitorLimit = false,
       includeChildren = false,
       excludedDocIds = [],
       allowRequestError = true,
@@ -8974,11 +8971,6 @@ class SiYuanSharePlugin extends Plugin {
       } else if (Number.isFinite(expiresAt) && expiresAt > 0) {
         payload.expiresAt = expiresAt;
       }
-      if (clearVisitorLimit) {
-        payload.clearVisitorLimit = true;
-      } else if (Number.isFinite(visitorLimit)) {
-        payload.visitorLimit = Math.max(0, Math.floor(visitorLimit));
-      }
       const assetManifest = assetEntries.map(({asset, docId: entryDocId}) => ({
         path: asset.path,
         size: Number(asset?.blob?.size) || 0,
@@ -9167,8 +9159,6 @@ class SiYuanSharePlugin extends Plugin {
       clearPassword = false,
       expiresAt = null,
       clearExpires = false,
-      visitorLimit = null,
-      clearVisitorLimit = false,
       excludedDocIds = [],
       allowRequestError = true,
       background = false,
@@ -9396,11 +9386,6 @@ class SiYuanSharePlugin extends Plugin {
         payload.clearExpires = true;
       } else if (Number.isFinite(expiresAt) && expiresAt > 0) {
         payload.expiresAt = expiresAt;
-      }
-      if (clearVisitorLimit) {
-        payload.clearVisitorLimit = true;
-      } else if (Number.isFinite(visitorLimit)) {
-        payload.visitorLimit = Math.max(0, Math.floor(visitorLimit));
       }
       const assetManifest = assetEntries.map(({asset, docId}) => ({
         path: asset.path,
@@ -9775,8 +9760,6 @@ class SiYuanSharePlugin extends Plugin {
       clearPassword = false,
       expiresAt = null,
       clearExpires = false,
-      visitorLimit = null,
-      clearVisitorLimit = false,
       includeChildren = null,
       excludedDocIds = null,
       background = false,
@@ -9829,8 +9812,6 @@ class SiYuanSharePlugin extends Plugin {
           clearPassword,
           expiresAt,
           clearExpires,
-          visitorLimit,
-          clearVisitorLimit,
           excludedDocIds: excludedDocIdsValue,
           allowRequestError: false,
           background,
@@ -9850,8 +9831,6 @@ class SiYuanSharePlugin extends Plugin {
           clearPassword,
           expiresAt,
           clearExpires,
-          visitorLimit,
-          clearVisitorLimit,
           includeChildren: includeChildrenValue,
           excludedDocIds: excludedDocIdsValue,
           allowRequestError: false,
@@ -9883,8 +9862,6 @@ class SiYuanSharePlugin extends Plugin {
       clearPassword = false,
       expiresAt = null,
       clearExpires = false,
-      visitorLimit = null,
-      clearVisitorLimit = false,
     } = {},
   ) {
     const t = this.t.bind(this);
@@ -9912,11 +9889,6 @@ class SiYuanSharePlugin extends Plugin {
         payload.clearExpires = true;
       } else if (Number.isFinite(expiresAt) && expiresAt > 0) {
         payload.expiresAt = expiresAt;
-      }
-      if (clearVisitorLimit) {
-        payload.clearVisitorLimit = true;
-      } else if (Number.isFinite(visitorLimit)) {
-        payload.visitorLimit = Math.max(0, Math.floor(visitorLimit));
       }
       progress.update(t("siyuanShare.progress.requesting"));
       await this.remoteRequest(REMOTE_API.shareAccessUpdate, {
@@ -10058,12 +10030,6 @@ class SiYuanSharePlugin extends Plugin {
     if (password) lines.push(t("siyuanShare.copyInfo.password", {value: password}));
     const expiresAt = normalizeTimestampMs(share?.expiresAt || 0);
     if (expiresAt) lines.push(t("siyuanShare.copyInfo.expiresAt", {value: this.formatTime(expiresAt)}));
-    const visitorLimitValue = Number.isFinite(Number(share?.visitorLimit))
-      ? Math.max(0, Math.floor(Number(share.visitorLimit)))
-      : 0;
-    if (visitorLimitValue > 0) {
-      lines.push(t("siyuanShare.copyInfo.visitorLimit", {count: visitorLimitValue}));
-    }
     return lines.join("\n");
   }
 
@@ -10969,11 +10935,6 @@ class SiYuanSharePlugin extends Plugin {
         const typeLabel =
           s.type === SHARE_TYPES.NOTEBOOK ? t("siyuanShare.label.notebook") : t("siyuanShare.label.document");
         const idLabel = s.type === SHARE_TYPES.NOTEBOOK ? s.notebookId : s.docId;
-        const visitorLimitValue = Number(s.visitorLimit) || 0;
-        const visitorLabel =
-          visitorLimitValue > 0
-            ? t("siyuanShare.label.visitorLimitCount", {count: visitorLimitValue})
-            : t("siyuanShare.label.visitorLimitNotSet");
         return `<tr>
   <td>
     <div>${escapeHtml(s.title || "")}</div>
@@ -10982,7 +10943,6 @@ class SiYuanSharePlugin extends Plugin {
   <td class="siyuan-plugin-share__mono">${escapeHtml(typeLabel)}</td>
   <td>
     <div class="siyuan-plugin-share__mono">${escapeHtml(url)}</div>
-    <div class="siyuan-plugin-share__muted">${escapeHtml(visitorLabel)}</div>
     <div class="siyuan-plugin-share__muted">${escapeHtml(this.formatTime(s.updatedAt))}</div>
   </td>
   <td>
@@ -11011,7 +10971,7 @@ class SiYuanSharePlugin extends Plugin {
   <div class="siyuan-plugin-share__title">${escapeHtml(t("siyuanShare.section.connectionSettings"))}</div>
   <div class="siyuan-plugin-share__grid">
     <div class="siyuan-plugin-share__muted">${escapeHtml(t("siyuanShare.label.site"))}</div>
-    <select id="sps-site-select" class="b3-select sps-site-select">
+    <select id="sps-site-select" class="b3-select sps-site-select" aria-label="${escapeAttr(t("siyuanShare.label.site"))}">
       ${siteOptions || `<option value="">${escapeHtml(t("siyuanShare.label.siteEmpty"))}</option>`}
     </select>
     <div class="siyuan-plugin-share__muted">${escapeHtml(t("siyuanShare.label.siteUrl"))}</div>

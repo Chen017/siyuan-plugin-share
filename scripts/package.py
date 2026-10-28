@@ -32,6 +32,10 @@ def build(output, version):
         raise ValueError('Version must be a plain filename component')
     output.mkdir(parents=True, exist_ok=True)
     write_archive(ROOT, PLUGIN_ITEMS, output / 'package.zip')
+    # Ship the same canonical progressive controls to the plugin and the website.
+    with zipfile.ZipFile(output / 'package.zip', 'a', compression=zipfile.ZIP_DEFLATED) as archive:
+        for name in ('controls.js', 'controls.css'):
+            archive.writestr('resources/' + name, (ROOT / 'php-site/assets' / name).read_bytes())
     source = ROOT / 'php-site'
     modules = sorted(p.name for p in source.glob('*.php') if p.name != 'config.php')
     write_archive(source, [*SERVER_ITEMS, *modules], output / f'php-site-{version}.zip')

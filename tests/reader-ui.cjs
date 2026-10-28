@@ -44,6 +44,8 @@ const payload = title => ({ok: true, json: async () => ({code: 0, data: {html: m
     assert.equal(p.doc.activeElement, open, 'Dismiss returns focus to its trigger');
     p.doc.querySelector('[data-reader-show-tree]').click();
     assert.equal(open.getAttribute('aria-expanded'), 'true');
+    assert(p.doc.activeElement.matches('.kb-tree-item, .kb-tree-toggle'), 'Browse focuses the document tree');
+    assert(!p.doc.activeElement.matches('[data-share-search-input]'));
     p.doc.querySelector('.reader-drawer-close').click();
     p.w.fetch = async () => payload('课程 B');
     p.doc.querySelector('[data-reader-resume]').click();

@@ -175,16 +175,6 @@ function parse_expires_at($raw): ?int {
     return $ts ? $ts : null;
 }
 
-function parse_visitor_limit($raw): ?int {
-    if ($raw === null || $raw === '' || $raw === false) {
-        return null;
-    }
-    if (is_numeric($raw)) {
-        return max(0, (int)$raw);
-    }
-    return null;
-}
-
 function extract_front_matter(string $markdown): array {
     $meta = [];
     $body = $markdown;
@@ -342,6 +332,7 @@ function render_page(string $title, string $content, ?array $user = null, string
         echo "<link rel='stylesheet' href='" . htmlspecialchars(site_asset_url('vendor/katex.min.css'), ENT_QUOTES, 'UTF-8') . "'>";
         echo "<link rel='stylesheet' href='" . htmlspecialchars(site_asset_url('vendor/highlight.min.css'), ENT_QUOTES, 'UTF-8') . "'>";
     }
+    echo "<link rel='stylesheet' href='" . htmlspecialchars(site_asset_url('controls.css'), ENT_QUOTES, 'UTF-8') . "'>";
     $styleUrl = htmlspecialchars(site_asset_url('style.css'), ENT_QUOTES, 'UTF-8');
     echo "<link rel='stylesheet' href='{$styleUrl}'>";
     $siteCustomCssEnabled = get_bool_setting('site_custom_css_enabled', true);
@@ -429,6 +420,7 @@ function render_page(string $title, string $content, ?array $user = null, string
         echo "<script defer src='" . htmlspecialchars(site_asset_url('vendor/katex.min.js'), ENT_QUOTES, 'UTF-8') . "'></script>";
         echo "<script defer src='" . htmlspecialchars(site_asset_url('vendor/highlight.min.js'), ENT_QUOTES, 'UTF-8') . "'></script>";
     }
+    echo "<script defer src='" . htmlspecialchars(site_asset_url('controls.js'), ENT_QUOTES, 'UTF-8') . "'></script>";
     $appJsUrl = htmlspecialchars(site_asset_url('app.js'), ENT_QUOTES, 'UTF-8');
     echo "<script defer src='{$appJsUrl}'></script>";
     $siteCustomJsEnabled = get_bool_setting('site_custom_js_enabled', false);
@@ -588,17 +580,6 @@ function recalculate_user_storage(int $userId): int {
     return $total;
 }
 
-function get_visitor_id(): string {
-    $existing = trim((string)($_COOKIE['sps_uv'] ?? ''));
-    if ($existing !== '') {
-        return $existing;
-    }
-    $id = bin2hex(random_bytes(12));
-    setcookie('sps_uv', $id, time() + 86400 * 365, '/', '', false, true);
-    $_COOKIE['sps_uv'] = $id;
-    return $id;
-}
-
 function min_chunk_size_bytes(): int {
     global $config;
     $kb = (int)($config['min_chunk_size_kb'] ?? 256);
@@ -636,7 +617,7 @@ function handle_share_search(string $slug): void {
     if (!$share) {
         api_response(404, null, '分享不存在');
     }
-    if (share_is_expired($share) || share_visitor_limit_reached($share)) {
+    if (share_is_expired($share)) {
         api_response(403, null, '分享已关闭');
     }
     if (share_requires_password($share) && !share_access_granted((int)$share['id'])) {
@@ -646,8 +627,8 @@ function handle_share_search(string $slug): void {
     if (mb_strlen($q) < 1) {
         api_response(200, ['results' => []]);
     }
-    if (!admit_share_visitor((int)$share['id'])) {
-        api_response(403, null, 'Share access changed or the visitor limit was reached');
+    if (!share_read_access_allowed((int)$share['id'])) {
+        api_response(403, null, 'Share access changed');
     }
     $pdo = db();
     $shareId = (int)$share['id'];

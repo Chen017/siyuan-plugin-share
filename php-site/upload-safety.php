@@ -114,11 +114,11 @@ function create_upload_session(array $user, ?array $existing, array $values, arr
             throw new RuntimeException('Pending uploads exceed the staging limit; cancel an upload or retry after cleanup', 413);
         }
         $stmt = $pdo->prepare('INSERT INTO share_uploads
-            (upload_id,user_id,share_id,share_revision,reserved_bytes,type,doc_id,notebook_id,slug,title,password_hash,expires_at,visitor_limit,asset_manifest,doc_manifest,upload_mode,patch_manifest,status,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"pending",?,?)');
+            (upload_id,user_id,share_id,share_revision,reserved_bytes,type,doc_id,notebook_id,slug,title,password_hash,expires_at,asset_manifest,doc_manifest,upload_mode,patch_manifest,status,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"pending",?,?)');
         $stmt->execute([$uploadId,$user['id'],$existing['id'] ?? null,$existing['revision'] ?? -1,$bytes,
             $values['type'],$values['doc_id'] ?? null,$values['notebook_id'] ?? null,$values['slug'],$values['title'],
-            $values['password_hash'],$values['expires_at'],$values['visitor_limit'],json_encode($assets, JSON_THROW_ON_ERROR),
+            $values['password_hash'],$values['expires_at'],json_encode($assets, JSON_THROW_ON_ERROR),
             json_encode($docChunks, JSON_THROW_ON_ERROR),$values['upload_mode'],$values['patch_manifest'],now(),now()]);
         $insert = $pdo->prepare('INSERT INTO share_upload_docs
             (upload_id,doc_id,title,icon,hpath,parent_id,sort_index,markdown,sort_order,size_bytes,content_hash,meta_hash,created_at,updated_at)

@@ -275,12 +275,12 @@ class PdfExportTests:
         self.api('shares/delete', {'shareId': share['id']})
         self.assertEqual(client.request(path)[0], 404)
 
-    def test_pdf_visitor_limit_csrf_and_input_validation(self):
+    def test_pdf_legacy_share_limit_csrf_and_input_validation(self):
         from run import Client
         share = self.share(visitorLimit=1)
         client, path, csrf = self.pdf_visitor(share)
-        client.request(path[:-7])  # occupies the sole visitor slot
-        self.assertEqual(Client(self.base).request(path)[0], 403)
+        client.request(path[:-7])  # Legacy share limits no longer restrict export access.
+        self.assertEqual(Client(self.base).request(path)[0], 200)
         self.assertEqual(self.pdf_post(client, path, 'wrong')[0], 400)
         error_status, _, error_body = client.request(path, {'csrf': 'wrong'}, {'Accept': 'text/html'})
         self.assertEqual(error_status, 400)
