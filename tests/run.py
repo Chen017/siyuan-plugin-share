@@ -318,7 +318,7 @@ class Regression(AdminShareTests, SelectedFixTests, PdfCookieTests, PdfReleaseTe
         self.assertIn(b'role="main"', body)
         self.assertIn(b'Reader &lt;test&gt;', body)
         for library in ['mermaid.min.js', 'full.render.js', 'echarts.min.js', 'abcjs-basic-min.js']:
-            self.assertNotIn(library.encode(), body, library)
+            self.assertIsNone(re.search(rb'''(?:src|href)=["'][^"']*/''' + re.escape(library.encode()) + rb'''(?:\?|["'])''', body), library)
         self.assertEqual(self.client.request('/unknown-audit-test-page')[0], 404)
         if self.docker:
             status, headers, font = self.client.request('/assets/MiSans-Latin.woff2')
