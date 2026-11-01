@@ -38,7 +38,7 @@ if ($path === '/login') {
 }
 
 if ($path === '/account') {
-    $user = require_admin();
+    $user = require_admin(true);
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         check_csrf();
         $new = (string)($_POST['new_password'] ?? '');
@@ -48,6 +48,10 @@ if ($path === '/account') {
         }
         if (!password_verify((string)($_POST['current_password'] ?? ''), (string)$user['password_hash'])) {
             flash('error', 'Incorrect current password.');
+            redirect('/account');
+        }
+        if ((int)$user['must_change_password'] === 1 && password_verify($new, (string)$user['password_hash'])) {
+            flash('error', 'Choose a different password from the initial password.');
             redirect('/account');
         }
         db()->prepare('UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = ? WHERE id = ?')

@@ -58,7 +58,7 @@ exit 0''',
         return result, calls
 
     result, calls = run('before_fail')
-    assert result.returncode != 0 and 'Synthetic verification failure' in result.stderr
+    assert result.returncode != 0 and 'Synthetic verification failure' in result.stderr, result.stdout + result.stderr
     assert not any(line.startswith('compose up ') for line in calls.splitlines()), calls
     assert 'start siyuan-share-web' in calls, 'A failed preflight must resume the stopped service'
     result, calls = run('success', 'b' * 40)

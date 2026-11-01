@@ -36,7 +36,33 @@ check($before === $pdo->query('SELECT name, sql FROM sqlite_master ORDER BY name
 check((int)$pdo->query('SELECT COUNT(*) FROM users')->fetchColumn() === 1, 'Seed admin exactly once');
 check($pdo->query('PRAGMA integrity_check')->fetchColumn() === 'ok', 'SQLite integrity');
 check((int)$pdo->query('PRAGMA foreign_keys')->fetchColumn() === 1, 'Foreign keys enabled');
-check(password_verify('123456', $pdo->query('SELECT password_hash FROM users')->fetchColumn()), 'Seed password hashing');
+check(!password_verify('123456', $pdo->query('SELECT password_hash FROM users')->fetchColumn()), 'Fresh admin must not use a shared default password');
+check((int)$pdo->query('SELECT must_change_password FROM users')->fetchColumn() === 1, 'New administrator must change the initial password');
+
+// Verify the logged first-run password against isolated databases, without printing it.
+$logPath = tempnam(sys_get_temp_dir(), 'siyuan-admin-');
+$oldLog = ini_set('error_log', $logPath);
+try {
+    $schema = $pdo->query("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'")->fetchColumn();
+    $fresh = [];
+    for ($i = 0; $i < 2; $i++) {
+        $instance = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+        $instance->exec($schema);
+        seed_default_admin($instance);
+        $fresh[] = $instance;
+    }
+    $hash = $fresh[0]->query('SELECT password_hash FROM users')->fetchColumn();
+    seed_default_admin($fresh[0]);
+    check($hash === $fresh[0]->query('SELECT password_hash FROM users')->fetchColumn(), 'Existing administrator password survives repeated initialization');
+    preg_match_all('/SIYUAN_INITIAL_ADMIN_PASSWORD=([a-f0-9]{36})/', file_get_contents($logPath), $matches);
+    check(count($matches[1]) === 2 && $matches[1][0] !== $matches[1][1], 'Fresh installations log distinct initial credentials exactly once');
+    foreach ($fresh as $i => $instance) {
+        check(password_verify($matches[1][$i], $instance->query('SELECT password_hash FROM users')->fetchColumn()), 'Logged credential matches stored hash');
+    }
+} finally {
+    ini_set('error_log', $oldLog === false ? '' : $oldLog);
+    unlink($logPath);
+}
 
 $diagramSource = '<textarea class="markdown-source" data-md-id="doc">' . htmlspecialchars("\$x^2\$\n\n```mermaid\ngraph LR\nA--&gt;B\n```\n\n```echarts\n{}\n```", ENT_QUOTES) . '</textarea>';
 $preloads = diagram_preload_files($diagramSource);

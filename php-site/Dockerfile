@@ -97,6 +97,10 @@ server {
     root /var/www/html;
     index index.php;
 
+    # Runtime storage is private, including SQLite journals and temporary files.
+    location = /storage { return 404; }
+    location ^~ /storage/ { return 404; }
+
     # Deny hidden files and sensitive config/db files
     location ~ /\.(?!well-known) {
         deny all;

@@ -203,9 +203,17 @@ const chooseScope = async (page, value) => {
     // the actual library load successful and never exercise the retry controls.
     const libraryFailure = (route) => route.abort();
     await reader.route('**/assets/vendor/html2pdf.bundle.min.js*', libraryFailure);
+    // Drop resources already preloaded by the previous successful dialog before
+    // injecting the failure; otherwise Chromium can reuse them without a request.
+    await reader.reload({ waitUntil: 'domcontentloaded' });
+    await reader.locator('[data-pdf-export-link]').waitFor();
     await reader.locator('[data-pdf-export-link]').click();
     await options.getByRole('button', { name: 'Export', exact: true }).click();
-    await options.getByRole('button', { name: 'Retry remaining documents', exact: true }).waitFor({ timeout: 45000 });
+    try {
+      await options.getByRole('button', { name: 'Retry remaining documents', exact: true }).waitFor({ timeout: 45000 });
+    } catch (error) {
+      throw new Error(`Retry state missing: ${await options.locator('[data-pdf-form-status]').textContent()}; ${error.message}`);
+    }
     await reader.unroute('**/assets/vendor/html2pdf.bundle.min.js*', libraryFailure);
     const task = reader.frames().find((frame) => frame.name() === 'sps-pdf-worker');
     const taskCredentials = await task.locator('[data-pdf-preview]').evaluate((node) => ({ csrf: node.dataset.csrf, lease: node.dataset.lease }));

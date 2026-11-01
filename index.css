@@ -42,11 +42,6 @@
   width: 100%;
 }
 
-.siyuan-plugin-share__grid .sps-site-select {
-  width: 100%;
-  min-width: 240px;
-}
-
 .sps-checkbox {
   display: inline-flex;
   align-items: center;

@@ -1,0 +1,3 @@
+# Keep the verified upstream distribution bytes intact across platforms.
+php-site/assets/vendor/markdown-it.min.js -text -whitespace
+php-site/assets/vendor/mermaid.min.js -text -whitespace

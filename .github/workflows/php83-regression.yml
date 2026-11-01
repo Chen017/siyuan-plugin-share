@@ -7,10 +7,14 @@ on:
       - 'php-site/**'
       - 'tests/**'
       - 'scripts/**'
+      - 'docs/**'
+      - 'README*.md'
       - '.dockerignore'
+      - '.gitattributes'
       - 'docker-compose*.yml'
       - '.github/workflows/php83-regression.yml'
       - '.github/workflows/deploy.yml'
+      - '.github/workflows/github-release.yml'
   pull_request:
   workflow_dispatch:
   workflow_call:
@@ -27,6 +31,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install browser test runtime
+        run: npm install --prefix "$RUNNER_TEMP/browser-test" --no-save --ignore-scripts playwright@1.56.1
       - name: Build current PHP 8.3 image
         run: |
           # Reproduce private VPS checkout permissions; the image must still serve public assets.
@@ -34,9 +43,17 @@ jobs:
           find php-site -type f -exec chmod 600 {} +
           docker build --pull --no-cache -f php-site/Dockerfile -t siyuan-share:php83-test .
       - name: Verify plugin and server archives without publishing
-        run: python tests/package.py
+        run: |
+          python tests/package.py
+          python tests/release-tag.py
+          python tests/docs.py
       - name: Test PHP runtime, database, HTTP APIs and Nginx rules
-        run: python3 tests/run.py --docker siyuan-share:php83-test
+        run: |
+          chrome=$(command -v google-chrome)
+          SIYUAN_CHROMIUM_EXECUTABLE="$chrome" \
+          SIYUAN_BROWSER_EXECUTABLE="$chrome" \
+          SIYUAN_PLAYWRIGHT_MODULE="$RUNNER_TEMP/browser-test/node_modules/playwright" \
+          python3 tests/run.py --docker siyuan-share:php83-test --browser
       - name: Verify consistent backup and restoration using disposable data
         run: |
           bash -n scripts/*.sh backup-volumes.sh tests/backup-fixture.sh

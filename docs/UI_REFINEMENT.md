@@ -1,5 +1,7 @@
 # 阅读与个人后台界面
 
+Markdown 的六级标题使用逐级递减、均大于正文的字号和加粗字重；阅读页与 PDF 共用层级。调整时不要重新引入后置规则覆盖 H3/H4，使用 `tests/browser-ui.py` 复核。
+
 这轮改造以自然、精致、克制为目标，遵循 [Apple Motion 指南](https://developer.apple.com/design/human-interface-guidelines/motion) 中“动效服务于反馈和理解”的原则。这里的时间与曲线是本项目的 web 设计值。
 
 ## 阅读

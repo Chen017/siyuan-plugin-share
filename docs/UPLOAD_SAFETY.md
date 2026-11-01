@@ -15,6 +15,8 @@ Temporary copies and old/new attachment generations can coexist during an update
 
 Search, reader pages and attachment downloads check the current password and expiration without registering share visitors or acquiring admission write locks. Legacy visitor-limit request fields are ignored. PDF export keeps its separate cookie identity and rolling quota.
 
+SVG and other XML/HTML-like inline attachments remain viewable, but their response uses a CSP sandbox that blocks scripts and isolates the document origin. The decision uses the detected MIME type as well as the filename, so an SVG named `.png` is protected too. SVG charts rendered as images remain supported; embedded scripts and interactive SVG behavior are intentionally disabled. Other ordinary image and PDF previews do not receive this sandbox policy.
+
 Mermaid renders locally. Diagram failures show the source instead of transmitting it to an external service. PlantUML currently shows its source because no local PlantUML engine is bundled. The website no longer submits diagram source to plantuml.com or mermaid.ink, including during PDF export.
 
 Plugin 0.5.6 restricts authenticated icon fetches to the current SiYuan origin's `/api/` paths and refuses redirects. External icons remain ordinary image links without the SiYuan token. Updating the website does not install the plugin into a SiYuan workspace; install the corresponding plugin package too.

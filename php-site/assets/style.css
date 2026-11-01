@@ -2243,10 +2243,22 @@ body.share-side-open .share-side-backdrop {
 .markdown-body h1,
 .markdown-body h2,
 .markdown-body h3,
-.markdown-body h4 {
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
   font-family: var(--font-display);
   margin-top: 1.4em;
+  line-height: 1.35;
+  font-weight: 600;
 }
+
+/* Keep all six levels visibly distinct from body text, including in PDF. */
+.markdown-body h1 { font-size: 2em; }
+.markdown-body h2 { font-size: 1.7em; }
+.markdown-body h3 { font-size: 1.45em; }
+.markdown-body h4 { font-size: 1.3em; }
+.markdown-body h5 { font-size: 1.18em; }
+.markdown-body h6 { font-size: 1.08em; }
 
 .markdown-body strong,
 .markdown-body b {
@@ -3939,12 +3951,11 @@ body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .kb-title {
 }
 body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-body { color: var(--text); }
 body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-body h1 {
-  font-size: 1.55em; line-height: 1.35; padding-bottom: 0; border-bottom: 0; margin-top: 1.6em;
+  line-height: 1.35; padding-bottom: 0; border-bottom: 0; margin-top: 1.6em;
 }
 body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-body h2 {
-  font-size: 1.3em; line-height: 1.4; border-bottom: 0; padding-bottom: 0; margin-top: 1.5em;
+  line-height: 1.4; border-bottom: 0; padding-bottom: 0; margin-top: 1.5em;
 }
-body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-body h3 { font-size: 1.1em; }
 body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .kb-header { padding-bottom: 24px; border-bottom: 1px solid var(--border); }
 body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .kb-title-row { align-items: flex-start; flex-wrap: wrap; gap: 20px; }
 body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .kb-title-row > .kb-title { flex-basis: 100%; }
@@ -4057,8 +4068,6 @@ body.layout-share :is(.kb-tree-item, .share-toc-link, .reader-nav-button, .reade
   .kb-main { padding: 28px 20px 40px; }
   .kb-main > .share-empty { position: static; transform: none; min-height: 40vh; width: auto; pointer-events: auto; }
   body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .kb-title { font-size: 28px; }
-  body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-body h1 { font-size: 1.375em; }
-  body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-body h2 { font-size: 1.2em; }
   .notebook-welcome { margin-top: 8px; }
   .notebook-actions { margin-bottom: 32px; }
   .kb-search-results { max-height: none; }

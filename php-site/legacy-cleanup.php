@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-/** One-time local/database upgrade. Never removes shares, documents or owner records. */
+/** One-time local/database upgrade for retired features. */
 function retire_legacy_modules(PDO $pdo): void {
     if (fetch_setting($pdo, 'admin_only_schema_v1') === '1') return;
     $tables = $pdo->query("SELECT name FROM sqlite_master WHERE type='table'")->fetchAll(PDO::FETCH_COLUMN);

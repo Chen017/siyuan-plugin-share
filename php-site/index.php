@@ -743,11 +743,14 @@ function current_user(): ?array {
     return $row;
 }
 
-function require_admin(): array {
+function require_admin(bool $allowPasswordChange = false): array {
     // current_user() already rejects disabled/non-admin accounts and stale sessions.
     $user = current_user();
     if (!$user) {
         redirect('/login');
+    }
+    if (!$allowPasswordChange && (int)$user['must_change_password'] === 1) {
+        redirect('/account');
     }
     return $user;
 }
@@ -758,11 +761,11 @@ function api_user_from_key(string $key): ?array {
     }
     $prefix = substr($key, 0, 8);
     $pdo = db();
-    $stmt = $pdo->prepare('SELECT * FROM users WHERE api_key_prefix = :prefix AND disabled = 0');
+    $stmt = $pdo->prepare('SELECT * FROM users WHERE api_key_prefix = :prefix AND role = "admin" AND disabled = 0');
     $stmt->execute([':prefix' => $prefix]);
     $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
     foreach ($users as $user) {
-        if (!empty($user['api_key_hash']) && password_verify($key, $user['api_key_hash'])) {
+        if ((int)$user['must_change_password'] !== 1 && !empty($user['api_key_hash']) && password_verify($key, $user['api_key_hash'])) {
             return $user;
         }
     }

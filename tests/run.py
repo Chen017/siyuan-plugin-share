@@ -9,12 +9,14 @@ from contextlib import closing
 import hashlib
 import http.cookiejar
 import json
+import os
 from pathlib import Path
 import re
 import shutil
 import socket
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -292,6 +294,24 @@ class Regression(AdminShareTests, SelectedFixTests, PdfCookieTests, PdfReleaseTe
         self.assertEqual(self.client.request('/login', {'username': self.name, 'password': 'Test-PHP83!pass', 'csrf': 'wrong'})[0], 400)
         self.assertEqual(self.client.request('/admin')[0], 200)
 
+    def test_initial_password_must_change_before_admin_or_api_access(self):
+        self.rows(f"UPDATE users SET must_change_password = 1 WHERE username = '{self.name}'")
+        for path in ['/dashboard', '/admin', '/admin/share?share_id=1']:
+            status, headers, _ = self.client.request(path)
+            self.assertEqual((status, headers['Location']), (302, '/account'), path)
+        csrf = self.csrf(self.client, '/account')
+        status, headers, _ = self.client.request('/api-key/rotate', {'csrf': csrf})
+        self.assertEqual((status, headers['Location']), (302, '/account'))
+        self.api('auth/verify', status=401)
+        current = 'Test-PHP83!pass'
+        self.client.request('/account', {'csrf': csrf, 'current_password': current, 'new_password': current, 'confirm_password': current})
+        self.assertEqual(self.rows(f"SELECT must_change_password FROM users WHERE username = '{self.name}'")[0]['must_change_password'], 1)
+        new_password = 'Changed-PHP83!pass'
+        self.assertEqual(self.client.form('/account', {'current_password': current, 'new_password': new_password, 'confirm_password': new_password})[0], 302)
+        self.assertEqual(self.client.form('/login', {'username': self.name, 'password': new_password})[0], 302)
+        self.assertEqual(self.client.request('/dashboard')[0], 200)
+        self.assertEqual(self.api('auth/verify')['user']['username'], self.name)
+
     def test_removed_public_and_admin_routes(self):
         share = self.share()
         retired = ['/register', '/forgot', '/reset', '/captcha', '/email-code', '/login/email', '/login/email/prepare', '/login/email-code',
@@ -401,6 +421,44 @@ class Regression(AdminShareTests, SelectedFixTests, PdfCookieTests, PdfReleaseTe
         if self.docker:
             self.assertNotIn(marker, visitor.request('/uploads/' + str(share['id']) + '/assets/test.txt')[2])
 
+    def test_active_attachments_are_sandboxed_but_images_stay_inline(self):
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg"><script>document.documentElement.setAttribute("data-executed","yes")</script></svg>'
+        png = bytes.fromhex('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415408d763f8cfc0f01f00050001ff89993d1d0000000049454e44ae426082')
+        for index, (name, content, sandboxed) in enumerate([('test.svg', svg, True), ('disguised.png', svg, True), ('image.png', png, False)]):
+            doc_id = self.name + str(index)
+            asset = 'assets/' + name
+            meta = {'docId': doc_id, 'title': 'Asset safety', 'markdown': '![image](' + asset + ')'}
+            status, _, body = self.client.request('/api/v1/shares/doc',
+                {'metadata': json.dumps(meta), 'assetPaths[]': asset, 'assetDocIds[]': doc_id},
+                {'X-Api-Key': self.key}, files={'assets[]': (name, content)})
+            self.assertEqual(status, 200, body)
+            share = json.loads(body)['data']['share']
+            status, headers, body = Client(self.base).request('/s/' + share['slug'] + '/res/' + asset)
+            self.assertEqual((status, body), (200, content))
+            self.assertTrue(headers['Content-Disposition'].startswith('inline'))
+            if sandboxed:
+                self.assertIn('sandbox', headers['Content-Security-Policy'])
+                self.assertIn("script-src 'none'", headers['Content-Security-Policy'])
+            else:
+                self.assertIsNone(headers.get('Content-Security-Policy'))
+
+    def test_svg_renders_and_direct_script_is_blocked_in_browser(self):
+        executable = os.environ.get('SIYUAN_CHROMIUM_EXECUTABLE')
+        if not executable:
+            self.skipTest('Set SIYUAN_CHROMIUM_EXECUTABLE for the real SVG browser check')
+        content = b'<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"><rect width="80" height="40" fill="blue"/><script>document.documentElement.setAttribute("data-executed","yes")</script></svg>'
+        asset = 'assets/diagram.svg'
+        meta = {'docId': self.name, 'title': 'SVG chart', 'markdown': '![chart](' + asset + ')'}
+        status, _, body = self.client.request('/api/v1/shares/doc',
+            {'metadata': json.dumps(meta), 'assetPaths[]': asset, 'assetDocIds[]': self.name},
+            {'X-Api-Key': self.key}, files={'assets[]': ('diagram.svg', content)})
+        self.assertEqual(status, 200, body)
+        slug = json.loads(body)['data']['share']['slug']
+        result = subprocess.run([sys.executable, str(ROOT / 'tests/browser-ui.py'), '--browser', executable,
+                                 '--svg-url', self.base + '/s/' + slug + '/res/' + asset],
+                                capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_chunk_upload_and_cancel(self):
         content = b'CHUNK_PHP83_MARKER'
         payload = {'metadata': {'docId': self.name, 'title': 'Chunks', 'markdown': 'Chunk document'}, 'assets': [{'path': 'assets/chunk.txt', 'size': len(content), 'hash': hashlib.sha256(content).hexdigest(), 'docId': self.name}]}
@@ -452,7 +510,7 @@ class Regression(AdminShareTests, SelectedFixTests, PdfCookieTests, PdfReleaseTe
         self.assertEqual(self.client.request('/logout', {'csrf': token})[0], 302)
         self.assertEqual(self.client.request('/dashboard')[0], 302)
 
-    def test_admin_only_settings_and_legacy_owner_preservation(self):
+    def test_admin_only_settings(self):
         admin = self.admin()
         for path in ['/admin', '/dashboard', '/account']:
             status, _, page = admin.request(path)
@@ -496,20 +554,14 @@ class Regression(AdminShareTests, SelectedFixTests, PdfCookieTests, PdfReleaseTe
                     escaped = str(original).replace("'", "''")
                     self.rows(f"UPDATE users SET {column} = '{escaped}' WHERE username = '{self.name}'")
 
-    def test_legacy_owner_api_key_remains_usable(self):
+    def test_legacy_non_admin_api_key_is_rejected(self):
         name = self.name + '_legacy_api'
         self.create_actor(name, role='user')
         for column in ['api_key_hash', 'api_key_prefix', 'api_key_last4']:
             self.rows(f"UPDATE users SET {column} = (SELECT {column} FROM users WHERE username = '{self.name}') WHERE username = '{name}'")
         self.rows(f"UPDATE users SET api_key_hash = NULL WHERE username = '{self.name}'")
-        verified = self.api('auth/verify')
-        self.assertEqual((verified['user']['username'], verified['user']['role']), (name, 'user'))
-        share = self.share()
-        owner = self.rows(f"SELECT user_id FROM shares WHERE id = {int(share['id'])}")[0]['user_id']
-        self.assertEqual(owner, verified['user']['id'])
-        self.assertIn(b'PHP83_MARKER', Client(self.base).request('/s/' + share['slug'])[2])
-        self.rows(f"UPDATE users SET disabled = 1 WHERE username = '{name}'")
         self.api('auth/verify', status=401)
+        self.api('shares/doc', {'docId': self.name, 'title': 'Rejected', 'markdown': 'private'}, status=401)
 
     def test_admin_share_restore_and_delete(self):
         share = self.share()
@@ -537,6 +589,15 @@ class Regression(AdminShareTests, SelectedFixTests, PdfCookieTests, PdfReleaseTe
             self.skipTest('Nginx rules require the Docker image')
         for path in ['/config.php', '/storage/app.db', '/.git/config', '/vendor/Parsedown.php']:
             self.assertIn(self.client.request(path)[0], [403, 404], path)
+        # An actual readable journal-like file must not bypass a .db-only rule.
+        subprocess.run(['docker', 'exec', self.container, 'sh', '-ec',
+                        'printf AUDIT_PRIVATE_STORAGE > /var/www/html/storage/audit.db-journal; chmod 644 /var/www/html/storage/audit.db-journal'], check=True)
+        try:
+            status, _, body = self.client.request('/storage/audit.db-journal')
+            self.assertIn(status, [403, 404])
+            self.assertNotIn(b'AUDIT_PRIVATE_STORAGE', body)
+        finally:
+            subprocess.run(['docker', 'exec', self.container, 'rm', '-f', '/var/www/html/storage/audit.db-journal'], check=True)
         status, headers, body = self.client.request('/assets/app.js')
         self.assertEqual(status, 200)
         self.assertGreater(len(body), 1000)
@@ -566,6 +627,7 @@ def main():
     mode.add_argument('--php', help='PHP 8.3 CLI executable')
     mode.add_argument('--docker', help='Already built application image')
     parser.add_argument('--browser', action='store_true', help='Also run Playwright UI/PDF tests (no application build)')
+    parser.add_argument('--test', action='append', help='Run a named test method; repeat to select multiple tests')
     args = parser.parse_args()
     process = container = None
     result = None
@@ -636,7 +698,9 @@ def main():
                 if time.monotonic() > deadline:
                     raise RuntimeError('Application did not become ready')
                 time.sleep(0.25)
-            suite = unittest.defaultTestLoader.loadTestsFromTestCase(Regression)
+            # Browser and admin fixtures use a known credential only in this disposable DB.
+            Regression('runTest').rows("UPDATE users SET password_hash='$2y$10$6QNt7GpDEABbEFSSWJusRuq8WuyRxkAx/Hruum6XJ322HVozyQ2oy', must_change_password=0 WHERE username='admin'")
+            suite = unittest.TestSuite(Regression(name) for name in args.test) if args.test else unittest.defaultTestLoader.loadTestsFromTestCase(Regression)
             result = unittest.TextTestRunner(verbosity=2).run(suite)
             if container:
                 # Wait for the real image HEALTHCHECK, then verify persistence on restart.

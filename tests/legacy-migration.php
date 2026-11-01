@@ -23,9 +23,9 @@ foreach (['share_access_geo_cache', 'user_settings', 'share_comments', 'share_re
     $legacy->exec('CREATE TABLE ' . $table . ' (retired_data TEXT)');
     $legacy->exec('INSERT INTO ' . $table . ' VALUES ("retired")');
 }
-// Historical owner identities and keys are not deleted or reassigned.
-$legacy->exec("INSERT INTO users (username,password_hash,role,api_key_hash,api_key_prefix,created_at,updated_at) VALUES ('legacy-owner','hash','user','legacy-key-hash','prefix','before','before')");
-$owner = (int)$legacy->lastInsertId();
+// Exercise migration with the personal administrator's existing shares and key.
+$legacy->exec("UPDATE users SET api_key_hash='admin-key-hash', api_key_prefix='prefix' WHERE role='admin'");
+$owner = (int)$legacy->query("SELECT id FROM users WHERE role='admin'")->fetchColumn();
 $insertShare = $legacy->prepare('INSERT INTO shares(user_id,type,slug,title,size_bytes,visitor_limit,created_at,updated_at) VALUES (?,"doc",?,?,9999,2,"before","before")');
 $insertDoc = $legacy->prepare('INSERT INTO share_docs(share_id,doc_id,title,markdown,size_bytes,created_at,updated_at) VALUES (?,?,?,?,?,"before","before")');
 for ($n = 0; $n < 12; $n++) {
@@ -55,9 +55,9 @@ $coreBefore = shell_exec($snapshotCommand);
 check(is_string($coreBefore) && is_array(json_decode($coreBefore, true)), 'Read-only deployment fingerprint can inspect a legacy database');
 migrate($legacy);
 check($coreBefore === shell_exec($snapshotCommand), 'Deployment fingerprint preserves notes, URLs, API keys, settings and linked file bytes');
-check($beforeShares === $legacy->query('SELECT id,user_id,slug,title FROM shares ORDER BY id')->fetchAll(PDO::FETCH_ASSOC), 'Keep all twelve notes, links and ownership');
+check($beforeShares === $legacy->query('SELECT id,user_id,slug,title FROM shares ORDER BY id')->fetchAll(PDO::FETCH_ASSOC), 'Keep all twelve administrator notes and links');
 check($beforeDocs === $legacy->query('SELECT * FROM share_docs ORDER BY id')->fetchAll(PDO::FETCH_ASSOC), 'Keep document content and metadata');
-check($beforeOwners === $legacy->query('SELECT id,username,password_hash,role,api_key_hash,api_key_prefix FROM users ORDER BY id')->fetchAll(PDO::FETCH_ASSOC), 'Keep owner identities and API keys');
+check($beforeOwners === $legacy->query('SELECT id,username,password_hash,role,api_key_hash,api_key_prefix FROM users ORDER BY id')->fetchAll(PDO::FETCH_ASSOC), 'Keep administrator identity and API key');
 check(is_file($config['uploads_dir'] . '/comment-files/1/used.png') && !is_file($config['uploads_dir'] . '/comment-files/1/unused.png'), 'Retire only unreferenced comment uploads');
 check((int)$legacy->query('SELECT COUNT(*) FROM share_assets')->fetchColumn() === 1, 'Keep attachment referenced in a note');
 check($beforeUpload === $legacy->query('SELECT upload_id,user_id,type,slug,title,password_hash,expires_at,created_at,updated_at FROM share_uploads')->fetchAll(PDO::FETCH_ASSOC), 'Preserve pending upload metadata while retiring limits');
@@ -77,4 +77,4 @@ check($after === $legacy->query('SELECT name,sql FROM sqlite_master ORDER BY nam
 check($legacy->query('PRAGMA integrity_check')->fetchColumn() === 'ok' && $legacy->query('PRAGMA foreign_key_check')->fetchAll() === [], 'Legacy upgrade database integrity');
 $legacy = null;
 $config = $savedConfig;
-echo "Legacy upgrade passed: twelve notes, ownership, linked files, quotas and PDF settings preserved; share visitors retired.\n";
+echo "Legacy upgrade passed: administrator notes, linked files, key, quotas and PDF settings preserved; share visitors retired.\n";

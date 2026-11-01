@@ -97,7 +97,7 @@ function host({ mobile = false, locale = 'en_US', stored = {} } = {}) {
 
   const oldShare = { id: 'share-old', type: 'doc', docId: '20261027000000-aaaaaaa', slug: 'kept' };
   const fixture = host({ mobile: true, stored: {
-    settings: { siteUrl: 'https://notes.invalid', apiKey: 'existing-key' },
+    settings: { siteUrl: 'https://note.etalib.space', apiKey: 'existing-key' },
     shares: [{...oldShare,visitorLimit:1,visitorCount:4}],
   } });
   try {
@@ -140,7 +140,7 @@ function host({ mobile = false, locale = 'en_US', stored = {} } = {}) {
 
     const payload = { uploadId: 'pending-upload', docs: plain(plan.uploadDocs), deletedDocIds: plain(plan.deletedDocIds) };
     assert.deepEqual(plain(await plugin.remoteRequest('/api/v1/shares/upload/complete', { body: payload, silent: true })), { accepted: true });
-    assert.equal(requests[0].url, 'https://notes.invalid/api/v1/shares/upload/complete');
+    assert.equal(requests[0].url, 'https://note.etalib.space/api/v1/shares/upload/complete');
     assert.equal(requests[0].options.headers['X-Api-Key'], 'existing-key');
     assert.deepEqual(JSON.parse(requests[0].options.body), payload);
 
@@ -176,5 +176,67 @@ function host({ mobile = false, locale = 'en_US', stored = {} } = {}) {
     assert.equal(icons[0].options.headers.Authorization, 'Token SYNTHETIC_TOKEN');
     assert.equal(icons[0].options.redirect, 'error', 'Authenticated icon requests cannot follow redirects');
   } finally { fixture.close(); }
+  const multi = host({ mobile: true, stored: {
+    settings: { activeSiteId: 'personal', sites: [
+      { id: 'other', siteUrl: 'https://other.invalid', apiKey: 'other-key' },
+      { id: 'personal', siteUrl: 'https://note.etalib.space/', apiKey: 'personal-key', autoUpdateEnabled: true, quietWindowSeconds: 90 },
+    ] },
+    sharesBySite: { personal: [oldShare], other: [{ id: 'other-share', type: 'doc' }] },
+  } });
+  try {
+    await multi.plugin.loadState();
+    assert.equal(multi.plugin.settings.activeSiteId, 'personal');
+    assert.equal(multi.plugin.settings.siteUrl, 'https://note.etalib.space');
+    assert.equal(multi.plugin.settings.apiKey, 'personal-key');
+    assert.equal(multi.plugin.getActiveSite().autoUpdateEnabled, true);
+    assert.equal(multi.plugin.getActiveSite().quietWindowSeconds, 90);
+    assert.deepEqual(plain(multi.plugin.shares), [oldShare]);
+    assert.deepEqual(multi.storage.get('settings').sites.map(site => site.id), ['personal'], 'Other site configurations are removed');
+    await multi.plugin.loadState();
+    assert.equal(multi.plugin.settings.activeSiteId, 'personal', 'Single-site migration is idempotent');
+    multi.plugin.initSettingPanel();
+    assert.equal(multi.plugin.settingEls.siteInput.readOnly, true, 'The personal site cannot be changed in settings');
+    assert.equal(multi.plugin.settingEls.siteSelect, undefined);
+    multi.plugin.settingEls.siteInput.value = 'https://other.invalid';
+    multi.plugin.persistCurrentSiteInputs();
+    assert.equal(multi.plugin.settings.siteUrl, 'https://note.etalib.space', 'UI input cannot override the fixed endpoint');
+    let finishRequest;
+    multi.plugin.remoteRequest = () => new Promise(resolve => { finishRequest = resolve; });
+    const pendingShares = multi.plugin.syncRemoteShares({ silent: true });
+    multi.plugin.settings.apiKey = 'replacement-key';
+    finishRequest({ shares: [{ id: 'stale', type: 'doc' }] });
+    await assert.rejects(pendingShares, /Connection changed/);
+    assert.deepEqual(plain(multi.plugin.shares), [oldShare], 'Old-key responses cannot replace the current cache');
+    multi.plugin.remoteVerifiedAt = 0;
+    const pendingVerify = multi.plugin.verifyRemote({ silent: true });
+    multi.plugin.settings.apiKey = 'newer-key';
+    finishRequest({ user: { username: 'stale' } });
+    await assert.rejects(pendingVerify, /Connection changed/);
+    assert.notEqual(multi.plugin.remoteUser?.username, 'stale');
+  } finally { multi.close(); }
+  const switched = host({ mobile: true, stored: {
+    settings: { activeSiteId: 'other', sites: [
+      { id: 'other', siteUrl: 'https://other.invalid', apiKey: 'other-key' },
+      { id: 'personal', siteUrl: 'https://note.etalib.space', apiKey: 'personal-key' },
+    ] },
+    shares: [oldShare],
+  } });
+  try {
+    await switched.plugin.loadState();
+    assert.equal(switched.plugin.settings.activeSiteId, 'personal');
+    assert.equal(switched.plugin.settings.apiKey, 'personal-key');
+    assert.deepEqual(plain(switched.plugin.shares), [], 'Old active-site shares cannot be migrated into the personal site');
+  } finally { switched.close(); }
+  const wrongSite = host({ mobile: true, stored: {
+    settings: { activeSiteId: 'other', sites: [{ id: 'other', siteUrl: 'https://other.invalid', apiKey: 'other-key' }] },
+    sharesBySite: { other: [oldShare] },
+  } });
+  try {
+    await wrongSite.plugin.loadState();
+    assert.equal(wrongSite.plugin.settings.siteUrl, 'https://note.etalib.space');
+    assert.equal(wrongSite.plugin.settings.apiKey, '', 'An unrelated site key is never carried to the personal site');
+    assert.deepEqual(plain(wrongSite.plugin.shares), [], 'Shares from an unrelated site are not adopted');
+    assert.equal(wrongSite.plugin.settings.sites.length, 1);
+  } finally { wrongSite.close(); }
   console.log('Plugin passed: desktop/mobile lifecycle, settings migration, scoped incremental sync, API payloads, retries and cancellation.');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

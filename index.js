@@ -28,6 +28,7 @@ const STORAGE_INCREMENTAL_CURSOR = "incrementalCursorBySite";
 const STORAGE_DOC_BLOCK_COUNTS = "docBlockCountBySite";
 const STORAGE_EXPORT_RETRY_CACHE_INDEX = "exportRetryCacheIndexBySite";
 const STORAGE_AUTO_UPDATE_RUNTIME = "autoUpdateRuntimeBySite";
+const PERSONAL_SITE_URL = "https://note.etalib.space";
 const MB = 1024 * 1024;
 const UPLOAD_CHUNK_MIN_SIZE = 256 * 1024;
 const UPLOAD_CHUNK_MAX_SIZE = 8 * MB;
@@ -1657,8 +1658,6 @@ class SiYuanSharePlugin extends Plugin {
     this.settingEls = {
       siteInput: null,
       apiKeyInput: null,
-      siteSelect: null,
-      siteNameInput: null,
       autoUpdateInput: null,
       autoUpdateRow: null,
       quietWindowInput: null,
@@ -1743,7 +1742,7 @@ class SiYuanSharePlugin extends Plugin {
     script.src = base + "controls.js?v=0.5.8";
     script.onload = () => {
       if (this.isUnloading) return;
-      this.disposeInterfaceControls = window.SPSControls?.mount(document.body, 'select.sps-site-select, input#sps-share-expires');
+      this.disposeInterfaceControls = window.SPSControls?.mount(document.body, 'input#sps-share-expires');
     };
     script.onerror = () => { script.remove(); style.remove(); };
     document.head.append(style, script);
@@ -1765,7 +1764,6 @@ class SiYuanSharePlugin extends Plugin {
     this.shares = [];
     if (this.dockElement) {
       this.dockElement.removeEventListener("click", this.onDockClick);
-      this.dockElement.removeEventListener("change", this.onDockChange);
     }
     this.eventBus.off("click-editortitleicon", this.onEditorTitleMenu);
     this.eventBus.off("open-menu-doctree", this.onDocTreeMenu);
@@ -5173,33 +5171,28 @@ class SiYuanSharePlugin extends Plugin {
     const incrementalCursorBySite = this.normalizeIncrementalCursorBySite(incrementalCursorRaw);
     const docBlockCountBySite = this.normalizeDocBlockCountBySite(docBlockCountRaw);
     const exportRetryCacheIndexBySite = this.normalizeExportRetryCacheIndexBySite(exportRetryCacheIndexRaw);
-    let sites = this.normalizeSiteList(settings.sites);
-    let activeSiteId = String(settings.activeSiteId || "");
-    let persistSettings = false;
-    if (!sites.length && (settings.siteUrl || settings.apiKey)) {
-      const fallback = {
+    const oldSites = this.normalizeSiteList(settings.sites);
+    const oldActiveId = String(settings.activeSiteId || "");
+    const isPersonalSite = (url) => normalizeUrlBase(url).toLowerCase() === PERSONAL_SITE_URL;
+    // Never attach credentials or cached shares from an unrelated origin to this site.
+    const activeSite = oldSites.find((site) => site.id === oldActiveId && isPersonalSite(site.siteUrl))
+      || oldSites.find((site) => isPersonalSite(site.siteUrl))
+      || {
         id: randomSlug(10),
-        name: this.resolveSiteName("", settings.siteUrl || "", 0),
-        siteUrl: String(settings.siteUrl || "").trim(),
-        apiKey: String(settings.apiKey || "").trim(),
+        name: this.resolveSiteName("", PERSONAL_SITE_URL, 0),
+        siteUrl: PERSONAL_SITE_URL,
+        apiKey: isPersonalSite(settings.siteUrl) ? String(settings.apiKey || "").trim() : "",
         autoUpdateEnabled: false,
         quietWindowSeconds: 60,
       };
-      sites.push(fallback);
-      activeSiteId = fallback.id;
-      persistSettings = true;
-    }
-    if (activeSiteId && !sites.find((site) => String(site.id) === activeSiteId)) {
-      activeSiteId = "";
-      persistSettings = true;
-    }
-    if (!activeSiteId && sites.length) {
-      activeSiteId = String(sites[0].id || "");
-      persistSettings = true;
-    }
-    const activeSite = sites.find((site) => String(site.id) === activeSiteId) || null;
+    activeSite.siteUrl = PERSONAL_SITE_URL;
+    const sites = [activeSite];
+    const activeSiteId = String(activeSite.id);
+    const persistSettings = stableStringify(settings.sites || []) !== stableStringify(sites)
+      || oldActiveId !== activeSiteId || settings.siteUrl !== PERSONAL_SITE_URL || settings.apiKey !== activeSite.apiKey;
     let persistShares = false;
-    if (Array.isArray(legacyShares) && legacyShares.length && activeSiteId && !siteShares[activeSiteId]) {
+    const legacyBelongsToSite = oldActiveId ? oldActiveId === activeSiteId : isPersonalSite(settings.siteUrl);
+    if (Array.isArray(legacyShares) && legacyShares.length && legacyBelongsToSite && !siteShares[activeSiteId]) {
       siteShares[activeSiteId] = legacyShares;
       persistShares = true;
     }
@@ -5267,30 +5260,9 @@ class SiYuanSharePlugin extends Plugin {
 
   initSettingPanel() {
     const t = this.t.bind(this);
-    const siteSelect = document.createElement("select");
-    siteSelect.className = "b3-select sps-setting-field sps-site-select sps-site-select--setting";
-    siteSelect.setAttribute("aria-label", t("siyuanShare.label.site"));
-    siteSelect.addEventListener("change", this.onSiteSelectChange);
-
-    const siteNameInput = document.createElement("input");
-    siteNameInput.className = "b3-text-field fn__block sps-setting-field";
-    siteNameInput.placeholder = t("siyuanShare.label.siteName");
-
-    const siteActions = document.createElement("div");
-    siteActions.className = "siyuan-plugin-share__actions";
-    siteActions.innerHTML = `
-  <button class="b3-button b3-button--outline" data-action="site-add">${t(
-    "siyuanShare.action.addSite",
-  )}</button>
-  <button class="b3-button b3-button--outline" data-action="site-remove">${t(
-    "siyuanShare.action.removeSite",
-  )}</button>
-`;
-    siteActions.addEventListener("click", this.onSettingSitesClick);
-
     const siteInput = document.createElement("input");
     siteInput.className = "b3-text-field fn__block sps-setting-field";
-    siteInput.placeholder = t("siyuanShare.placeholder.siteUrl");
+    siteInput.readOnly = true;
 
     const apiKeyInput = document.createElement("input");
     apiKeyInput.className = "b3-text-field fn__block sps-setting-field";
@@ -5341,8 +5313,6 @@ class SiYuanSharePlugin extends Plugin {
     this.settingEls = {
       siteInput,
       apiKeyInput,
-      siteSelect,
-      siteNameInput,
       autoUpdateInput,
       autoUpdateRow,
       quietWindowInput,
@@ -5358,26 +5328,8 @@ class SiYuanSharePlugin extends Plugin {
     });
 
     this.setting.addItem({
-      title: t("siyuanShare.label.site"),
-      description: t("siyuanShare.hint.siteList"),
-      createActionElement: () => siteSelect,
-    });
-
-    this.setting.addItem({
-      title: t("siyuanShare.label.siteName"),
-      description: "",
-      createActionElement: () => siteNameInput,
-    });
-
-    this.setting.addItem({
-      title: t("siyuanShare.label.siteActions"),
-      description: "",
-      createActionElement: () => siteActions,
-    });
-
-    this.setting.addItem({
       title: t("siyuanShare.label.siteUrl"),
-      description: t("siyuanShare.hint.siteUrl"),
+      description: "",
       createActionElement: () => siteInput,
     });
     this.setting.addItem({
@@ -5885,22 +5837,6 @@ class SiYuanSharePlugin extends Plugin {
     } catch {
       // ignore
     }
-  }
-
-  async removeAutoUpdateRuntimeForSite(siteId) {
-    const id = String(siteId || "").trim();
-    if (!id) return;
-    const store = this.normalizeAutoUpdateRuntimeBySite(this.autoUpdateRuntimeBySite || {});
-    if (!Object.prototype.hasOwnProperty.call(store, id)) return;
-    delete store[id];
-    this.autoUpdateRuntimeBySite = store;
-    const fingerprint = stableStringify(store);
-    if (this.autoUpdatePersistInitialized && fingerprint === this.autoUpdatePersistFingerprint) {
-      return;
-    }
-    await this.saveData(STORAGE_AUTO_UPDATE_RUNTIME, store);
-    this.autoUpdatePersistFingerprint = fingerprint;
-    this.autoUpdatePersistInitialized = true;
   }
 
   normalizeIncrementalCursorBySite(raw) {
@@ -6925,38 +6861,10 @@ class SiYuanSharePlugin extends Plugin {
     return sites.find((site) => site && String(site.id) === activeId) || sites[0] || null;
   }
 
-  getSiteOptionLabel(site, index = 0) {
-    if (!site) return `${this.t("siyuanShare.label.site")} ${index + 1}`;
-    const name = this.resolveSiteName(site.name, site.siteUrl, index);
-    const host = getUrlHost(site.siteUrl);
-    if (host && host !== name) {
-      return `${name} (${host})`;
-    }
-    return name || host || `${this.t("siyuanShare.label.site")} ${index + 1}`;
-  }
-
   syncSettingInputs() {
-    const {siteInput, apiKeyInput, envHint, siteSelect, siteNameInput, autoUpdateInput, quietWindowInput} = this.settingEls || {};
+    const {siteInput, apiKeyInput, envHint, autoUpdateInput, quietWindowInput} = this.settingEls || {};
     if (siteInput) siteInput.value = this.settings.siteUrl || "";
     if (apiKeyInput) apiKeyInput.value = this.settings.apiKey || "";
-    if (siteSelect) {
-      const sites = Array.isArray(this.settings.sites) ? this.settings.sites : [];
-      const activeId = String(this.settings.activeSiteId || "");
-      siteSelect.innerHTML = "";
-      sites.forEach((site, index) => {
-        const option = document.createElement("option");
-        option.value = String(site.id || "");
-        option.textContent = this.getSiteOptionLabel(site, index);
-        siteSelect.appendChild(option);
-      });
-      if (activeId) {
-        siteSelect.value = activeId;
-      }
-    }
-    if (siteNameInput) {
-      const active = this.getActiveSite();
-      siteNameInput.value = active?.name || "";
-    }
     if (autoUpdateInput) {
       const active = this.getActiveSite();
       autoUpdateInput.checked = !!active?.autoUpdateEnabled;
@@ -6990,11 +6898,10 @@ class SiYuanSharePlugin extends Plugin {
   }
 
   persistCurrentSiteInputs() {
-    const {siteInput, apiKeyInput, siteNameInput, autoUpdateInput, quietWindowInput} = this.settingEls || {};
-    const siteUrl = (siteInput?.value || "").trim();
-    const apiKey = (apiKeyInput?.value || "").trim();
-    const siteName = (siteNameInput?.value || "").trim();
-    const autoUpdateEnabled = !!autoUpdateInput?.checked;
+    const {apiKeyInput, autoUpdateInput, quietWindowInput} = this.settingEls || {};
+    const siteUrl = PERSONAL_SITE_URL;
+    const apiKey = (apiKeyInput ? apiKeyInput.value : this.settings.apiKey || "").trim();
+    const autoUpdateEnabled = autoUpdateInput ? !!autoUpdateInput.checked : !!this.getActiveSite()?.autoUpdateEnabled;
     const quietWindowRaw = Number(quietWindowInput?.value);
     const quietWindowSeconds = Math.max(30, Number.isFinite(quietWindowRaw) && quietWindowRaw > 0 ? Math.floor(quietWindowRaw) : 60);
     let sites = this.normalizeSiteList(this.settings.sites);
@@ -7002,11 +6909,11 @@ class SiYuanSharePlugin extends Plugin {
     let activeSite = sites.find((site) => String(site.id) === activeSiteId);
     const prevSiteUrl = activeSite?.siteUrl || "";
     const prevApiKey = activeSite?.apiKey || "";
-    if (!activeSite && (siteUrl || apiKey || siteName)) {
+    if (!activeSite) {
       activeSiteId = activeSiteId || randomSlug(10);
       activeSite = {
         id: activeSiteId,
-        name: this.resolveSiteName(siteName, siteUrl, sites.length),
+        name: this.resolveSiteName("", siteUrl, sites.length),
         siteUrl,
         apiKey,
         autoUpdateEnabled,
@@ -7021,7 +6928,7 @@ class SiYuanSharePlugin extends Plugin {
       activeSite.apiKey = apiKey;
       activeSite.autoUpdateEnabled = autoUpdateEnabled;
       activeSite.quietWindowSeconds = quietWindowSeconds;
-      activeSite.name = this.resolveSiteName(siteName || activeSite.name, siteUrl, sites.indexOf(activeSite));
+      activeSite.name = this.resolveSiteName(activeSite.name, siteUrl, sites.indexOf(activeSite));
       if (prevSiteUrl !== siteUrl || prevApiKey !== apiKey) {
         activeSite.remoteUser = null;
         activeSite.remoteVerifiedAt = 0;
@@ -7039,42 +6946,6 @@ class SiYuanSharePlugin extends Plugin {
       activeSiteId,
     };
     this.syncRemoteStatusFromSite(activeSite);
-    return {siteUrl, apiKey, siteName, autoUpdateEnabled, sites, activeSiteId};
-  }
-
-  async applyActiveSite(siteId, {persist = true} = {}) {
-    // Capture in-flight auto-update share into queue before persisting,
-    // so it is not lost when switching sites
-    const inFlightShareId = String(this.autoUpdateCurrentShareId || "").trim();
-    if (inFlightShareId && !this.autoUpdateQueuedSet.has(inFlightShareId)) {
-      this.autoUpdateQueue.unshift(inFlightShareId);
-      this.autoUpdateQueuedSet.add(inFlightShareId);
-    }
-    await this.flushAutoUpdateRuntimePersist();
-    this.stopAutoUpdate({clearState: true});
-    const sites = this.normalizeSiteList(this.settings.sites);
-    const next = sites.find((site) => String(site.id) === String(siteId)) || sites[0] || null;
-    const activeSiteId = next ? String(next.id) : "";
-    this.settings = {
-      ...this.settings,
-      sites,
-      activeSiteId,
-      siteUrl: next?.siteUrl || "",
-      apiKey: next?.apiKey || "",
-    };
-    this.syncRemoteStatusFromSite(next);
-    this.remoteUploadLimits = null;
-    this.shares = Array.isArray(this.siteShares?.[activeSiteId]) ? this.siteShares[activeSiteId] : [];
-    this.restoreAutoUpdateRuntimeForSite(activeSiteId);
-    if (persist) {
-      await this.saveData(STORAGE_SETTINGS, this.settings);
-    }
-    this.syncSettingInputs();
-    this.renderDock();
-    this.renderSettingCurrent();
-    this.renderSettingShares();
-    this.updateTopBarState();
-    this.refreshAutoUpdateLoop({immediate: true});
   }
 
   saveSettingsFromSetting = async ({notify = true} = {}) => {
@@ -7096,20 +6967,6 @@ class SiYuanSharePlugin extends Plugin {
     this.syncSettingInputs();
     this.refreshAutoUpdateLoop({immediate: true});
     if (notify) this.notify(t("siyuanShare.message.disconnected"));
-  };
-
-  onSiteSelectChange = (event) => {
-    const nextId = String(event?.target?.value || "");
-    if (!nextId || String(this.settings.activeSiteId || "") === nextId) return;
-    void (async () => {
-      try {
-        this.persistCurrentSiteInputs();
-        await this.applyActiveSite(nextId, {persist: false});
-        await this.saveData(STORAGE_SETTINGS, this.settings);
-      } catch (err) {
-        this.showErr(err);
-      }
-    })();
   };
 
   confirmEnableAutoUpdate = async () => {
@@ -7182,160 +7039,6 @@ class SiYuanSharePlugin extends Plugin {
       try {
         this.persistCurrentSiteInputs();
         await this.saveData(STORAGE_SETTINGS, this.settings);
-      } catch (err) {
-        this.showErr(err);
-      }
-    })();
-  };
-
-  onDockChange = (event) => {
-    const target = event.target;
-    if (!target || target.id !== "sps-site-select") return;
-    const nextId = String(target.value || "");
-    if (!nextId || String(this.settings.activeSiteId || "") === nextId) return;
-    void (async () => {
-      try {
-        const siteUrl = this.getInputValue("sps-site").trim();
-        const apiKey = this.getInputValue("sps-apikey").trim();
-        let sites = this.normalizeSiteList(this.settings.sites);
-        let activeSiteId = String(this.settings.activeSiteId || "");
-        let activeSite = sites.find((site) => String(site.id) === activeSiteId);
-        const prevSiteUrl = activeSite?.siteUrl || "";
-        const prevApiKey = activeSite?.apiKey || "";
-        if (!activeSite && (siteUrl || apiKey)) {
-          activeSiteId = activeSiteId || randomSlug(10);
-          activeSite = {
-            id: activeSiteId,
-            name: this.resolveSiteName("", siteUrl, sites.length),
-            siteUrl,
-            apiKey,
-            autoUpdateEnabled: false,
-            quietWindowSeconds: 60,
-            remoteUser: null,
-            remoteVerifiedAt: 0,
-            remoteFeatures: null,
-          };
-          sites.push(activeSite);
-        } else if (activeSite) {
-          activeSite.siteUrl = siteUrl;
-          activeSite.apiKey = apiKey;
-          activeSite.name = this.resolveSiteName(activeSite.name, siteUrl, sites.indexOf(activeSite));
-          if (prevSiteUrl !== siteUrl || prevApiKey !== apiKey) {
-            activeSite.remoteUser = null;
-            activeSite.remoteVerifiedAt = 0;
-            activeSite.remoteFeatures = null;
-            this.remoteUploadLimits = null;
-            this.remoteFeatures = null;
-            this.stopAutoUpdate({clearState: false, preservePendingOnPause: true});
-          }
-        }
-        this.settings = {
-          ...this.settings,
-          sites,
-          siteUrl,
-          apiKey,
-          activeSiteId,
-        };
-        this.syncRemoteStatusFromSite(activeSite);
-        await this.applyActiveSite(nextId, {persist: true});
-      } catch (err) {
-        this.showErr(err);
-      }
-    })();
-  };
-
-  onSettingSitesClick = (event) => {
-    const btn = event.target.closest("[data-action]");
-    if (!btn) return;
-    const action = btn.getAttribute("data-action");
-    if (!action) return;
-    void (async () => {
-      try {
-        if (action === "site-add") {
-          this.persistCurrentSiteInputs();
-          // Persist old site's auto-update runtime before switching
-          await this.flushAutoUpdateRuntimePersist();
-          this.stopAutoUpdate({clearState: true});
-          const sites = this.normalizeSiteList(this.settings.sites);
-          const newSiteId = randomSlug(10);
-          const newSite = {
-            id: newSiteId,
-            name: this.resolveSiteName("", "", sites.length),
-            siteUrl: "",
-            apiKey: "",
-            autoUpdateEnabled: false,
-            quietWindowSeconds: 60,
-            remoteUser: null,
-            remoteVerifiedAt: 0,
-            remoteFeatures: null,
-          };
-          sites.push(newSite);
-          this.settings = {
-            ...this.settings,
-            sites,
-            activeSiteId: newSiteId,
-            siteUrl: "",
-            apiKey: "",
-          };
-          this.siteShares[newSiteId] = this.siteShares[newSiteId] || [];
-          this.shares = this.siteShares[newSiteId];
-          this.remoteUser = null;
-          this.remoteVerifiedAt = 0;
-          this.remoteFeatures = null;
-          this.remoteUploadLimits = null;
-          await this.saveData(STORAGE_SETTINGS, this.settings);
-          await this.saveData(STORAGE_SITE_SHARES, this.siteShares);
-          this.syncSettingInputs();
-          this.renderDock();
-          this.renderSettingCurrent();
-          this.renderSettingShares();
-          this.updateTopBarState();
-          this.refreshAutoUpdateLoop({immediate: true});
-          return;
-        }
-        if (action === "site-remove") {
-          const activeId = String(this.settings.activeSiteId || "");
-          if (!activeId) return;
-          await this.flushAutoUpdateRuntimePersist();
-          this.stopAutoUpdate({clearState: true});
-          const sites = this.normalizeSiteList(this.settings.sites).filter(
-            (site) => String(site.id) !== activeId,
-          );
-          const autoUpdateScanStampBySite = this.normalizeAutoUpdateScanStampBySite(
-            this.settings.autoUpdateScanStampBySite || {},
-          );
-          if (Object.prototype.hasOwnProperty.call(autoUpdateScanStampBySite, activeId)) {
-            delete autoUpdateScanStampBySite[activeId];
-          }
-          if (this.siteShares?.[activeId]) {
-            delete this.siteShares[activeId];
-          }
-          await this.removeAutoUpdateRuntimeForSite(activeId);
-          const nextSite = sites[0] || null;
-          this.settings = {
-            ...this.settings,
-            sites,
-            activeSiteId: nextSite?.id || "",
-            siteUrl: nextSite?.siteUrl || "",
-            apiKey: nextSite?.apiKey || "",
-            autoUpdateScanStampBySite,
-          };
-          this.shares = nextSite?.id && this.siteShares?.[nextSite.id] ? this.siteShares[nextSite.id] : [];
-          this.syncRemoteStatusFromSite(nextSite);
-          this.remoteUploadLimits = null;
-          if (nextSite?.id) {
-            this.restoreAutoUpdateRuntimeForSite(nextSite.id);
-          }
-          await this.saveData(STORAGE_SETTINGS, this.settings);
-          await this.saveData(STORAGE_SITE_SHARES, this.siteShares);
-          this.syncSettingInputs();
-          this.renderDock();
-          this.renderSettingCurrent();
-          this.renderSettingShares();
-          this.updateTopBarState();
-          this.refreshAutoUpdateLoop({immediate: true});
-          return;
-        }
       } catch (err) {
         this.showErr(err);
       }
@@ -7576,11 +7279,10 @@ class SiYuanSharePlugin extends Plugin {
 
 
   async saveSettingsFromUI() {
-    const siteUrl = this.getInputValue("sps-site").trim();
+    const siteUrl = PERSONAL_SITE_URL;
     const apiKey = this.getInputValue("sps-apikey").trim();
-    const siteSelectId = this.getInputValue("sps-site-select").trim();
     let sites = this.normalizeSiteList(this.settings.sites);
-    let activeSiteId = siteSelectId || String(this.settings.activeSiteId || "");
+    let activeSiteId = String(this.settings.activeSiteId || "");
     let activeSite = sites.find((site) => String(site.id) === activeSiteId);
     const prevSiteUrl = activeSite?.siteUrl || "";
     const prevApiKey = activeSite?.apiKey || "";
@@ -10399,6 +10101,8 @@ class SiYuanSharePlugin extends Plugin {
     if (this.remoteUser && this.remoteVerifiedAt && nowTs() - this.remoteVerifiedAt < 60000) {
       return {user: this.remoteUser, limits: this.remoteUploadLimits, features: this.remoteFeatures};
     }
+    const requestKey = this.settings.apiKey;
+    const requestSiteId = this.getActiveSiteId();
     const data = await this.remoteRequest(REMOTE_API.verify, {
       method: "POST",
       body: {},
@@ -10407,6 +10111,9 @@ class SiYuanSharePlugin extends Plugin {
       progress,
       silent: background,
     });
+    if (requestKey !== this.settings.apiKey || requestSiteId !== this.getActiveSiteId()) {
+      throw new Error("Connection changed while the request was running; retry.");
+    }
     this.remoteUser = this.normalizeRemoteUser(data?.user);
     this.remoteUploadLimits = this.normalizeUploadLimits(data?.limits);
     this.remoteFeatures = this.normalizeRemoteFeatures(data?.features);
@@ -10426,6 +10133,8 @@ class SiYuanSharePlugin extends Plugin {
     } = {},
   ) {
     const t = this.t.bind(this);
+    const requestKey = this.settings.apiKey;
+    const requestSiteId = this.getActiveSiteId();
     const data = await this.remoteRequest(REMOTE_API.shares, {
       method: "GET",
       progressText: background ? "" : t("siyuanShare.progress.syncingShareList"),
@@ -10433,6 +10142,9 @@ class SiYuanSharePlugin extends Plugin {
       progress,
       silent: background,
     });
+    if (requestKey !== this.settings.apiKey || requestSiteId !== this.getActiveSiteId()) {
+      throw new Error("Connection changed while the request was running; retry.");
+    }
     const activeSiteId = String(this.settings.activeSiteId || "");
     const rawShares = Array.isArray(data?.shares) ? data.shares : [];
     const passwordMap = activeSiteId ? this.collectSharePasswords(this.siteShares?.[activeSiteId]) : {};
@@ -10910,16 +10622,6 @@ class SiYuanSharePlugin extends Plugin {
     const t = this.t.bind(this);
     const siteUrl = this.settings.siteUrl || "";
     const apiKey = this.settings.apiKey || "";
-    const sites = Array.isArray(this.settings.sites) ? this.settings.sites : [];
-    const activeSiteId = String(this.settings.activeSiteId || "");
-    const siteOptions = sites
-      .map((site, index) => {
-        const id = String(site?.id || "");
-        const label = this.getSiteOptionLabel(site, index);
-        const selected = id && id === activeSiteId ? " selected" : "";
-        return `<option value="${escapeAttr(id)}"${selected}>${escapeHtml(label)}</option>`;
-      })
-      .join("");
     const displayName = this.remoteUser?.username || this.remoteUser?.name || "";
     const statusLabel = !siteUrl || !apiKey
       ? t("siyuanShare.hint.needSiteAndKey")
@@ -10970,14 +10672,8 @@ class SiYuanSharePlugin extends Plugin {
 <div class="siyuan-plugin-share__section">
   <div class="siyuan-plugin-share__title">${escapeHtml(t("siyuanShare.section.connectionSettings"))}</div>
   <div class="siyuan-plugin-share__grid">
-    <div class="siyuan-plugin-share__muted">${escapeHtml(t("siyuanShare.label.site"))}</div>
-    <select id="sps-site-select" class="b3-select sps-site-select" aria-label="${escapeAttr(t("siyuanShare.label.site"))}">
-      ${siteOptions || `<option value="">${escapeHtml(t("siyuanShare.label.siteEmpty"))}</option>`}
-    </select>
     <div class="siyuan-plugin-share__muted">${escapeHtml(t("siyuanShare.label.siteUrl"))}</div>
-    <input id="sps-site" class="b3-text-field" placeholder="${escapeAttr(
-      t("siyuanShare.placeholder.siteUrl"),
-    )}" value="${escapeAttr(siteUrl)}" />
+    <input id="sps-site" class="b3-text-field" readonly value="${escapeAttr(siteUrl)}" />
     <div class="siyuan-plugin-share__muted">${escapeHtml(t("siyuanShare.label.apiKey"))}</div>
     <input id="sps-apikey" type="password" class="b3-text-field" placeholder="${escapeAttr(
       t("siyuanShare.label.apiKey"),
@@ -11022,9 +10718,7 @@ class SiYuanSharePlugin extends Plugin {
 `;
     try {
       this.dockElement.removeEventListener("click", this.onDockClick);
-      this.dockElement.removeEventListener("change", this.onDockChange);
       this.dockElement.addEventListener("click", this.onDockClick);
-      this.dockElement.addEventListener("change", this.onDockChange);
     } catch {
       // ignore
     }

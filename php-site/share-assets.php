@@ -274,6 +274,12 @@ function serve_share_asset(array $share, string $assetPath): void {
     $size = @filesize($fullPath);
     header('Content-Type: ' . $mime);
     header('X-Content-Type-Options: nosniff');
+    // SVG/XML and mislabelled HTML may execute as documents when opened directly.
+    // Keep static previews while isolating active content from the site origin.
+    $mimeType = strtolower(trim(explode(';', $mime, 2)[0]));
+    if ($inline && (str_contains($mimeType, 'xml') || $mimeType === 'text/html')) {
+        header("Content-Security-Policy: sandbox; script-src 'none'; object-src 'none'; base-uri 'none'");
+    }
     header('Content-Disposition: ' . $disposition . '; filename="' . $escapedFilename . '"; filename*=UTF-8\'\'' . rawurlencode($filename));
     header('Cache-Control: private, max-age=3600');
     header('Accept-Ranges: bytes');

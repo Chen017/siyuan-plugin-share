@@ -65,17 +65,14 @@ class AdminShareTests:
         self.assertEqual(admin.request(path)[0], 404)
         self.assertEqual(admin.request(path, fields)[0], 404)
 
-    def test_admin_share_editor_legacy_owner_and_slug(self):
+    def test_admin_share_editor_owner_and_slug(self):
         share = self.share()
-        owner = self.name + '-legacy'
-        self.create_actor(owner, role='user')
-        legacy_id = self.rows("SELECT id FROM users WHERE username='" + owner + "'")[0]['id']
-        self.rows(f"UPDATE shares SET user_id={legacy_id} WHERE id={share['id']}")
+        owner_id = self.rows('SELECT user_id FROM shares WHERE id=' + str(share['id']))[0]['user_id']
         admin = self.admin()
         path, fields = self.editor_fields(admin, share, slug='edit' + self.name.replace('_', ''), title='<Title & notes>')
         self.assertEqual(admin.request(path, fields)[0], 302)
         row = self.rows('SELECT * FROM shares WHERE id=' + str(share['id']))[0]
-        self.assertEqual(row['user_id'], legacy_id)
+        self.assertEqual(row['user_id'], owner_id)
         self.assertEqual(row['slug'], fields['slug'])
         self.assertIn(b'&lt;Title &amp; notes&gt;', admin.request(path)[2])
         self.assertIn(b'PHP83_MARKER', type(self.client)(self.base).request('/s/' + fields['slug'])[2])

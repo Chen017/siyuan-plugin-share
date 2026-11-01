@@ -235,26 +235,40 @@ function seed_default_settings(PDO $pdo): void {
 
 function seed_default_admin(PDO $pdo): void {
     $count = (int)$pdo->query('SELECT COUNT(*) AS cnt FROM users WHERE role = "admin"')->fetchColumn();
-    if ($count > 0) {
-        return;
-    }
-    $now = now();
-    $stmt = $pdo->prepare('INSERT INTO users (username, password_hash, role, api_key_hash, api_key_prefix, api_key_last4, disabled, storage_limit_bytes, storage_used_bytes, must_change_password, created_at, updated_at)
+    if ($count > 0) return;
+    // Concurrent first requests must not create or log different initial credentials.
+    $pdo->exec('BEGIN IMMEDIATE');
+    try {
+        if ((int)$pdo->query('SELECT COUNT(*) FROM users WHERE role = "admin"')->fetchColumn() > 0) {
+            $pdo->exec('COMMIT');
+            return;
+        }
+        $password = bin2hex(random_bytes(18));
+        $now = now();
+        $stmt = $pdo->prepare('INSERT INTO users (username, password_hash, role, api_key_hash, api_key_prefix, api_key_last4, disabled, storage_limit_bytes, storage_used_bytes, must_change_password, created_at, updated_at)
         VALUES (:username, :password_hash, :role, :api_key_hash, :api_key_prefix, :api_key_last4, :disabled, :storage_limit_bytes, :storage_used_bytes, :must_change_password, :created_at, :updated_at)');
-    $stmt->execute([
-        ':username' => 'admin',
-        ':password_hash' => password_hash('123456', PASSWORD_DEFAULT),
-        ':role' => 'admin',
-        ':api_key_hash' => null,
-        ':api_key_prefix' => null,
-        ':api_key_last4' => null,
-        ':disabled' => 0,
-        ':storage_limit_bytes' => 0,
-        ':storage_used_bytes' => 0,
-        ':must_change_password' => 1,
-        ':created_at' => $now,
-        ':updated_at' => $now,
-    ]);
+        $stmt->execute([
+            ':username' => 'admin',
+            ':password_hash' => password_hash($password, PASSWORD_DEFAULT),
+            ':role' => 'admin',
+            ':api_key_hash' => null,
+            ':api_key_prefix' => null,
+            ':api_key_last4' => null,
+            ':disabled' => 0,
+            ':storage_limit_bytes' => 0,
+            ':storage_used_bytes' => 0,
+            ':must_change_password' => 1,
+            ':created_at' => $now,
+            ':updated_at' => $now,
+        ]);
+        if (!error_log('SIYUAN_INITIAL_ADMIN_PASSWORD=' . $password)) {
+            throw new RuntimeException('Could not log initial administrator password');
+        }
+        $pdo->exec('COMMIT');
+    } catch (Throwable $error) {
+        $pdo->exec('ROLLBACK');
+        throw $error;
+    }
 }
 
 /** Retire only share admission data; PDF quota identities use separate tables. */

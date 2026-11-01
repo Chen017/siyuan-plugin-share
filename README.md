@@ -19,14 +19,14 @@ This is **[Chen017](https://github.com/Chen017)'s personal fork** of [b8l8u8e8/s
 | Administrator-only backend | Streamlined admin navigation and settings; manage share titles, links, expiration and passwords. Deleted shares can be restored or permanently removed. Plugin connection details live in Site settings, and storage quotas remain available. Public registration and multi-user management are removed. All matching shares appear without pagination in responsive three/two/one-column cards, with inline actions and clearer settings hierarchy. |
 | Removed services | Access analytics and logs, admin KPI/charts, instance statistics/heartbeats, SMTP/email flows, comments, reports, announcements, moderation/scanning, ordinary CAPTCHA, ICP/contact settings, manual chunk cleanup and the global data-reset endpoint. PDF CAPTCHA and automatic upload cleanup remain. |
 | Configuration | Website/share URL prefix, HTML Head insertion and custom CSS/JS switches, editors, help and injection remain available. Upstream release checks and update prompts are removed; attribution remains. |
-| Data migration | Retired module data is removed once. Notes, share URLs, ownership, API keys and referenced attachments are preserved; share visitor limits and history are removed and storage usage is recalculated. [Scope and migration](docs/FOCUS_SIMPLIFICATION.md). |
+| Data migration | Retired module data is removed once. The administrator's notes, share URLs, API key and referenced attachments are preserved; share visitor limits and history are removed and storage usage is recalculated. [Upload and migration safeguards](docs/UPLOAD_SAFETY.md). |
 | Rendering | SiYuan table-cell alignment fixes, on-demand diagram engines and one Markdown render per document. Math, footnotes and diagrams remain available. |
 | PDF export | Single/batch downloads in a dialog, selectable text, hidden attribution and visitor quota indicators. [Details](docs/GUEST_PDF_EXPORT.md). |
 | Accessibility & SEO | Clearer links, correct button states and TOC focus, main landmarks, working image-download controls, page descriptions, robots.txt and real 404 responses. |
 | Deployment | Local-only `127.0.0.1:8081`, versioned static assets, GitHub Actions deployment and isolated regression tests. Backup and restore-verification scripts are included. |
 | Maintenance | PHP modules with unchanged routes/API contracts, obsolete style/helper cleanup, one verified backup entry point, consistent rendered-page health checks, private configuration permissions and CI before deployment. [Maintenance guide](docs/MAINTENANCE.md). |
 
-Earlier changes and commit references: [Fork changes](CUSTOM_FEATURES.md) · [PHP upgrade record](docs/PHP83_BETA.md).
+See the [maintenance guide](docs/MAINTENANCE.md) for project structure, regression history, development and release procedures. Git history records earlier changes.
 
 ## Docker Compose
 
@@ -44,7 +44,7 @@ docker compose ps
 
 The supplied Compose file builds this fork from source and listens on **127.0.0.1:8081**. Point your HTTPS reverse proxy at that address and preserve the Host header. Set the public HTTPS URL in **Site settings**.
 
-On a fresh installation, sign in with **admin / 123456** and change the password immediately. The backend is administrator-only; registration and email authentication are unavailable.
+On a fresh installation, get the randomly generated initial administrator password from `docker compose logs web` (look for `SIYUAN_INITIAL_ADMIN_PASSWORD`), sign in as **admin**, and set a different password before using the backend. Treat the logs as sensitive. Existing administrator passwords and API keys are preserved on upgrade. The backend is administrator-only; registration and email authentication are unavailable.
 
 | Persistent host path | Contents |
 | --- | --- |
@@ -56,11 +56,13 @@ Keep these paths when updating. Do not replace an existing configuration with th
 
 ## Connect SiYuan
 
-1. Install the Siyuan Share plugin, then enter your server URL and an API key generated in the administrator backend.
+1. Install the Siyuan Share plugin and enter an API key generated in the administrator backend. This personal fork is fixed to `https://note.etalib.space`.
 2. Right-click a document or notebook to create a share.
 3. Set its password, expiration date, then copy the link.
 
 Updating an existing share preserves its URL. Automatic updates, incremental sync, document trees, search, math, footnotes and diagrams remain supported.
+
+On upgrade, a saved connection to this site retains its key and existing per-site sync state; other site configurations are removed. If no saved connection matches, enter the personal site's key again. Only administrator API keys can synchronize; ordinary-user keys no longer work. The administrator's existing shares are preserved.
 
 ## Reader and PDF
 

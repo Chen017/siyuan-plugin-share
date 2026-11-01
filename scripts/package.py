@@ -6,7 +6,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ITEMS = (
-    'i18n', 'LICENSE', 'README.md', 'README_zh_CN.md',
+    'i18n', 'docs', 'LICENSE', 'README.md', 'README_zh_CN.md',
     'icon.png', 'index.css', 'index.js', 'plugin.json',
 )
 SERVER_ITEMS = ('assets', 'vendor', '.well-known', 'robots.txt', 'llms.txt')
