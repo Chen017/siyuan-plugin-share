@@ -4360,7 +4360,9 @@ class SiYuanSharePlugin extends Plugin {
     const t = this.t.bind(this);
     let message = err?.message || String(err);
     const lower = message.toLowerCase();
-    if (
+    if (message === t("siyuanShare.error.imageSizeMigrationAssetsFailed")) {
+      // This error describes missing local assets, not necessarily a network failure.
+    } else if (
       lower.includes("api key") ||
       lower.includes("invalid api key") ||
       lower.includes("unauthorized") ||
@@ -5916,7 +5918,12 @@ class SiYuanSharePlugin extends Plugin {
     return !siteId || !key || this.imageSizeMigrationBySite?.[siteId]?.[key] !== true;
   }
 
-  async markImageSizeMigrationComplete(shareId) {
+  pendingImageSizeMigrationDocs(shareId) {
+    const state = this.imageSizeMigrationBySite?.[this.getActiveSiteId()]?.[String(shareId || "").trim()];
+    return Array.isArray(state?.pendingDocIds) ? normalizeDocIdList(state.pendingDocIds) : null;
+  }
+
+  async markImageSizeMigrationComplete(shareId, pendingDocIds = []) {
     const siteId = this.getActiveSiteId();
     const key = String(shareId || "").trim();
     if (!siteId || !key) return;
@@ -5932,7 +5939,8 @@ class SiYuanSharePlugin extends Plugin {
       return;
     }
     if (version[0] < 3 || (version[0] === 3 && version[1] < 3)) return;
-    const site = {...(this.imageSizeMigrationBySite?.[siteId] || {}), [key]: true};
+    const pending = normalizeDocIdList(pendingDocIds);
+    const site = {...(this.imageSizeMigrationBySite?.[siteId] || {}), [key]: pending.length ? {pendingDocIds: pending} : true};
     const previous = this.imageSizeMigrationBySite;
     const updated = {...(previous || {}), [siteId]: site};
     this.imageSizeMigrationBySite = updated;
@@ -7981,7 +7989,7 @@ class SiYuanSharePlugin extends Plugin {
   }
 
   async buildScopedIncrementalPlan(
-    {scopeDocs = [], exportedDocs = [], assetEntries = [], remoteSnapshot = null} = {},
+    {scopeDocs = [], exportedDocs = [], assetEntries = [], remoteSnapshot = null, preserveExistingAssets = false} = {},
     {controller = null, progress = null} = {},
   ) {
     const t = this.t.bind(this);
@@ -8104,7 +8112,7 @@ class SiYuanSharePlugin extends Plugin {
       const path = normalizeAssetPath(asset?.path || "");
       if (!path || localAssetMap.has(path)) return;
       const docId = String(asset?.docId || "").trim();
-      if (docId && (deletedDocSet.has(docId) || exportedDocSet.has(docId))) {
+      if (!preserveExistingAssets && docId && (deletedDocSet.has(docId) || exportedDocSet.has(docId))) {
         deletedAssetPaths.push(path);
       }
     });
@@ -8542,13 +8550,14 @@ class SiYuanSharePlugin extends Plugin {
         if (!scopeDocs.length) throw new Error(t("siyuanShare.error.noDocsToShare"));
       }
       let candidateDocIds = scopeDocs.map((doc) => String(doc?.docId || "").trim());
-      if (useIncremental && !this.needsImageSizeMigration(existingShare.id)) {
+      const pendingMigrationDocs = existingShare?.id ? this.pendingImageSizeMigrationDocs(existingShare.id) : null;
+      if (useIncremental && (!this.needsImageSizeMigration(existingShare.id) || pendingMigrationDocs !== null)) {
         progress.update(t("siyuanShare.progress.analyzingIncrement"));
         const candidateInfo = await this.collectIncrementalCandidateDocIds(scopeDocs, existingShare, {
           controller,
           progress,
         });
-        candidateDocIds = Array.isArray(candidateInfo?.candidateDocIds) ? candidateInfo.candidateDocIds : [];
+        candidateDocIds = [...(Array.isArray(candidateInfo?.candidateDocIds) ? candidateInfo.candidateDocIds : []), ...(pendingMigrationDocs || [])];
         const structChangedDocIds = this.collectStructChangedDocIds(scopeDocs, remoteSnapshot);
         if (structChangedDocIds.length) {
           candidateDocIds = Array.from(new Set([...candidateDocIds, ...structChangedDocIds]));
@@ -8568,6 +8577,7 @@ class SiYuanSharePlugin extends Plugin {
       }
 
       let resourceFailures = 0;
+      const failedAssetDocs = new Set();
       let docPayloads = [];
       let assetEntries = [];
       const allowRetryCache = !useIncremental && (!existingShare?.id || !this.needsImageSizeMigration(existingShare.id));
@@ -8618,6 +8628,7 @@ class SiYuanSharePlugin extends Plugin {
           const failures = Array.isArray(result.failures) ? result.failures : [];
           resourceFailures += failures.length;
           const docIdValue = String(doc?.docId || "").trim();
+          if (failures.length && docIdValue) failedAssetDocs.add(docIdValue);
           const docTitle =
             String(doc?.title || "").trim() || (docIdValue === docId ? title : t("siyuanShare.label.untitled"));
           const iconValue = await this.resolveIconUpload(doc?.icon, {
@@ -8673,7 +8684,7 @@ class SiYuanSharePlugin extends Plugin {
       });
       if (resourceFailures > 0) {
         console.warn("Some assets failed to download.", resourceFailures);
-        if (existingShare?.id && this.needsImageSizeMigration(existingShare.id)) throw new Error(t("siyuanShare.error.imageSizeMigrationAssetsFailed"));
+        if (!useIncremental && existingShare?.id) throw new Error(t("siyuanShare.error.imageSizeMigrationAssetsFailed"));
       }
       const refDocIds = scopeDocs.map((doc) => String(doc?.docId || ""));
       if (!background) {
@@ -8734,6 +8745,7 @@ class SiYuanSharePlugin extends Plugin {
             exportedDocs: docPayloads,
             assetEntries,
             remoteSnapshot,
+            preserveExistingAssets: resourceFailures > 0,
           },
           {controller, progress},
         );
@@ -8748,7 +8760,7 @@ class SiYuanSharePlugin extends Plugin {
       }
       if (background && this.isIncrementalPlanNoop(plan)) {
         if (existingShare?.id) {
-          if (!cachedExport && !resourceFailures && this.needsImageSizeMigration(existingShare.id) && docsToExport.length === scopeDocs.length) await this.markImageSizeMigrationComplete(existingShare.id);
+          if (!cachedExport && this.needsImageSizeMigration(existingShare.id) && (pendingMigrationDocs !== null || docsToExport.length === scopeDocs.length)) await this.markImageSizeMigrationComplete(existingShare.id, Array.from(failedAssetDocs));
           await this.setIncrementalCursor(existingShare.id, incrementalCursorStamp);
           if (!useIncremental || docsToExport.length > 0) {
             await this.refreshDocBlockCountCacheForShare(existingShare.id, scopeDocs, {controller});
@@ -8759,7 +8771,7 @@ class SiYuanSharePlugin extends Plugin {
         }
         return;
       }
-      const detail = this.formatIncrementSummaryDetail(plan.summary);
+      const detail = this.formatIncrementSummaryDetail(plan.summary) + (useIncremental && resourceFailures ? "\n" + t("siyuanShare.message.missingAssetsPreserved", {count: resourceFailures}) : "");
       let proceed = true;
       if (!background) {
         progress.setBarVisible?.(false);
@@ -8873,7 +8885,7 @@ class SiYuanSharePlugin extends Plugin {
       });
       await this.saveData(STORAGE_SHARE_OPTIONS, this.shareOptions);
       await this.updateSharePasswordCache(share.id, {password, clearPassword});
-      if (uploadComplete && !cachedExport && !resourceFailures && this.needsImageSizeMigration(share.id) && docsToExport.length === scopeDocs.length) await this.markImageSizeMigrationComplete(share.id);
+      if (uploadComplete && !cachedExport && this.needsImageSizeMigration(share.id) && (pendingMigrationDocs !== null || docsToExport.length === scopeDocs.length)) await this.markImageSizeMigrationComplete(share.id, Array.from(failedAssetDocs));
       await this.setIncrementalCursor(share.id, incrementalCursorStamp);
       if (!useIncremental || docsToExport.length > 0) {
         await this.refreshDocBlockCountCacheForShare(share.id, scopeDocs, {controller});
@@ -8888,7 +8900,7 @@ class SiYuanSharePlugin extends Plugin {
       this.renderSettingCurrent();
       this.refreshDocTreeMarksLater();
       if (!background) {
-        this.notify(t("siyuanShare.message.shareCreated", {value: url || title}));
+        this.notify(useIncremental && resourceFailures ? t("siyuanShare.message.missingAssetsPreserved", {count: resourceFailures}) : t("siyuanShare.message.shareCreated", {value: url || title}));
         if (url) await this.tryCopyToClipboard(url);
       }
     } finally {
@@ -8978,13 +8990,14 @@ class SiYuanSharePlugin extends Plugin {
         }
       }
       let candidateDocIds = scopeDocs.map((doc) => String(doc?.docId || "").trim());
-      if (useIncremental && !this.needsImageSizeMigration(existingShare.id)) {
+      const pendingMigrationDocs = existingShare?.id ? this.pendingImageSizeMigrationDocs(existingShare.id) : null;
+      if (useIncremental && (!this.needsImageSizeMigration(existingShare.id) || pendingMigrationDocs !== null)) {
         progress.update(t("siyuanShare.progress.analyzingIncrement"));
         const candidateInfo = await this.collectIncrementalCandidateDocIds(scopeDocs, existingShare, {
           controller,
           progress,
         });
-        candidateDocIds = Array.isArray(candidateInfo?.candidateDocIds) ? candidateInfo.candidateDocIds : [];
+        candidateDocIds = [...(Array.isArray(candidateInfo?.candidateDocIds) ? candidateInfo.candidateDocIds : []), ...(pendingMigrationDocs || [])];
         const structChangedDocIds = this.collectStructChangedDocIds(scopeDocs, remoteSnapshot);
         if (structChangedDocIds.length) {
           candidateDocIds = Array.from(new Set([...candidateDocIds, ...structChangedDocIds]));
@@ -9007,6 +9020,7 @@ class SiYuanSharePlugin extends Plugin {
       let assetEntries = [];
       const exportedMarkdowns = [];
       let failureCount = 0;
+      const failedAssetDocs = new Set();
       const iconUploadMap = new Map();
       const allowRetryCache = !useIncremental && (!existingShare?.id || !this.needsImageSizeMigration(existingShare.id));
       const exportScopeMeta = allowRetryCache
@@ -9056,6 +9070,7 @@ class SiYuanSharePlugin extends Plugin {
           const failures = Array.isArray(result.failures) ? result.failures : [];
           failureCount += failures.length;
           const docIdValue = String(doc?.docId || "").trim();
+          if (failures.length && docIdValue) failedAssetDocs.add(docIdValue);
           const iconValue = await this.resolveIconUpload(doc?.icon, {
             docId: docIdValue,
             notebookId,
@@ -9109,7 +9124,7 @@ class SiYuanSharePlugin extends Plugin {
       });
       if (failureCount > 0) {
         console.warn("Some assets failed to download.", failureCount);
-        if (existingShare?.id && this.needsImageSizeMigration(existingShare.id)) throw new Error(t("siyuanShare.error.imageSizeMigrationAssetsFailed"));
+        if (!useIncremental && existingShare?.id) throw new Error(t("siyuanShare.error.imageSizeMigrationAssetsFailed"));
       }
       const refDocIds = scopeDocs.map((doc) => String(doc?.docId || ""));
       if (!background) {
@@ -9153,6 +9168,7 @@ class SiYuanSharePlugin extends Plugin {
             exportedDocs: docPayloads,
             assetEntries,
             remoteSnapshot,
+            preserveExistingAssets: failureCount > 0,
           },
           {controller, progress},
         );
@@ -9167,7 +9183,7 @@ class SiYuanSharePlugin extends Plugin {
       }
       if (background && this.isIncrementalPlanNoop(plan)) {
         if (existingShare?.id) {
-          if (!cachedExport && !failureCount && this.needsImageSizeMigration(existingShare.id) && docsToExport.length === scopeDocs.length) await this.markImageSizeMigrationComplete(existingShare.id);
+          if (!cachedExport && this.needsImageSizeMigration(existingShare.id) && (pendingMigrationDocs !== null || docsToExport.length === scopeDocs.length)) await this.markImageSizeMigrationComplete(existingShare.id, Array.from(failedAssetDocs));
           await this.setIncrementalCursor(existingShare.id, incrementalCursorStamp);
           if (!useIncremental || docsToExport.length > 0) {
             await this.refreshDocBlockCountCacheForShare(existingShare.id, scopeDocs, {controller});
@@ -9178,7 +9194,7 @@ class SiYuanSharePlugin extends Plugin {
         }
         return;
       }
-      const detail = this.formatIncrementSummaryDetail(plan.summary);
+      const detail = this.formatIncrementSummaryDetail(plan.summary) + (useIncremental && failureCount ? "\n" + t("siyuanShare.message.missingAssetsPreserved", {count: failureCount}) : "");
       let proceed = true;
       if (!background) {
         progress.setBarVisible?.(false);
@@ -9287,7 +9303,7 @@ class SiYuanSharePlugin extends Plugin {
       });
       await this.saveData(STORAGE_SHARE_OPTIONS, this.shareOptions);
       await this.updateSharePasswordCache(share.id, {password, clearPassword});
-      if (uploadComplete && !cachedExport && !failureCount && this.needsImageSizeMigration(share.id) && docsToExport.length === scopeDocs.length) await this.markImageSizeMigrationComplete(share.id);
+      if (uploadComplete && !cachedExport && this.needsImageSizeMigration(share.id) && (pendingMigrationDocs !== null || docsToExport.length === scopeDocs.length)) await this.markImageSizeMigrationComplete(share.id, Array.from(failedAssetDocs));
       await this.setIncrementalCursor(share.id, incrementalCursorStamp);
       if (!useIncremental || docsToExport.length > 0) {
         await this.refreshDocBlockCountCacheForShare(share.id, scopeDocs, {controller});
@@ -9301,7 +9317,7 @@ class SiYuanSharePlugin extends Plugin {
       const url = this.getShareUrl(share);
       this.refreshDocTreeMarksLater();
       if (!background) {
-        this.notify(t("siyuanShare.message.shareCreated", {value: url || title}));
+        this.notify(useIncremental && failureCount ? t("siyuanShare.message.missingAssetsPreserved", {count: failureCount}) : t("siyuanShare.message.shareCreated", {value: url || title}));
         if (url) await this.tryCopyToClipboard(url);
       }
     } finally {

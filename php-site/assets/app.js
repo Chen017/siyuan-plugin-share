@@ -3711,6 +3711,22 @@ const initImageViewer = () => {
     });
   };
 
+  const showMissingImages = (container) => {
+    container.querySelectorAll("img").forEach((img) => {
+      const src = img.getAttribute("src") || "";
+      if (!src || img.classList.contains("sps-emoji") || /(?:^|\/)emojis\//i.test(src)) return;
+      const showNotice = () => {
+        if (!img.isConnected) return;
+        const notice = document.createElement("span");
+        notice.className = "missing-attachment";
+        notice.textContent = /^zh/i.test(document.documentElement.lang) ? "附件找不到" : "Attachment not found";
+        img.replaceWith(notice);
+      };
+      img.addEventListener("error", showNotice, {once: true});
+      if (img.complete && !img.naturalWidth) showNotice();
+    });
+  };
+
   const scheduleMarkdownRetry = () => {
     if (markdownInitRetryTimer) return;
     if (markdownInitRetryCount >= markdownInitRetryLimit) return;
@@ -4802,6 +4818,7 @@ const initImageViewer = () => {
         target.innerHTML = sanitizeShareHtml(md.render(raw));
         renderedMarkdown.set(target, raw);
         prepareSizedImages(target);
+        showMissingImages(target);
         applySiYuanTableCellAlignment(target);
         const codes = Array.from(target.querySelectorAll("pre code"));
         const languages = new Set(codes.map(getLanguage));

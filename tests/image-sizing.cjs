@@ -33,6 +33,31 @@ const assets = path.join(__dirname, '../php-site/assets');
     box = await image.boundingBox();
     assert(Math.abs(box.width - 200) < 1 && Math.abs(box.height - 150) < 1, `Narrow image: ${box.width} × ${box.height}`);
     assert(Math.abs((await page.locator('.markdown-body img').nth(2).boundingBox()).width - 160) < 1, 'Unsized image retains 80% on a narrow screen');
+    const missing = await page.evaluate(() => {
+      const image = document.querySelectorAll('.markdown-body img')[2];
+      image.dispatchEvent(new Event('error'));
+      const notice = document.querySelector('.missing-attachment');
+      return {text: notice?.textContent, color: notice ? getComputedStyle(notice).color : '', size: notice ? getComputedStyle(notice).fontSize : ''};
+    });
+    assert.equal(missing.text, 'Attachment not found');
+    for (const colorScheme of ['light', 'dark']) {
+      await page.emulateMedia({colorScheme});
+      for (const width of [1000, 320]) {
+        await page.setViewportSize({width, height: 800});
+        const noticeStyle = await page.locator('.missing-attachment').evaluate(el => ({
+          color: getComputedStyle(el).color,
+          muted: getComputedStyle(document.body).getPropertyValue('--muted').trim(),
+          right: el.getBoundingClientRect().right,
+          viewport: document.documentElement.clientWidth,
+        }));
+        const mutedRgb = await page.evaluate(value => {
+          const el = document.createElement('span'); el.style.color = value;
+          document.body.appendChild(el); const color = getComputedStyle(el).color; el.remove(); return color;
+        }, noticeStyle.muted);
+        assert.equal(noticeStyle.color, mutedRgb, `${colorScheme} notice uses the reader's muted text color`);
+        assert(noticeStyle.right <= noticeStyle.viewport, `${width}px ${colorScheme} notice fits the viewport`);
+      }
+    }
 
     console.log('Image sizing passed: explicit dimensions and the original unsized-image limit on desktop and narrow screens.');
   } finally { await browser.close(); }

@@ -77,6 +77,19 @@ function host({ mobile = false, locale = 'en_US', stored = {}, exportMarkdown = 
 }
 
 (async () => {
+  {
+    const fixture = host({mobile: true});
+    try {
+      let shown;
+      fixture.sandbox.console.error = () => {}; // showErr logs these expected errors.
+      fixture.plugin.notify = message => { shown = message; };
+      const assetError = fixture.plugin.t('siyuanShare.error.imageSizeMigrationAssetsFailed');
+      fixture.plugin.showErr(new Error(assetError));
+      assert.equal(shown, assetError, 'An asset migration error must not be mislabeled as a network failure');
+      fixture.plugin.showErr(new Error('Failed to fetch'));
+      assert.equal(shown, fixture.plugin.t('siyuanShare.error.networkFail'));
+    } finally { fixture.close(); }
+  }
   // Upgrade migration must re-export unchanged documents once per share, and
   // retry after cancellation or upload failure without changing other shares.
   for (const kind of ['doc', 'notebook']) {
@@ -88,7 +101,7 @@ function host({ mobile = false, locale = 'en_US', stored = {}, exportMarkdown = 
       const otherId = '20261027000000-bbbbbbb';
       const share = {id: 'migration-' + kind, docId: rootId, notebookId: rootId, slug: 'test', type: kind};
       const docs = [{docId: rootId, title: 'First'}, {docId: otherId, title: 'Second'}];
-      let exports = [], uploadCalls = 0, initBodies = [], fail = false, cancel = false, failures = false;
+      let exports = [], uploadCalls = 0, initBodies = [], warnings = [], plans = [], fail = false, cancel = false, failures = false;
       Object.assign(plugin, {
         notebooks: [{id: rootId, name: 'Notebook'}],
         createProgressHandle: () => ({update() {}, close() {}, setBarVisible() {}, confirm: async () => !cancel}),
@@ -104,17 +117,17 @@ function host({ mobile = false, locale = 'en_US', stored = {}, exportMarkdown = 
         getDocBlockCountCache: () => ({[rootId]: 1}),
         collectDocExportResults: async selected => {
           exports.push(selected.map(doc => doc.docId));
-          return selected.map((doc, index) => ({doc, index, exportRes: {}, markdown: '<img src="assets/a.png" style="width: 320px;">', assets: [], failures: failures ? ['missing'] : []}));
+          return selected.map((doc, index) => ({doc, index, exportRes: {}, markdown: '<img src="assets/a.png" style="width: 320px;">', assets: [], failures: failures && doc.docId === rootId ? ['missing'] : []}));
         },
         resolveIconUpload: async () => '', maybeWarnExportReference: async () => {},
-        buildScopedIncrementalPlan: async ({exportedDocs}) => ({uploadDocs: exportedDocs, deletedDocIds: [], deletedAssetPaths: [], uploadAssetEntries: [], uploadAssets: [], summary: {changedDocs: 1}}),
+        buildScopedIncrementalPlan: async ({exportedDocs, preserveExistingAssets}) => { plans.push(preserveExistingAssets); return {uploadDocs: exportedDocs, deletedDocIds: [], deletedAssetPaths: [], uploadAssetEntries: [], uploadAssets: [], summary: {changedDocs: 1}}; },
         formatIncrementSummaryDetail: () => '', uploadAssetsChunked: async () => {},
         remoteRequest: async (path, options) => { uploadCalls++; if (path.endsWith('/init')) initBodies.push(plain(options.body)); if (fail && path.includes('/complete')) throw new Error('Upload failed'); return {uploadId: 'test-upload'}; },
         cancelUploadSession: async () => {}, syncRemoteShares: async () => {},
         setAutoUpdateShareNotebookHint: () => {}, updateSharePasswordCache: async () => {},
         setIncrementalCursor: async () => {}, refreshDocBlockCountCacheForShare: async () => {},
         syncAutoUpdateStructDigestAfterShareSuccess: async () => {}, getShareUrl: () => 'https://note.etalib.space/s/test',
-        renderSettingCurrent: () => {}, refreshDocTreeMarksLater: () => {}, notify: () => {},
+        renderSettingCurrent: () => {}, refreshDocTreeMarksLater: () => {}, notify: message => warnings.push(message),
       });
       const run = () => kind === 'doc'
         ? plugin.shareDoc(rootId, {includeChildren: true, allowRequestError: false})
@@ -126,13 +139,16 @@ function host({ mobile = false, locale = 'en_US', stored = {}, exportMarkdown = 
       await assert.rejects(run(), /Upload failed/);
       assert.deepEqual(plain(exports.at(-1)), [rootId, otherId], `${kind}: failed upload retries all documents`);
       fail = false; failures = true;
-      const beforeAssetFailure = uploadCalls;
-      await assert.rejects(run());
-      assert.equal(uploadCalls, beforeAssetFailure, `${kind}: incomplete migration does not upload`);
+      await run();
+      assert.equal(plans.at(-1), true, `${kind}: missing assets protect all existing assets`);
+      assert(warnings.at(-1).includes('1 local attachment'), `${kind}: user is informed`);
+      assert(plugin.needsImageSizeMigration(share.id), `${kind}: missing files remain pending`);
+      await plugin.loadState();
+      assert.deepEqual(plain(plugin.pendingImageSizeMigrationDocs(share.id)), [rootId], `${kind}: pending documents survive restart`);
       failures = false;
       await run();
-      assert.deepEqual(plain(exports.at(-1)), [rootId, otherId], `${kind}: asset failure does not finish migration`);
-      assert.deepEqual(initBodies.at(-1).metadata.docs.map(doc => doc.docId), [rootId, otherId], `${kind}: migrated documents enter the upload`);
+      assert.deepEqual(plain(exports.at(-1)), [rootId], `${kind}: only the affected document is retried`);
+      assert.deepEqual(initBodies.at(-1).metadata.docs.map(doc => doc.docId), [rootId], `${kind}: affected document enters the upload`);
       assert(initBodies.at(-1).metadata.docs.every(doc => doc.markdown.includes('width: 320px;')), `${kind}: exported sizes enter the upload`);
       await run();
       assert.deepEqual(plain(exports.at(-1)), [], `${kind}: later updates return to incremental selection`);
@@ -256,6 +272,8 @@ function host({ mobile = false, locale = 'en_US', stored = {}, exportMarkdown = 
     assert.deepEqual(plain(plan.uploadDocs).map((doc) => doc.docId), [ids[1], ids[3]]);
     assert.deepEqual(plain(plan.deletedDocIds), [ids[2]]);
     assert.deepEqual(plain(plan.deletedAssetPaths), ['assets/remove.png', 'assets/deleted.png']);
+    const protectedPlan = await plugin.buildScopedIncrementalPlan({...args, preserveExistingAssets: true});
+    assert.deepEqual(plain(protectedPlan.deletedAssetPaths), [], 'A missing local attachment preserves every existing online asset, including assets shared by multiple documents');
     assert.equal(plan.uploadAssets[0].hash, hash('new-image'));
     assert.equal(plugin.isIncrementalPlanNoop(plan), false);
     const unchanged = await plugin.buildScopedIncrementalPlan({ scopeDocs: remoteSnapshot.docs, remoteSnapshot });

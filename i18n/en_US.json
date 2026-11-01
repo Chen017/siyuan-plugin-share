@@ -43,6 +43,7 @@
   "siyuanShare.error.resourceDownloadCanceled": "Asset download canceled.",
   "siyuanShare.error.resourceDownloadFailed": "Failed to fetch asset ({status}).",
   "siyuanShare.error.imageSizeMigrationAssetsFailed": "Some assets could not be fetched during image size migration. The update was stopped; check the assets and try again.",
+  "siyuanShare.message.missingAssetsPreserved": "Could not read {count} local attachment(s). Existing online attachments will be kept.",
   "siyuanShare.error.resourcePathInvalid": "Invalid asset path.",
   "siyuanShare.error.shareCreateFailed": "Failed to create share. Try again.",
   "siyuanShare.error.shareLinkEmpty": "Share link is empty.",

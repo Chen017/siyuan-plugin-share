@@ -2348,6 +2348,11 @@ body.layout-share .markdown-body img:not([data-sps-sized-image]) {
   height: auto !important;
 }
 
+.markdown-body .missing-attachment {
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
 .markdown-body .mermaid {
   background: #ffffff;
   border-radius: 12px;

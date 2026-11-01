@@ -132,6 +132,9 @@ async function page(raw, {failMermaid = false, slowGraphviz = false} = {}) {
     assert(!image('relative').hasAttribute('data-sps-sized-pair'), 'Relative sizes are not treated as pixel pairs');
     assert(!image('square').hasAttribute('data-sps-sized-image'), 'Unsized images keep their default styling');
     assert(!image('smile').hasAttribute('data-sps-sized-image'), 'Emoji keep their own styling');
+    image('width').dispatchEvent(new images.w.Event('error'));
+    assert.equal(images.w.document.querySelector('.missing-attachment').textContent, 'Attachment not found');
+    assert(!image('width'), 'A broken image is replaced by a quiet notice');
     image('square').click();
     assert.equal(images.w.document.querySelector('[data-viewer-img]').src, 'https://reader.test/assets/square.png', 'Viewer uses the original image');
     await images.navigate('<img src="/assets/new.png" style="width: 240px">');

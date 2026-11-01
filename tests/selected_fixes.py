@@ -28,6 +28,17 @@ class SelectedFixTests:
         self.assertEqual(status, 200, body)
         return json.loads(body)['data']['share']
 
+    def test_incremental_update_preserves_existing_unavailable_asset(self):
+        doc = self.name + 'missingasset'
+        share = self.asset_share(doc)
+        metadata = {'docId': doc, 'title': 'Attachment rollback',
+                    'docs': [{'docId': doc, 'title': 'Doc', 'markdown': '![image](assets/keep.txt)'}],
+                    'incremental': {'enabled': True, 'deletedDocIds': [], 'deletedAssetPaths': []}}
+        pending = self.api('shares/doc/init', {'metadata': metadata, 'assets': []})
+        complete = self.api('shares/upload/complete', {'uploadId': pending['uploadId']})
+        self.assertEqual(complete['shareId'], share['id'])
+        self.assertEqual(type(self.client)(self.base).request('/s/' + share['slug'] + '/res/assets/keep.txt')[2], b'OLD_ATTACHMENT')
+
     def test_fixes_slug_validation_and_deleted_reservation(self):
         slug = uuid.uuid4().hex[:12]
         share = self.share(slug=slug)
