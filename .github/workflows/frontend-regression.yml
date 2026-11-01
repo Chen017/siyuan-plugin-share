@@ -1,26 +1,6 @@
 name: Reader frontend regression
 
 on:
-  push:
-    branches: ['beta/**']
-    paths:
-      - 'php-site/**'
-      - '.gitattributes'
-      - 'index.js'
-      - 'index.css'
-      - 'plugin.json'
-      - 'i18n/**'
-      - 'tests/frontend.cjs'
-      - 'tests/reader-ui.cjs'
-      - 'tests/controls.cjs'
-      - 'tests/footnotes.cjs'
-      - 'tests/plugin.cjs'
-      - 'tests/release-workflow.cjs'
-      - 'tests/browser-ui.py'
-      - 'tests/render-security.cjs'
-      - 'tests/pdf-text-layer.*'
-      - '.github/workflows/frontend-regression.yml'
-      - '.github/workflows/github-release.yml'
   pull_request:
   workflow_dispatch:
   workflow_call:

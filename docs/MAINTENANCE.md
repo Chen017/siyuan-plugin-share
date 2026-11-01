@@ -25,6 +25,7 @@ node tests/pdf-text-layer.cjs .test-output/pdf-selection
 python tests/pdf-text-layer.py .test-output/pdf-selection
 python tests/package.py
 python tests/release-tag.py
+python tests/plugin-release-plan.py
 node tests/release-workflow.cjs
 python tests/docs.py
 python tests/browser-ui.py --browser /path/to/chromium
@@ -52,16 +53,18 @@ python scripts/package.py --output .test-output/package --version test
 
 | 工作流 | 触发和职责 |
 | --- | --- |
-| `php83-regression.yml` | PR、指定路径的 `beta/**` push、手动或被调用。无缓存拉取并构建 PHP 镜像，验证打包、文档链接、发布标签、API、Nginx、SVG 和 PDF 真实浏览器预览及下载、备份及部署保护。 |
-| `frontend-regression.yml` | PR、指定路径的 `beta/**` push、手动或被调用。检查语法与清单，运行插件和阅读器 DOM 回归、Markdown/Mermaid 异常输入、Chromium 标题与图表检查、PDFium 文字层检查及模拟发布；缓存 npm/pip 下载，不缓存测试结果。 |
-| `deploy.yml` | `main` push 或手动触发；两套可复用回归通过后 SSH 部署。远端必须处于干净的 main，且远端 origin/main 必须等于通过测试的提交，否则拒绝部署。 |
-| `github-release.yml` | 仅手动触发；同一提交先通过两套回归，然后校验版本、已有 Release 和 Tag。已有 Tag 必须指向本次提交；新 Tag 在归档构建后创建。两个 ZIP 上传到草稿后才公开。 |
+| `php83-regression.yml` | PR、手动或被调用。无缓存拉取并构建 PHP 镜像，验证打包、文档链接、发布标签、API、Nginx、SVG 和 PDF 真实浏览器预览及下载、备份及部署保护。 |
+| `frontend-regression.yml` | PR、手动或被调用。检查语法与清单，运行插件和阅读器 DOM 回归、Markdown/Mermaid 异常输入、Chromium 标题与图表检查、PDFium 文字层检查及模拟发布；缓存 npm/pip 下载，不缓存测试结果。 |
+| `deploy.yml` | `main` push 或手动触发；两套可复用回归通过后 SSH 部署。远端必须处于干净的 main，且远端 origin/main 必须等于通过测试的提交，否则拒绝部署。部署成功后比较最新正式 Release；插件有功能变更时调用发布工作流，不重复测试同一提交。 |
+| `github-release.yml` | 手动触发或由部署工作流调用。手动发布先运行两套回归；自动发布复用部署前对同一提交的测试结果。校验版本、已有 Release 和 Tag；已有 Tag 必须指向本次提交，新 Tag 在归档构建后创建，两个 ZIP 上传到草稿后才公开。 |
 
-PR 的两套回归与合并后的部署回归分别验证 PR 提交和实际 main 提交；不要简单删除后者。`beta/**` 的路径过滤是工作流各自列出的规则，修改测试依赖或工作流时应检查匹配范围。PHP 构建保留 `--pull --no-cache`，以覆盖新拉取的基础镜像及系统包；这比缓存整个镜像慢，但不应为了提速悄悄改变依赖新鲜度。CI 下载缓存不是依赖锁文件；npm 直接依赖版本已固定，传递依赖仍可能变化。
+PR 的两套回归与合并后的部署回归分别验证 PR 提交和实际 main 提交；不要简单删除后者。普通分支推送不自动测试，需要提前验证时可手动运行两套工作流；正式部署仍会完整测试。PHP 构建保留 `--pull --no-cache`，以覆盖新拉取的基础镜像及系统包。CI 和 VPS 各自在不同机器构建镜像：共享镜像需要额外存储、传输和权限，当前没有为此增加复杂度。CI 下载缓存不是依赖锁文件；npm 直接依赖版本已固定，传递依赖仍可能变化。
 
 部署需要仓库 secrets `HOST`、`PORT`、`USERNAME`、`SSH_KEY`，以及远端工作流中指定的仓库、Docker 和锁文件路径。普通部署保留已保存的 PDF 设置；手动选项才会修改对应设置。现有操作者策略不保留自动回滚镜像或持久数据备份：部署仅暂停写入并比对临时指纹、SQLite 完整性及外键。手动备份流程与保留策略见 README；生产恢复时须结合对应数据、配置和镜像，不能假设仅回退镜像可撤销迁移。
 
-发布时选择要发布的提交及版本；版本必须是有效 Tag 和安全文件名，预发布与 latest 不可同时选。产物为 `package.zip` 和 `php-site-<version>.zip`，版本输入不会自动更改 `plugin.json`。发布失败时先检查 Actions 日志及 Release/Tag 状态：上传失败可能留下草稿和 Tag，核实资产和目标提交后人工处理草稿，再重试；不要盲目删除或移动已有 Tag。此流程不自动发布到生产 VPS。
+自动发布比较最新正式 Release 的 Tag 与部署提交的插件代码、清单、语言、图标、许可、打包脚本和共享 controls 文件；仅文档或服务器变更不会触发。以源码 `plugin.json` 的主、次版本为系列，在该系列已有纯数字 Tag 之后分配补丁版本，写入 ZIP 内的 `plugin.json`，不改源码清单。若缺少最新 Release/Tag、查询失败，或当前提交已有待处理 Tag，流程会停止并要求检查，避免误发或重复发布。首次自动发布要求已有可解析的正式 Release。
+
+手动发布时选择提交及版本；版本必须是有效 Tag 和安全文件名，预发布与 latest 不可同时选，版本输入不会自动更改 `plugin.json`。产物均为 `package.zip` 和 `php-site-<version>.zip`。发布失败时先检查 Actions 日志及 Release/Tag 状态：上传失败可能留下草稿和 Tag，核实资产和目标提交后人工处理草稿，再重试；不要盲目删除或移动已有 Tag。单独手动发布不会自动部署 VPS。
 
 ## 关键历史回归与修改风险
 

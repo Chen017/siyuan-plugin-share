@@ -1,20 +1,6 @@
 name: PHP 8.3 regression
 
 on:
-  push:
-    branches: ['beta/**']
-    paths:
-      - 'php-site/**'
-      - 'tests/**'
-      - 'scripts/**'
-      - 'docs/**'
-      - 'README*.md'
-      - '.dockerignore'
-      - '.gitattributes'
-      - 'docker-compose*.yml'
-      - '.github/workflows/php83-regression.yml'
-      - '.github/workflows/deploy.yml'
-      - '.github/workflows/github-release.yml'
   pull_request:
   workflow_dispatch:
   workflow_call:
@@ -46,6 +32,7 @@ jobs:
         run: |
           python tests/package.py
           python tests/release-tag.py
+          python tests/plugin-release-plan.py
           python tests/docs.py
       - name: Test PHP runtime, database, HTTP APIs and Nginx rules
         run: |

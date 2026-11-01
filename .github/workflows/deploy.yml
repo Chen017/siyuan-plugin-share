@@ -30,6 +30,34 @@ jobs:
   reader-regression:
     if: github.ref == 'refs/heads/main'
     uses: ./.github/workflows/frontend-regression.yml
+  plan-plugin-release:
+    needs: deploy
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.plan.outputs.publish }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Compare plugin with latest published release
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          export LATEST_RELEASE_TAG="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
+          python3 scripts/plan-plugin-release.py
+  publish-plugin:
+    needs: plan-plugin-release
+    if: needs.plan-plugin-release.outputs.publish == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/github-release.yml
+    with:
+      version: ${{ needs.plan-plugin-release.outputs.version }}
+      latest: true
+      already_tested: true
   deploy:
     needs: [php-regression, reader-regression]
     if: github.ref == 'refs/heads/main'

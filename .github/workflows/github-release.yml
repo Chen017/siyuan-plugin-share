@@ -1,6 +1,20 @@
 name: GitHub Release
 
 on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      prerelease:
+        default: false
+        type: boolean
+      latest:
+        default: false
+        type: boolean
+      already_tested:
+        required: true
+        type: boolean
   workflow_dispatch:
     inputs:
       version:
@@ -27,11 +41,14 @@ concurrency:
 
 jobs:
   php-regression:
+    if: inputs.already_tested != true
     uses: ./.github/workflows/php83-regression.yml
   reader-regression:
+    if: inputs.already_tested != true
     uses: ./.github/workflows/frontend-regression.yml
   publish-release:
     needs: [php-regression, reader-regression]
+    if: ${{ !cancelled() && (inputs.already_tested == true || (needs.php-regression.result == 'success' && needs.reader-regression.result == 'success')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -128,10 +145,14 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ steps.validate.outputs.version }}
+          AUTO_RELEASE: ${{ inputs.already_tested }}
         run: |
           set -euo pipefail
-
-          python3 scripts/package.py --output . --version "$VERSION"
+          if [ "$AUTO_RELEASE" = true ]; then
+            python3 scripts/package.py --output . --version "$VERSION" --plugin-version "$VERSION"
+          else
+            python3 scripts/package.py --output . --version "$VERSION"
+          fi
 
       - name: Create tag if missing
         if: steps.state.outputs.tag_exists != 'true'

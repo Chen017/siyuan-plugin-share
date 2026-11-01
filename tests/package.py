@@ -1,5 +1,6 @@
 """Verify server/plugin archive completeness using disposable output, without publishing."""
 from pathlib import Path
+import json
 import posixpath
 import re
 import subprocess
@@ -21,6 +22,10 @@ with tempfile.TemporaryDirectory(prefix='siyuan-package-') as directory:
                 parsed = urlsplit(target)
                 if not parsed.scheme and not parsed.netloc and parsed.path:
                     assert posixpath.normpath(posixpath.join(posixpath.dirname(name), unquote(parsed.path))) in names, (name, target)
+    subprocess.run([sys.executable, str(root / 'scripts/package.py'), '--output', directory,
+                    '--version', '0.5.9', '--plugin-version', '0.5.9'], check=True)
+    with zipfile.ZipFile(Path(directory) / 'package.zip') as archive:
+        assert json.loads(archive.read('plugin.json'))['version'] == '0.5.9'
     with zipfile.ZipFile(Path(directory) / 'php-site-test.zip') as archive:
         names = set(archive.namelist())
         assert archive.testzip() is None
