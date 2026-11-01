@@ -1,13 +1,12 @@
 # Build the same source files served by the PHP image, retaining their URLs.
 FROM node:24-alpine AS asset-build
 WORKDIR /build
-RUN npm install --no-save --no-package-lock terser@5.44.0 clean-css-cli@5.6.3
+RUN npm install --no-save --no-package-lock --ignore-scripts terser@5.44.0 clean-css@5.3.3
+COPY scripts/minify-css.cjs /build/minify-css.cjs
 COPY php-site/assets/ /build/assets/
 RUN set -e; for f in app.js controls.js pdf-export.js pdf-text-layer.js; do \
       ./node_modules/.bin/terser "assets/$f" --compress --mangle --output "assets/$f.min" && mv "assets/$f.min" "assets/$f"; \
-    done && for f in style.css controls.css pdf-export.css; do \
-      ./node_modules/.bin/cleancss -o "assets/$f.min" "assets/$f" && mv "assets/$f.min" "assets/$f"; \
-    done
+    done && node /build/minify-css.cjs assets/style.css assets/controls.css assets/pdf-export.css
 
 FROM php:8.3.36-fpm-alpine
 
@@ -29,11 +28,10 @@ RUN set -eux; \
         libjpeg-turbo-dev \
         libpng-dev \
         libzip-dev \
-        oniguruma-dev \
-        sqlite-dev \
         zlib-dev; \
     docker-php-ext-configure gd --with-freetype --with-jpeg; \
-    docker-php-ext-install -j"$(nproc)" gd mbstring pdo pdo_sqlite zip; \
+    php -r 'foreach (["mbstring", "PDO", "pdo_sqlite"] as $ext) { if (!extension_loaded($ext)) { fwrite(STDERR, "$ext is required in the base image\n"); exit(1); } }'; \
+    docker-php-ext-install -j"$(nproc)" gd zip; \
     apk del .build-deps; \
     mkdir -p /run/nginx /var/lib/nginx/tmp /var/log/nginx
 

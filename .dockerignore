@@ -10,7 +10,8 @@
 .codex-remote-attachments/
 .github/
 tests/
-scripts/
+scripts/*
+!scripts/minify-css.cjs
 docs/
 resources/
 backups/

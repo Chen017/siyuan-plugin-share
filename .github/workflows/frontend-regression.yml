@@ -12,12 +12,13 @@ jobs:
   reader:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: '24'
+          package-manager-cache: false
       - name: Cache downloaded test dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.npm
@@ -25,7 +26,7 @@ jobs:
           key: ${{ runner.os }}-reader-downloads-${{ hashFiles('.github/workflows/frontend-regression.yml') }}
           restore-keys: ${{ runner.os }}-reader-downloads-
       - name: Install isolated DOM test runtime
-        run: npm install --prefix "$RUNNER_TEMP/reader-test" --no-save jsdom@26.1.0 jspdf@4.0.0
+        run: npm install --prefix "$RUNNER_TEMP/reader-test" --no-save --ignore-scripts jsdom@27.4.0 jspdf@4.0.0
       - name: Check plugin and reader syntax and JSON manifests
         run: |
           for file in index.js php-site/assets/*.js; do node --check "$file"; done
@@ -39,7 +40,7 @@ jobs:
           NODE_PATH="$RUNNER_TEMP/reader-test/node_modules" node tests/footnotes.cjs
           NODE_PATH="$RUNNER_TEMP/reader-test/node_modules" node tests/render-security.cjs
           node tests/release-workflow.cjs
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
       - name: Verify reader and PDF heading hierarchy in Chromium
