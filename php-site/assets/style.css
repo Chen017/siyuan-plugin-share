@@ -4421,7 +4421,7 @@ html, body, body * { scrollbar-color: color-mix(in srgb, var(--muted) 35%, trans
 .kb-tree-children:not([data-level="0"]) > .kb-tree-node::before { content: ''; position: absolute; left: calc(var(--tree-toggle-width)/2 - var(--tree-indent)); top: 0; bottom: 0; width: 1px; background: var(--tree-line); pointer-events: none; }
 .kb-tree-children:not([data-level="0"]) > .kb-tree-node::after { content: ''; position: absolute; box-sizing: border-box; left: calc(var(--tree-toggle-width)/2 - var(--tree-indent)); top: 0; width: var(--tree-indent); height: calc(var(--tree-row-height)/2 + .5px); border-left: 1px solid var(--tree-line); border-bottom: 1px solid var(--tree-line); border-bottom-left-radius: 9px; pointer-events: none; }
 .kb-tree-children:not([data-level="0"]) > .kb-tree-node:has(> .kb-tree-row > .kb-tree-toggle)::after { width: calc(var(--tree-indent) - 8px); }
-.kb-tree-children:not([data-level="0"]) > .kb-tree-node:last-child::before { height: calc(var(--tree-row-height)/2); bottom: auto; }
+.kb-tree-children:not([data-level="0"]) > .kb-tree-node:last-child::before { display: none; }
 .kb-tree-spacer::after { z-index: 1; content: ''; position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); width: 5px; height: 5px; border-radius: 50%; background: color-mix(in srgb,var(--primary) 48%,var(--border)); }
 @media(max-width:960px), (pointer:coarse) { .kb-tree { --tree-row-height:44px; --tree-toggle-width: 32px; } }
 .notebook-actions > .button[data-reader-resume] { max-width: 100%; align-items: baseline; white-space: normal; line-height: 1.5; overflow-wrap: anywhere; flex-wrap: wrap; gap: 4px 8px; }
