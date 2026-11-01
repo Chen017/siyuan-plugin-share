@@ -82,6 +82,7 @@ PR 的两套回归与合并后的部署回归分别验证 PR 提交和实际 mai
 | PDF 可见排版与可选择文字层必须对齐；生成使用隔离容器和有限并发。 | `tests/pdf-text-layer.cjs`、`tests/pdf-text-layer.py`、`tests/pdf-browser.cjs`、`tests/pdf-long.cjs`。 |
 | 私有权限的源码检出不能让 Nginx 无法读取镜像内静态文件；上传必须继续经授权路由。 | Docker 构建时规范文件权限；`tests/run.py --docker` 检查容器与 Nginx。 |
 | 原先已有 Tag 可指向不同提交，而 ZIP 却按当前提交生成；发布必须校验两者一致。 | `tests/release-tag.py` 使用真实轻量和注释 Tag。 |
+| CI 曾在检查阅读器按钮对齐时出现间歇性失败；字体或布局变化可能发生在两次位置读取之间。浏览器测试等待字体并在同一帧读取两个按钮，仍要求实际位置和高度对齐。 | `tests/pdf-browser.cjs` 检查宽屏和窄屏布局。 |
 
 ## 排查与维护
 

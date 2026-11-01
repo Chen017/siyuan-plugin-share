@@ -134,11 +134,21 @@ const chooseScope = async (page, value) => {
     const title = reader.locator('.kb-title');
     const originalTitle = await title.textContent();
     await title.evaluate((n) => { n.textContent = '10.21 Functional completeness and Boolean Constants'; });
+    await reader.evaluate(() => document.fonts.ready);
     for (const width of [1100, 390]) {
       await reader.setViewportSize({ width, height: 900 });
-      const source = await reader.locator('[data-share-toggle]').boundingBox();
-      const pdf = await reader.locator('[data-pdf-export-link]').boundingBox();
-      assert.ok(Math.abs(source.y - pdf.y) < 1 && Math.abs(source.height - pdf.height) < 1);
+      // Measure both controls in the same frame after the viewport has settled.
+      // Separate protocol calls can straddle a font/layout update on a busy runner.
+      const { source, pdf } = await reader.evaluate(async () => {
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const box = (selector) => {
+          const rect = document.querySelector(selector).getBoundingClientRect();
+          return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+        };
+        return { source: box('[data-share-toggle]'), pdf: box('[data-pdf-export-link]') };
+      });
+      assert.ok(Math.abs(source.y - pdf.y) < 1 && Math.abs(source.height - pdf.height) < 1,
+        `Buttons must align at ${width}px: ${JSON.stringify({ source, pdf })}`);
       assert.ok(pdf.x + pdf.width <= width);
       await reader.screenshot({ path: path.join(output, 'reader-pdf-actions-' + width + '.png') });
     }
