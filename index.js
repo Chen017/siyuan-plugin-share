@@ -10306,7 +10306,7 @@ class SiYuanSharePlugin extends Plugin {
   }
 
   async exportDocMarkdown(docId) {
-    const resp = await fetchSyncPost("/api/export/exportMdContent", {id: docId});
+    const resp = await fetchSyncPost("/api/export/exportMdContent", {id: docId, imgTag: true});
     if (!resp || resp.code !== 0) throw new Error(resp?.msg || this.t("siyuanShare.error.exportMarkdownFailed"));
     return {
       hPath: resp?.data?.hPath || "",

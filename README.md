@@ -44,6 +44,8 @@ Note began with [siyuan-plugin-share](https://github.com/b8l8u8e8/siyuan-plugin-
 
 Automatic updates and incremental synchronization preserve existing share links. On upgrade, the matching site's saved API key and sync state are retained; other saved site configurations are removed.
 
+SiYuan 3.3.0 and later can preserve manually adjusted image sizes in new and re-synchronized shares, within the available screen width. Update the plugin and re-synchronize an existing share to bring across its sizes.
+
 ### Run the server
 
 Docker Engine and Docker Compose are required. The server can be self-hosted, but the supplied plugin remains bound to the personal site above.

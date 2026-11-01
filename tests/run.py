@@ -486,6 +486,26 @@ class Regression(AdminShareTests, SelectedFixTests, PdfCookieTests, PdfReleaseTe
         self.assertEqual([d['docId'] for d in snapshot['docs']], [docs[0]['docId']])
         self.assertIn(b'INCREMENTAL_MARKER', Client(self.base).request('/s/' + share['slug'])[2])
 
+    def test_image_size_survives_creation_and_incremental_sync(self):
+        doc = {'docId': self.name + 'image', 'title': 'Image',
+               'markdown': '<img src="assets/diagram.png" style="width: 320px;" onerror="alert(1)" />'}
+        share = self.share(docs=[doc])
+        path = '/s/' + share['slug']
+        page = Client(self.base).request(path)[2]
+        self.assertIn(b'width: 320px;', page)
+        self.assertIn(b'/assets/diagram.png', page)
+        self.assertNotIn(b'onerror="alert(1)"', page.split(b'<textarea', 1)[0])
+
+        updated = {**doc, 'markdown': '<img src="assets/diagram.png" style="width: 480px;" />'}
+        patch = {'metadata': {'docId': self.name, 'title': 'Image', 'docs': [updated],
+                              'incremental': {'enabled': True}}, 'assets': []}
+        pending = self.api('shares/doc/init', patch)
+        completed = self.api('shares/upload/complete', {'uploadId': pending['uploadId']})
+        self.assertEqual(completed['shareId'], share['id'])
+        page = Client(self.base).request(path)[2]
+        self.assertIn(b'width: 480px;', page)
+        self.assertNotIn(b'width: 320px;', page)
+
     def test_owner_permissions_and_key_rotation(self):
         share = self.share()
         other = Client(self.base)

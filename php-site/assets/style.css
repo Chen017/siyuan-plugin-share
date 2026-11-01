@@ -2339,8 +2339,13 @@ body.share-side-open .share-side-backdrop {
   border-radius: 12px;
 }
 
-body.layout-share .markdown-body img{
+/* Preserve the established default for images without an explicit size. */
+body.layout-share .markdown-body img:not([data-sps-sized-image]) {
   max-width: 80%;
+}
+
+.markdown-body img[data-sps-sized-pair] {
+  height: auto !important;
 }
 
 .markdown-body .mermaid {

@@ -3681,6 +3681,36 @@ const initImageViewer = () => {
     });
   };
 
+  // Preserve explicitly sized images while allowing them to fit their container.
+  const prepareSizedImages = (container) => {
+    container.querySelectorAll("img").forEach((img) => {
+      const src = img.getAttribute("src") || "";
+      if (img.classList.contains("sps-emoji") || /(?:^|\/)emojis\//i.test(src)) return;
+      const hasWidth = img.hasAttribute("width") || !!img.style.getPropertyValue("width");
+      const hasHeight = img.hasAttribute("height") || !!img.style.getPropertyValue("height");
+      const hasSizeConstraint = ["min-width", "max-width", "min-height", "max-height"]
+        .some((name) => img.style.getPropertyValue(name));
+      if (hasWidth || hasHeight || hasSizeConstraint) {
+        img.dataset.spsSizedImage = "";
+        if (hasWidth && hasHeight) {
+          const dimension = (name) => {
+            // Inline CSS takes precedence over the corresponding HTML attribute.
+            const value = img.style.getPropertyValue(name) || img.getAttribute(name) || "";
+            const match = value.trim().match(/^(\d+(?:\.\d+)?)(?:px)?$/i);
+            return match && Number(match[1]) > 0 ? Number(match[1]) : 0;
+          };
+          const width = dimension("width");
+          const height = dimension("height");
+          if (width && height) {
+            // Preserve the author's ratio even when it differs from the file's.
+            img.style.aspectRatio = `${width} / ${height}`;
+            img.dataset.spsSizedPair = "";
+          }
+        }
+      }
+    });
+  };
+
   const scheduleMarkdownRetry = () => {
     if (markdownInitRetryTimer) return;
     if (markdownInitRetryCount >= markdownInitRetryLimit) return;
@@ -4771,6 +4801,7 @@ const initImageViewer = () => {
         if (renderedMarkdown.get(target) === raw) return;
         target.innerHTML = sanitizeShareHtml(md.render(raw));
         renderedMarkdown.set(target, raw);
+        prepareSizedImages(target);
         applySiYuanTableCellAlignment(target);
         const codes = Array.from(target.querySelectorAll("pre code"));
         const languages = new Set(codes.map(getLanguage));

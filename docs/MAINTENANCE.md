@@ -10,6 +10,10 @@
 - `scripts/package.py` 生成插件和服务器 ZIP；服务器 ZIP 不含实例配置和运行数据。`scripts/prepare-config.sh`、`backup-data.sh`、`data-snapshot.php` 和根目录 `backup-volumes.sh` 用于配置、备份与校验。Docker 镜像会压缩自有前端资源；服务器 ZIP 保留源码资源。
 - `tests/` 使用临时数据，`.test-output/` 是本地输出并被 Git 忽略。`php-site/storage/`、`php-site/uploads/` 是持久数据，不应作为清理遗留文件删除；`php-site/config.php` 是实例配置，更新时保留。
 
+图片尺寸由 `exportDocMarkdown` 请求思源的 `imgTag` 导出：思源 3.3.0 起可将图片节点的尺寸放进 HTML `style`。服务端 Parsedown 和浏览器 Markdown 渲染都须保留正常尺寸，同时继续清理危险属性；附件路径仍须经过既有收集与重写。已有分享只有重新同步后才能获取以前未导出的尺寸，旧版思源可能只返回普通 Markdown 图片。阅读器优先使用显式宽高，并限制图片不超过容器；无尺寸图片保留原有展示规则，图片查看器仍使用原图。
+
+同时指定数值或像素宽高时，阅读器保留这两个值表达的比例并在窄容器中等比缩放；百分比、`em`、`calc()`、仅设高度或带特殊 `min-width` / `max-width` 的自定义 HTML 不作相同转换，其窄屏效果需要单独检查。思源常见的像素宽度导出不依赖此转换。
+
 ## 开发、测试与构建
 
 需要 Git、Python 3.11、Node.js 24、PHP 8.3（含 PDO SQLite 等扩展）；容器测试另需 Docker Engine/Compose。DOM 与 PDF 验证依赖隔离安装，不要求在仓库根目录增加 Node 应用：
@@ -35,6 +39,8 @@ NODE_PATH="$PWD/.test-output/reader-test/node_modules" node tests/render-securit
 在 Python 虚拟环境中安装 PDFium 可避免更改全局环境；在 Windows PowerShell 设置 `NODE_PATH` 使用 `$env:NODE_PATH = '<绝对路径>'`。PHP CLI 测试需要可用的本机回环端口。若 Windows 临时路径含 `#!` 导致 PHP 配置解析失败，可将 `TEMP` 和 `TMP` 指向项目内普通路径，再重新运行。未提供 `--browser` 时，真实 PDF 浏览器下载测试会跳过；按 README 指定 Playwright 和浏览器后加 `--browser`。`--php` 不验证 Nginx；真实容器检查如下：
 
 设置 `SIYUAN_CHROMIUM_EXECUTABLE` 为 Chromium 可执行文件路径后运行 PHP 回归，可额外使用真实浏览器验证实际 SVG 附件的图片展示和直接打开时的脚本隔离。`tests/browser-ui.py` 不传 `--svg-url` 时检查六级标题、320px 宽度和 PDF 样式；无需 Playwright。PHP runner 可用 `--test test_方法名` 只运行指定用例，参数可以重复；交付前仍应运行完整回归。
+
+图片尺寸的真实浏览器回归使用隔离安装的 Playwright：设置 `NODE_PATH` 指向其 `node_modules`，并设置 `SPS_TEST_BROWSER` 指向 Chromium 后运行 `node tests/image-sizing.cjs`。它验证明确指定的宽高在桌面和窄容器中保持比例；DOM 和 PHP 相关检查还在 `tests/frontend.cjs`、`tests/plugin.cjs`、`tests/runtime.php` 与 `tests/run.py` 中。
 
 使用 `python tests/browser-ui.py --browser /path/to/chromium --mermaid` 可用真实浏览器检查流程图、时序图、甘特图和类图；测试使用本地捆绑文件，不发送图表源码到网络。
 

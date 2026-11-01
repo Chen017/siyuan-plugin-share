@@ -83,6 +83,9 @@ foreach (['中文标题', '<strong>加粗</strong>', '<table>', '<li>', '<code']
 }
 $clean = sanitize_share_html('<script>alert(1)</script><img src="x" onerror="alert(1)"><a href="javascript:alert(1)">link</a>');
 check(!str_contains($clean, '<script') && !str_contains($clean, 'onerror') && !str_contains($clean, 'javascript:'), 'HTML sanitization');
+$imageMarkdown = '<img alt="figure" src="assets/figure.png" style="width: 400px;" onerror="alert(1)" />';
+$imageHtml = render_markdown(rewrite_asset_links($imageMarkdown, '/s/test/'));
+check(str_contains($imageHtml, 'src="/s/test/assets/figure.png"') && str_contains($imageHtml, 'width: 400px;') && !str_contains($imageHtml, 'onerror'), 'Sized SiYuan image survives asset rewriting, Markdown rendering and HTML sanitization');
 $table = render_markdown("| A | B |\n| :--- | ---: |\n| left | right |\n{: colgroup=\"{x}{x}\"}");
 check(str_contains($table, '<table>') && str_contains($table, 'left'), 'SiYuan table attributes render without diagnostics');
 

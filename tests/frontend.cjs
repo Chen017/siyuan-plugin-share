@@ -111,6 +111,34 @@ async function page(raw, {failMermaid = false, slowGraphviz = false} = {}) {
     assert.equal(plain.errors.length, 0, String(plain.errors));
   } finally { plain.close(); }
 
+  const images = await page([
+    '<img src="/assets/sized.png" style="width: 400px; height: 300px" onerror="alert(1)">',
+    '<img src="/assets/width.png" style="width: 280px">',
+    '<img src="/assets/small.png" width="120">',
+    '<img src="/assets/relative.png" style="width: 50%; height: 200px">',
+    '![square](/assets/square.png)',
+    '![emoji](/emojis/smile.png)',
+  ].join('\n\n'));
+  try {
+    const image = name => images.w.document.querySelector(`.markdown-body img[src$="/${name}.png"]`);
+    const sized = image('sized');
+    assert.equal(sized.style.width, '400px');
+    assert.equal(sized.style.height, '300px');
+    assert.equal(sized.style.aspectRatio, '400 / 300');
+    assert(!sized.hasAttribute('onerror'), 'Image event handlers are removed');
+    assert(sized.hasAttribute('data-sps-sized-pair'));
+    assert(image('width').hasAttribute('data-sps-sized-image'));
+    assert(image('small').hasAttribute('data-sps-sized-image'));
+    assert(!image('relative').hasAttribute('data-sps-sized-pair'), 'Relative sizes are not treated as pixel pairs');
+    assert(!image('square').hasAttribute('data-sps-sized-image'), 'Unsized images keep their default styling');
+    assert(!image('smile').hasAttribute('data-sps-sized-image'), 'Emoji keep their own styling');
+    image('square').click();
+    assert.equal(images.w.document.querySelector('[data-viewer-img]').src, 'https://reader.test/assets/square.png', 'Viewer uses the original image');
+    await images.navigate('<img src="/assets/new.png" style="width: 240px">');
+    const next = image('new');
+    assert(next.hasAttribute('data-sps-sized-image'), 'Newly navigated notes preserve their explicit sizes');
+  } finally { images.close(); }
+
   const cases = [
     ['mermaid', 'graph LR\nA-->B', ['mermaid.min.js']],
     ['', 'graph LR\nA-->B', ['mermaid.min.js']],

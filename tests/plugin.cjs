@@ -9,12 +9,13 @@ const { JSDOM } = require('jsdom');
 const root = path.join(__dirname, '..');
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
-function host({ mobile = false, locale = 'en_US', stored = {} } = {}) {
+function host({ mobile = false, locale = 'en_US', stored = {}, exportMarkdown = '' } = {}) {
   const dom = new JSDOM('<!doctype html><body></body>', { url: 'https://siyuan.invalid/' });
   const storage = new Map(Object.entries(structuredClone(stored)));
   const listeners = new Map();
   const timers = new Map();
   const requests = [];
+  const kernelRequests = [];
   const errors = [];
   let timerId = 0;
   class Plugin {
@@ -48,7 +49,10 @@ function host({ mobile = false, locale = 'en_US', stored = {} } = {}) {
     require(name) {
       if (name === 'siyuan') return {
         Plugin, Setting, getAllEditor: () => [], showMessage() {},
-        fetchSyncPost: async () => ({ code: 0, data: {} }),
+        fetchSyncPost: async (url, body) => {
+          kernelRequests.push({url, body: plain(body)});
+          return { code: 0, data: url === '/api/export/exportMdContent' ? {hPath: '/Fixture', content: exportMarkdown} : {} };
+        },
       };
       if (mobile) throw new Error('Node builtins are unavailable in the mobile frontend');
       return require(name);
@@ -66,13 +70,38 @@ function host({ mobile = false, locale = 'en_US', stored = {} } = {}) {
   for (const name of ['bindDocTreeLater', 'refreshCurrentDocContext', 'startBackgroundSync', 'refreshAutoUpdateLoop']) {
     plugin[name] = () => {};
   }
-  return { plugin, storage, listeners, timers, requests, sandbox, close() {
+  return { plugin, storage, listeners, timers, requests, kernelRequests, sandbox, close() {
     dom.window.close();
     assert.deepEqual(errors, [], 'Plugin bootstrap must not hide asynchronous errors');
   } };
 }
 
 (async () => {
+  // The shared export path is used by initial publication and subsequent sync.
+  // A pre-3.3 host ignores imgTag and still returns its Markdown unchanged.
+  for (const {markdown, expected, path, uploadPath} of [
+    {markdown: '<img alt="diagram" src="assets/diagram.png" style="width: 320px;" />', path: 'assets/diagram.png', uploadPath: 'assets/diagram.png'},
+    {markdown: '<img alt="diagram" src="assets/a%20b.png" style="width: 320px;" />', expected: '<img alt="diagram" src="assets/ab.png" style="width: 320px;" />', path: 'assets/a%20b.png', uploadPath: 'assets/ab.png'},
+    {markdown: '![diagram](assets/diagram.png)', path: 'assets/diagram.png', uploadPath: 'assets/diagram.png'},
+  ]) {
+    const fixture = host({mobile: true, exportMarkdown: markdown});
+    try {
+      const exported = await fixture.plugin.exportDocMarkdown('20261027000000-aaaaaaa');
+      assert.deepEqual(fixture.kernelRequests, [{url: '/api/export/exportMdContent', body: {id: '20261027000000-aaaaaaa', imgTag: true}}]);
+      assert.equal(exported.content, markdown);
+      const fetched = [];
+      fixture.plugin.fetchAssetBlob = async (assetPath) => {
+        fetched.push(assetPath);
+        return {path: assetPath, blob: new Blob(['image'])};
+      };
+      const prepared = await fixture.plugin.prepareMarkdownAssets(exported.content, new AbortController());
+      assert.equal(prepared.markdown, expected || markdown, 'Image dimensions survive asset preparation');
+      assert.deepEqual(fetched, [path]);
+      assert.deepEqual(plain(prepared.assets).map((asset) => asset.path), [uploadPath]);
+      assert.equal(prepared.failures.length, 0);
+    } finally { fixture.close(); }
+  }
+
   for (const mobile of [false, true]) {
     const fixture = host({ mobile, locale: mobile ? 'zh_CN' : 'en_US' });
     try {
