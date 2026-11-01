@@ -1,107 +1,69 @@
-# 🔗 思源分享
+# Note
 
-[English](README.md) · [简体中文](README_zh_CN.md)
+[简体中文](README_zh_CN.md) | [English](README.md)
 
-把思源笔记中的单篇文档、文档树或整个笔记本变成网页链接，支持密码、到期时间、增量同步。
+一个围绕个人阅读与分享习惯打造的笔记空间。Note 将 [思源笔记](https://b3log.org/siyuan/)中的笔记本、数学公式和图表带到网页上，用安静的阅读界面、克制的动效和精简的单管理员后台，连接写作与阅读。
 
-这是 **[Chen017](https://github.com/Chen017) 维护的个人分支**，基于 [b8l8u8e8/siyuan-plugin-share](https://github.com/b8l8u8e8/siyuan-plugin-share)。分享与同步功能来自上游；本分支主要改进阅读体验、渲染细节和私有部署。保留原作者版权及 [MIT 许可证](LICENSE)。
+[**📖 访问 Note**](https://note.etalib.space) · [**📚 浏览笔记本**](https://note.etalib.space/s/9898f37d) · [**⬇️ 下载 Release**](https://github.com/Chen017/siyuan-plugin-share/releases)
 
-## ✨ 这个分支改了什么
+![桌面端笔记本首页，展示文档树与阅读快捷入口](docs/screenshots/notebook.jpg)
 
-| 方面 | 个人改动 |
-| --- | --- |
-| 运行环境 | 升级到 **PHP 8.3.36**，修复 Nginx/PHP-FPM 容器停机信号，补充运行时与接口回归。 |
-| 字体 | 英文、数字和常用标点保留本地 **MiSans**，中文使用系统字体；拉丁字符 WOFF2 仅 **34 KB**，原 TTF 约 8.1 MB。 |
-| 阅读界面 | 中性表面、清晰蓝色链接、圆角按压反馈和短动效，支持减少动态效果。笔记本入口提供 Browse documents 和本地 Continue reading，不重复列出文档；阅读控件使用英语，页脚保留维护者与上游署名。 |
-| UI 与动效 | Source / Preview 切换时页面位置保持稳定。鼠标短暂停留即可预览脚注，也可以固定卡片；过渡简短且遵循减少动态效果设置。后台可在同一处管理分享信息与访问规则。统一菜单、日期面板、滚动条和确认弹窗，区分加粗标签与常规字重的输入内容。 |
-| 侧栏 | 文档名单行省略，层级连接线对齐；支持拖动调宽，低于可用下限时收起，通过固定 Navigation 按钮恢复。宽度与收起状态用 cookie 记忆，保留手动滚动位置并统一底部留白。 |
-| 主页导航 | 后台可设置阅读主页；其他分享显示 Home / Return to home，同一主页分享内的子文档、查询参数和锚点不显示。 |
-| 管理员专用后台 | 精简后台导航与网站设置；可管理分享标题、链接、有效期和密码。删除的分享可以恢复或永久删除。插件连接信息收纳在 Site settings，存储额度设置保留；移除公开注册及多用户管理。分享列表取消分页，按屏宽显示三／两／一列卡片，操作按钮同排，设置层级更清晰。 |
-| 模块精简 | 完整移除访问统计与日志、后台 KPI/图表、实例统计/心跳、SMTP/邮件流程、评论、举报、公告、违禁词/扫描、普通验证码、ICP/联系配置、手动分片清理与全站清空入口。保留 PDF 独立验证码及自动上传清理。 |
-| 配置保留 | 网站地址/分享前缀、HTML Head、自定义 CSS/JS 的开关、输入、说明与注入继续可用；移除上游新版检查与提示，保留署名。 |
-| 数据迁移 | 一次性清理退役模块数据，保留管理员笔记、分享链接、API key 与被笔记引用的附件；移除分享访客限制与历史记录，并重算存储占用。[上传与迁移保护](docs/UPLOAD_SAFETY.md)。 |
-| 渲染修复 | 修复思源表格单元格对齐；图表库按需加载，避免整篇 Markdown 重复渲染；保留公式、脚注和图表。 |
-| PDF 导出 | 弹窗内单篇或批量导出，支持正文复制、隐藏来源信息及访客额度提示。[说明](docs/GUEST_PDF_EXPORT.md)。 |
-| 无障碍与 SEO | 改善链接辨识、按钮状态、目录焦点和图片下载控件，补齐主要内容区域、页面描述、robots.txt 与真实 404。 |
-| 部署维护 | 默认仅监听 **`127.0.0.1:8081`**；静态资源版本化，配备自动部署、隔离回归及备份恢复校验脚本。 |
-| 工程清理 | 按职责拆分 PHP 模块并保持路由/API 契约；清除无引用样式和函数，统一可恢复备份入口、页面级健康检查与配置权限，测试通过后再自动部署。[维护说明](docs/MAINTENANCE.md)。 |
+## ✨ 阅读体验
 
-项目结构、历史回归、开发与发布流程见[维护指南](docs/MAINTENANCE.md)；更早的变更可查阅 Git 历史。
+**给内容留一点空间。** 柔和的中性色、清晰的蓝色操作色、宽松留白与分明的标题层级，让长篇笔记读起来更从容。明暗主题使用一致的视觉语言；界面也会适应小屏幕，延续桌面端的阅读气质。
 
-## Docker Compose 部署
+**沿着文档树探索。** 侧栏保留思源笔记的层级，配有对齐的分支连接线、全部展开／收起、搜索和独立的文章目录。桌面侧栏支持拖动调宽、收起和通过 Navigation 按钮恢复，并记住上次状态。笔记本首页提供 **Browse documents** 和本地 **Continue reading** 入口，方便继续上次的阅读。
 
-需要安装 Docker Engine 和 Docker Compose，在仓库根目录执行：
+![桌面端阅读页，展示文档树、导航按钮和数学公式](docs/screenshots/reader.jpg)
+
+**让动效服务于阅读。** 文档切换与控件反馈使用简短过渡；较慢的请求会显示进度，快速切换则不闪烁加载条。文档上方提供 Home、Source 和 Export PDF 按钮，长页面也有返回顶部入口。Source / Preview 切换保留阅读位置。脚注在短暂停留后预览，也可以固定下来细读；界面尊重系统的减少动态效果设置。
+
+**为真实的笔记内容排版。** Markdown 六级标题保持清晰层次，支持数学公式、代码、表格、脚注和图表。Mermaid 等图表引擎按需加载；SVG 保留图片展示，同时隔离主动内容。阅读器也提供图片查看与下载。
+
+**把笔记带走。** 可按单篇、文档及子文档、手动选择或整个分享导出，每篇分别生成 PDF；正文支持选择、搜索和复制。桌面端导出弹窗集中呈现范围选择与访客额度，限制可在后台调整。
+
+![桌面端 PDF 导出弹窗，展示文档选择和额度信息](docs/screenshots/pdf-export.jpg)
+
+**在思源中分享，在一个地方管理。** 单篇文档、文档树或整个笔记本都可以生成链接；增量同步更新内容时保留原链接，并可按需设置密码和有效期。个人后台将分享卡片、访问设置、可恢复删除、站点外观和 PDF 设置放在一起。插件固定连接 **note.etalib.space**，使用管理员 API key。
+
+**精简而认真维护。** 后端使用 PHP 8.3、SQLite 和 Nginx，围绕单管理员场景移除了公开注册、普通用户管理及不再需要的上游服务。本地资源、按需加载图表、真实浏览器与容器回归测试，以及 GitHub Actions 自动部署，共同支持日常维护。
+
+## 🙏 致谢
+
+Note 最初基于 [siyuan-plugin-share](https://github.com/b8l8u8e8/siyuan-plugin-share) 建立。感谢 b8l8u8e8 和所有贡献者提供的分享与同步基础。此后，阅读器、视觉设计、交互和个人后台经过持续重做与独立维护，同时保留原作者版权及 [MIT 许可证](LICENSE)。
+
+---
+
+## 📝 连接、部署与维护
+
+### 连接思源笔记
+
+1. 从 [Releases](https://github.com/Chen017/siyuan-plugin-share/releases) 下载 `package.zip`，安装到思源笔记。
+2. 在插件设置中填写 Note 后台生成的管理员 API key。插件固定连接 `https://note.etalib.space`，界面不提供站点切换。
+3. 右键文档或笔记本创建分享，按需设置密码和有效期，然后复制链接。
+
+自动更新与增量同步会保留已有分享链接。升级时会保留匹配该站点的 API key 和同步状态，移除其他站点配置。
+
+### 运行服务端
+
+需要 Docker Engine 和 Docker Compose。服务端可以自行部署；但随仓库提供的插件仍固定连接上述个人站点。
 
 ```sh
 git clone https://github.com/Chen017/siyuan-plugin-share.git
 cd siyuan-plugin-share
-# 启动前检查 php-site/config.php。
+test -e php-site/config.php || cp php-site/config.example.php php-site/config.php
 docker compose build --pull
 bash scripts/prepare-config.sh siyuan-share-web:latest
 docker compose up -d --no-build --pull never
 docker compose ps
 ```
 
-默认 Compose 从本仓库源码构建，监听 **127.0.0.1:8081**。将 HTTPS 反向代理指向该地址，保留 Host 请求头，并在后台 **Site settings** 中填写公网 HTTPS 地址。
+默认 Compose 监听 `127.0.0.1:8081`；将 HTTPS 反向代理指向该地址并保留 Host 请求头，在后台 **Site settings** 中配置公网地址。全新安装时，在 `docker compose logs web` 中查找 `SIYUAN_INITIAL_ADMIN_PASSWORD`，以 **admin** 登录并先修改密码。日志包含初始凭据，请妥善保护。
 
-全新安装后运行 `docker compose logs web`，查找 `SIYUAN_INITIAL_ADMIN_PASSWORD` 获取随机初始密码，以 **admin** 登录并设置不同的新密码后才能使用后台。日志含初始凭据，应妥善保护；已有管理员密码和 API key 在升级时保留。后台仅供管理员使用，不提供公开注册或邮件认证。
+更新时保留 `php-site/storage/`、`php-site/uploads/` 和 `php-site/config.php`；已有管理员密码及 API key 不会被重置。需要手动创建经过校验的备份时，可运行 `bash backup-volumes.sh siyuan-share-web "$PWD/backups"`，并妥善保管生成目录及 `VERIFIED` 标记；新备份验证失败时应保留旧备份。若遵循只保留最新一份的策略，在新备份验证成功后手动删除旧备份；脚本不会自动清理。详见[维护指南](docs/MAINTENANCE.md)及[上传与迁移保护](docs/UPLOAD_SAFETY.md)。
 
-| 宿主持久化路径 | 用途 |
-| --- | --- |
-| `php-site/storage/` | SQLite 数据库及上传暂存 |
-| `php-site/uploads/` | 附件 |
-| `php-site/config.php` | 只读挂载的实例配置 |
+### 开发与验证
 
-更新时保留上述路径，不要用示例覆盖已有配置。首次初始化后，数据库中已保存的 PDF 设置优先于配置文件默认值。
+思源插件无需构建；服务端和阅读器位于 `php-site/`。[维护指南](docs/MAINTENANCE.md)记录了项目结构、开发依赖、测试命令、CI/CD、发布与故障排查；[PDF 指南](docs/GUEST_PDF_EXPORT.md)说明导出行为和限制，[界面记录](docs/UI_REFINEMENT.md)记录交互与无障碍设计。
 
-## 连接思源笔记
-
-1. 安装 Siyuan Share 插件，填写后台生成的 API key。本个人分支固定连接 `https://note.etalib.space`。
-2. 右键文档或笔记本，创建分享。
-3. 按需设置密码、有效期，复制分享链接。
-
-更新已有分享会保留原链接。支持自动更新、增量同步、文档树、搜索、数学公式、脚注和图表渲染。
-
-升级时会保留匹配该站点的 API key 和已有同步状态，并移除其他站点配置。如果旧配置中没有匹配的站点，需重新填写个人站点的 API key。同步只接受管理员 API key，普通账号的密钥不再生效；管理员已有的分享会保留。
-
-## 阅读与 PDF
-
-后台 **Site settings** 可配置阅读首页地址、网站地址与分享前缀、存储额度、HTML Head、自定义 CSS 和 JavaScript。自定义样式建议限定到 `body.layout-share` 或 `body.layout-app`，只插入可信代码。
-
-打开文档后点击 **Export PDF**，可选单篇、文档及子文档、整个分享或手动选择文档。每篇分别下载，正文可选择、复制和搜索。默认每个访客在滚动一小时内可导出 120 篇，管理员可调整额度；批量下载可能需要浏览器授权。[PDF 使用与限制](docs/GUEST_PDF_EXPORT.md)。
-
-## 备份与更新
-
-更新前先创建并验证备份：
-
-```sh
-bash backup-volumes.sh siyuan-share-web "$PWD/backups"
-```
-
-脚本短暂停止写入，保存配置、数据与回退镜像，校验解压文件哈希和 SQLite 完整性后恢复服务。妥善保存 `BACKUP_DIR` 对应目录及其 `VERIFIED` 标记。
-
-备份保留策略：只保留最新的一份已验证备份。新备份创建并验证成功后，手动删除旧备份；新备份验证失败时，保留原有备份。当前脚本不会自动清理旧备份。
-
-```sh
-git pull --ff-only
-docker compose build --pull
-bash scripts/prepare-config.sh siyuan-share-web:latest
-docker compose up -d --no-build --pull never
-docker compose logs --tail=100 web
-```
-
-回退时一起恢复对应的已验证数据、配置和镜像。存在数据库迁移时，仅回退镜像可能无法恢复旧版本。
-
-## 开发验证
-
-```sh
-python tests/run.py --php /path/to/php-8.3
-NODE_PATH=/path/to/isolated/node_modules node tests/plugin.cjs
-NODE_PATH=/path/to/isolated/node_modules node tests/frontend.cjs
-NODE_PATH=/path/to/isolated/node_modules node tests/reader-ui.cjs
-python tests/package.py
-```
-
-DOM 测试依赖 `jsdom@26.1.0`；PDF 文字层验证另需 `jspdf@4.0.0` 和 `pypdfium2==5.14.0`。PHP 测试加 `--browser` 可验证真实 PDF 下载；通过 `SIYUAN_PLAYWRIGHT_MODULE`、`SIYUAN_BROWSER_EXECUTABLE` 指定隔离的 Playwright 和浏览器。`--docker <已构建镜像>` 验证实际容器，测试使用合成数据。运行数据、备份和本地测试输出不进入发布包。
-
-`main` 的 PHP/Docker 与阅读回归通过后才会自动部署到维护者 VPS。复用工作流前请配置自己的仓库 secrets。思源插件保留无需构建的单文件入口；字体生成输入位于 `resources/fonts/`，不对外提供。
+GitHub Actions 在 `main` 部署前运行回归检查。部署成功后，若插件相对最新 Release 有变化，将自动构建并发布新版本。发布包不包含实例配置和运行数据。

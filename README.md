@@ -1,107 +1,69 @@
-# 🔗 Siyuan Share
+# Note
 
-[English](README.md) · [简体中文](README_zh_CN.md)
+[English](README.md) | [简体中文](README_zh_CN.md)
 
-Share a SiYuan document, a document tree or a notebook through a web link, with passwords, expiration dates, incremental sync.
+A personal home for notes, built around the way I read and share my [SiYuan](https://b3log.org/siyuan/) workspace. Note brings notebooks, mathematics and diagrams to the web with a calm reading interface, considered motion and a lightweight, administrator-only backend.
 
-This is **[Chen017](https://github.com/Chen017)'s personal fork** of [b8l8u8e8/siyuan-plugin-share](https://github.com/b8l8u8e8/siyuan-plugin-share). The original sharing features come from upstream; this fork focuses on reading, rendering fixes and self-hosting. Original copyright and the [MIT license](LICENSE) are retained.
+[**📖 Visit Note**](https://note.etalib.space) · [**📚 Explore a notebook**](https://note.etalib.space/s/9898f37d) · [**⬇️ Releases**](https://github.com/Chen017/siyuan-plugin-share/releases)
 
-## ✨ What changed here
+![Desktop view of a shared notebook, with its document tree and reading shortcuts](docs/screenshots/notebook.jpg)
 
-| Area | Personal changes |
-| --- | --- |
-| Runtime | PHP **8.3.36**, graceful Nginx/PHP-FPM shutdown, runtime and API regression checks. |
-| Fonts | Local **MiSans** for Latin letters, digits and common punctuation; system fonts for Chinese. The Latin WOFF2 is **34 KB**, down from the original 8.1 MB TTF. |
-| Reading | Neutral surfaces, clear blue links, rounded press feedback and short motion with reduced-motion support. Notebook landing pages offer Browse documents and local Continue reading, without duplicating the document tree. Reader controls use English. Footer links lead with this fork and credit upstream. |
-| UI & motion | Source / Preview switching keeps its position. Footnotes open after a short hover and can be pinned; transitions stay brief and respect reduced-motion settings. The admin share manager edits share details and access rules in one place. Shared menu/calendar controls, scrollbars and confirmation dialogs keep labels distinct from regular-weight field values. |
-| Sidebar | Single-line document names and aligned tree guides; drag to resize, collapse below the usable minimum, and restore from a fixed Navigation button. Width and collapse state persist in cookies; manual scrolling is preserved and the bottom spacing is consistent. |
-| Home navigation | Configurable reader home URL. Other shares show Home / Return to home; documents, query strings and anchors within the same home share do not. |
-| Administrator-only backend | Streamlined admin navigation and settings; manage share titles, links, expiration and passwords. Deleted shares can be restored or permanently removed. Plugin connection details live in Site settings, and storage quotas remain available. Public registration and multi-user management are removed. All matching shares appear without pagination in responsive three/two/one-column cards, with inline actions and clearer settings hierarchy. |
-| Removed services | Access analytics and logs, admin KPI/charts, instance statistics/heartbeats, SMTP/email flows, comments, reports, announcements, moderation/scanning, ordinary CAPTCHA, ICP/contact settings, manual chunk cleanup and the global data-reset endpoint. PDF CAPTCHA and automatic upload cleanup remain. |
-| Configuration | Website/share URL prefix, HTML Head insertion and custom CSS/JS switches, editors, help and injection remain available. Upstream release checks and update prompts are removed; attribution remains. |
-| Data migration | Retired module data is removed once. The administrator's notes, share URLs, API key and referenced attachments are preserved; share visitor limits and history are removed and storage usage is recalculated. [Upload and migration safeguards](docs/UPLOAD_SAFETY.md). |
-| Rendering | SiYuan table-cell alignment fixes, on-demand diagram engines and one Markdown render per document. Math, footnotes and diagrams remain available. |
-| PDF export | Single/batch downloads in a dialog, selectable text, hidden attribution and visitor quota indicators. [Details](docs/GUEST_PDF_EXPORT.md). |
-| Accessibility & SEO | Clearer links, correct button states and TOC focus, main landmarks, working image-download controls, page descriptions, robots.txt and real 404 responses. |
-| Deployment | Local-only `127.0.0.1:8081`, versioned static assets, GitHub Actions deployment and isolated regression tests. Backup and restore-verification scripts are included. |
-| Maintenance | PHP modules with unchanged routes/API contracts, obsolete style/helper cleanup, one verified backup entry point, consistent rendered-page health checks, private configuration permissions and CI before deployment. [Maintenance guide](docs/MAINTENANCE.md). |
+## ✨ The experience
 
-See the [maintenance guide](docs/MAINTENANCE.md) for project structure, regression history, development and release procedures. Git history records earlier changes.
+**A quieter place to read.** Soft neutral surfaces, blue accents, generous spacing and a clear typographic hierarchy give notes room to breathe. Light and dark themes share the same visual language; the interface adapts to smaller screens without losing the character of the desktop reader.
 
-## Docker Compose
+**Move through a notebook naturally.** The document tree keeps the shape of a SiYuan notebook, with aligned branches, expand and collapse controls, search, and a separate table of contents. Resize or hide the desktop sidebar and bring it back with Navigation; your preference is remembered. The notebook landing page offers **Browse documents** and a local **Continue reading** shortcut.
 
-Docker Engine and Docker Compose are required. Run from the repository root:
+![Desktop reader showing the document tree, navigation controls and mathematical notation](docs/screenshots/reader.jpg)
+
+**Motion that stays out of the way.** Short transitions connect document changes and controls; slow navigation gets a progress indicator while fast requests avoid a distracting flash. Home, Source and Export PDF are within reach above each document, with a back-to-top control for longer pages. Switch between Source and Preview without losing your place. Footnotes open on a brief hover and can be pinned for longer reading. Reduced-motion preferences are respected.
+
+**Made for the contents of a real notebook.** Markdown headings retain six distinct levels, with support for mathematics, code, tables, footnotes and diagrams. Mermaid and other diagram engines load when needed. SVG images can be displayed as images while active content is isolated. The reader also includes image viewing and downloads.
+
+**Take notes with you.** Export one document, its descendants, selected documents or a whole share as separate PDFs. The exported text can be selected, searched and copied. A desktop dialog brings scope selection and visitor quota information together; limits are configurable.
+
+![Desktop PDF export dialog over the reader, showing document selection and quota information](docs/screenshots/pdf-export.jpg)
+
+**Share from SiYuan, manage in one place.** Create links for individual documents, document trees or notebooks; update them incrementally while keeping their URLs. Passwords and expiration dates are optional. The personal admin dashboard brings share cards, access settings, recoverable deletion, site appearance and PDF settings together. This plugin is intentionally fixed to **note.etalib.space** and uses an administrator API key.
+
+**A smaller, carefully maintained foundation.** The backend runs on PHP 8.3 with SQLite and Nginx. Public registration, ordinary-user management and unused upstream services have been removed for a single administrator. Locally served assets, on-demand diagram loading, automated browser and container regression tests, and GitHub Actions deployment support day-to-day maintenance.
+
+## 🙏 Acknowledgements
+
+Note began with [siyuan-plugin-share](https://github.com/b8l8u8e8/siyuan-plugin-share). Thank you to b8l8u8e8 and the contributors for the original sharing and synchronization foundation. The reader, visual design, interactions and personal administration have since been extensively reworked and are independently maintained here. The original copyright and [MIT license](LICENSE) are retained.
+
+---
+
+## 📝 Connect, deploy & maintain
+
+### Connect SiYuan
+
+1. Download `package.zip` from [Releases](https://github.com/Chen017/siyuan-plugin-share/releases) and install the plugin in SiYuan.
+2. In the plugin settings, enter an administrator API key generated by the Note backend. The destination is fixed to `https://note.etalib.space`; the interface does not offer site switching.
+3. Right-click a document or notebook to share it, set a password or expiration if needed, and copy the link.
+
+Automatic updates and incremental synchronization preserve existing share links. On upgrade, the matching site's saved API key and sync state are retained; other saved site configurations are removed.
+
+### Run the server
+
+Docker Engine and Docker Compose are required. The server can be self-hosted, but the supplied plugin remains bound to the personal site above.
 
 ```sh
 git clone https://github.com/Chen017/siyuan-plugin-share.git
 cd siyuan-plugin-share
-# Review php-site/config.php before starting.
+test -e php-site/config.php || cp php-site/config.example.php php-site/config.php
 docker compose build --pull
 bash scripts/prepare-config.sh siyuan-share-web:latest
 docker compose up -d --no-build --pull never
 docker compose ps
 ```
 
-The supplied Compose file builds this fork from source and listens on **127.0.0.1:8081**. Point your HTTPS reverse proxy at that address and preserve the Host header. Set the public HTTPS URL in **Site settings**.
+The supplied Compose configuration listens on `127.0.0.1:8081`; point an HTTPS reverse proxy at it and preserve the Host header. Configure the public URL in **Site settings**. On a fresh installation, find `SIYUAN_INITIAL_ADMIN_PASSWORD` in `docker compose logs web`, sign in as **admin**, and change the password before using the backend. Keep the logs private.
 
-On a fresh installation, get the randomly generated initial administrator password from `docker compose logs web` (look for `SIYUAN_INITIAL_ADMIN_PASSWORD`), sign in as **admin**, and set a different password before using the backend. Treat the logs as sensitive. Existing administrator passwords and API keys are preserved on upgrade. The backend is administrator-only; registration and email authentication are unavailable.
+Preserve `php-site/storage/`, `php-site/uploads/` and `php-site/config.php` when updating. Existing administrator passwords and API keys are not reset. To create an optional verified manual backup, run `bash backup-volumes.sh siyuan-share-web "$PWD/backups"`; keep the resulting directory and its `VERIFIED` marker private. Retain the previous backup if verification fails. After a successful verification, manually remove older backups if following the single-backup retention policy; the script does not remove them automatically. See the [maintenance guide](docs/MAINTENANCE.md) and [upload and migration safeguards](docs/UPLOAD_SAFETY.md).
 
-| Persistent host path | Contents |
-| --- | --- |
-| `php-site/storage/` | SQLite database and upload staging |
-| `php-site/uploads/` | Attachments |
-| `php-site/config.php` | Read-only mounted installation configuration |
+### Develop & verify
 
-Keep these paths when updating. Do not replace an existing configuration with the example. After initialization, saved PDF settings take precedence over config defaults.
+The plugin has no build step; the server and reader live in `php-site/`. The [maintenance guide](docs/MAINTENANCE.md) describes the project structure, development dependencies, test commands, CI/CD, releases and troubleshooting. See the [PDF guide](docs/GUEST_PDF_EXPORT.md) for export behavior and limits, and the [UI notes](docs/UI_REFINEMENT.md) for interaction and accessibility decisions.
 
-## Connect SiYuan
-
-1. Install the Siyuan Share plugin and enter an API key generated in the administrator backend. This personal fork is fixed to `https://note.etalib.space`.
-2. Right-click a document or notebook to create a share.
-3. Set its password, expiration date, then copy the link.
-
-Updating an existing share preserves its URL. Automatic updates, incremental sync, document trees, search, math, footnotes and diagrams remain supported.
-
-On upgrade, a saved connection to this site retains its key and existing per-site sync state; other site configurations are removed. If no saved connection matches, enter the personal site's key again. Only administrator API keys can synchronize; ordinary-user keys no longer work. The administrator's existing shares are preserved.
-
-## Reader and PDF
-
-**Site settings** controls the reader home URL, public URL prefix, storage quotas, HTML Head insertion and custom CSS/JavaScript. Scope custom CSS to `body.layout-share` or `body.layout-app`; only insert trusted code.
-
-Open a document and choose **Export PDF**. Select a single document, its subpages, the whole share or specific documents. Each document downloads as a separate PDF with selectable text. The default visitor allowance is 120 documents per rolling hour; the administrator can change it. Browser permissions may be needed for multiple downloads. [PDF usage and limits](docs/GUEST_PDF_EXPORT.md).
-
-## Backup and update
-
-Create and verify a backup before updating:
-
-```sh
-bash backup-volumes.sh siyuan-share-web "$PWD/backups"
-```
-
-The script briefly stops writes, saves configuration/data and the rollback image, verifies extracted file hashes and SQLite integrity, then resumes the service. Keep the directory reported by `BACKUP_DIR` and its `VERIFIED` marker privately.
-
-Backup retention: keep only the latest verified backup. After a new backup is created and verified successfully, manually remove older backups; retain the existing backup if verification fails. The current script does not remove older backups automatically.
-
-```sh
-git pull --ff-only
-docker compose build --pull
-bash scripts/prepare-config.sh siyuan-share-web:latest
-docker compose up -d --no-build --pull never
-docker compose logs --tail=100 web
-```
-
-For a rollback, restore the matching verified data/configuration and image together. Database migrations may make an image-only rollback insufficient.
-
-## Development
-
-```sh
-python tests/run.py --php /path/to/php-8.3
-NODE_PATH=/path/to/isolated/node_modules node tests/plugin.cjs
-NODE_PATH=/path/to/isolated/node_modules node tests/frontend.cjs
-NODE_PATH=/path/to/isolated/node_modules node tests/reader-ui.cjs
-python tests/package.py
-```
-
-DOM tests use `jsdom@26.1.0`. PDF text-layer tests additionally use `jspdf@4.0.0` and `pypdfium2==5.14.0`. Add `--browser` to the PHP runner for real PDF downloads; an existing Playwright/browser installation can be selected with `SIYUAN_PLAYWRIGHT_MODULE` and `SIYUAN_BROWSER_EXECUTABLE`. Docker regression uses `--docker <built-image>` and disposable data. Runtime data, backups and local test output are excluded from release packages.
-
-`main` deploys to the maintainer's VPS only after PHP/Docker and reader regression pass. Configure your own repository secrets before reusing this workflow. The plugin remains a no-build single-file entry point; source fonts live in `resources/fonts/` and are excluded from public assets.
+GitHub Actions runs regression checks before deploying `main`. After a successful deployment, plugin changes are compared with the latest release and published automatically when needed. Release packages exclude instance configuration and runtime data.

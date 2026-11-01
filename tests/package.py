@@ -18,7 +18,7 @@ with tempfile.TemporaryDirectory(prefix='siyuan-package-') as directory:
         assert {'index.js', 'index.css', 'plugin.json', 'i18n/en_US.json', 'i18n/zh_CN.json', 'resources/controls.js', 'resources/controls.css', 'docs/MAINTENANCE.md', 'docs/GUEST_PDF_EXPORT.md', 'docs/UPLOAD_SAFETY.md'} <= names
         assert not any(name.startswith(('php-site/', 'tests/', '.git/', '.test-output/')) for name in archive.namelist())
         for name in (name for name in names if name.endswith('.md') and (name.startswith('docs/') or '/' not in name)):
-            for target in re.findall(r'(?<!!)\[[^\]]+\]\(([^\s)]+)(?:\s+[^)]*)?\)', archive.read(name).decode('utf-8')):
+            for target in re.findall(r'\[[^\]]+\]\(([^\s)]+)(?:\s+[^)]*)?\)', archive.read(name).decode('utf-8')):
                 parsed = urlsplit(target)
                 if not parsed.scheme and not parsed.netloc and parsed.path:
                     assert posixpath.normpath(posixpath.join(posixpath.dirname(name), unquote(parsed.path))) in names, (name, target)

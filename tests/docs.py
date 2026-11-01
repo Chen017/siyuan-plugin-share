@@ -7,7 +7,7 @@ root = Path(__file__).resolve().parents[1]
 documents = [root / 'README.md', root / 'README_zh_CN.md', *sorted((root / 'docs').glob('*.md'))]
 missing = []
 for document in documents:
-    for target in re.findall(r'(?<!!)\[[^\]]+\]\(([^\s)]+)(?:\s+[^)]*)?\)', document.read_text(encoding='utf-8')):
+    for target in re.findall(r'\[[^\]]+\]\(([^\s)]+)(?:\s+[^)]*)?\)', document.read_text(encoding='utf-8')):
         parsed = urlsplit(target)
         if parsed.scheme or parsed.netloc or not parsed.path:
             continue
