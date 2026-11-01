@@ -59,6 +59,33 @@ const assets = path.join(__dirname, '../php-site/assets');
       }
     }
 
-    console.log('Image sizing passed: explicit dimensions and the original unsized-image limit on desktop and narrow screens.');
+    const svgPage = await browser.newPage({viewport: {width: 390, height: 800}});
+    await svgPage.route('https://reader.test/**', route => route.fulfill({
+      status: 200, contentType: 'image/svg+xml',
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"><path d="M20 20L300 220" stroke="black"/></svg>',
+    }));
+    const svgSource = `<img src="https://reader.test/assets/chart.SVG?version=1" style="width: 320px">\n\n<img src="https://reader.test/emojis/icon.svg">\n\n<img src="${pixel}">`;
+    await svgPage.setContent(`<body class="layout-share"><div class="markdown-body" data-md-id="doc"></div><textarea class="markdown-source" data-md-id="doc">${svgSource.replace(/</g, '&lt;')}</textarea></body>`);
+    await svgPage.addStyleTag({path: path.join(assets, 'style.css')});
+    await svgPage.addScriptTag({path: path.join(assets, 'vendor/markdown-it.min.js')});
+    await svgPage.addScriptTag({path: path.join(assets, 'app.js')});
+    const svgImage = svgPage.locator('.markdown-body img').first();
+    await svgImage.waitFor();
+    await svgPage.waitForFunction(() => document.querySelector('.markdown-body img')?.naturalWidth === 320);
+    for (const scheme of ['light', 'dark']) {
+      await svgPage.emulateMedia({colorScheme: scheme});
+      const state = await svgImage.evaluate(el => ({width: el.getBoundingClientRect().width, background: getComputedStyle(el).backgroundColor}));
+      assert(Math.abs(state.width - 320) < 1, `${scheme} SVG keeps its authored width`);
+      assert.equal(state.background, scheme === 'dark' ? 'rgb(243, 245, 247)' : 'rgba(0, 0, 0, 0)', `${scheme} SVG background`);
+    }
+    const unrelatedBackgrounds = await svgPage.locator('.markdown-body img').evaluateAll(els => els.slice(1).map(el => getComputedStyle(el).backgroundColor));
+    assert.deepEqual(unrelatedBackgrounds, ['rgba(0, 0, 0, 0)', 'rgba(0, 0, 0, 0)'], 'Emoji and raster images remain unchanged');
+    await svgImage.click();
+    const viewer = svgPage.locator('[data-viewer-img]');
+    await viewer.waitFor({state: 'visible'});
+    assert.equal(await viewer.evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(243, 245, 247)', 'SVG viewer uses the same light background');
+    assert.equal(await viewer.evaluate(el => getComputedStyle(el).backgroundImage), 'none', 'SVG viewer has no checkerboard over the light background');
+    await svgPage.close();
+    console.log('Image sizing and dark SVG backgrounds passed on desktop and mobile.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -3471,6 +3471,13 @@ body.image-viewer-open {
 }
 
 @media (prefers-color-scheme: dark) {
+  /* Transparent SVG diagrams often use dark strokes intended for light paper. */
+  body.layout-share .markdown-body img:is([src$=".svg" i], [src*=".svg?" i], [src*=".svg#" i]):not(.sps-emoji):not([src^="emojis/" i]):not([src*="/emojis/" i]),
+  body.layout-share .image-viewer-img:is([src$=".svg" i], [src*=".svg?" i], [src*=".svg#" i]) {
+    background: #f3f5f7;
+    outline: 6px solid #f3f5f7;
+  }
+
   body.layout-share {
     color-scheme: dark;
     --bg: #17181b;
