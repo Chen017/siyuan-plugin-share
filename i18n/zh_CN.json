@@ -36,6 +36,7 @@
   "siyuanShare.error.remoteRequestFailed": "远程请求失败 ({status})",
   "siyuanShare.error.resourceDownloadCanceled": "资源下载已取消。",
   "siyuanShare.error.resourceDownloadFailed": "获取资源失败 ({status})",
+  "siyuanShare.error.imageSizeMigrationAssetsFailed": "图片尺寸迁移时有附件获取失败，本次更新已停止，请检查资源后重试。",
   "siyuanShare.error.resourcePathInvalid": "资源路径无效。",
   "siyuanShare.error.shareCreateFailed": "分享创建失败，请重试。",
   "siyuanShare.error.shareLinkEmpty": "分享链接为空",

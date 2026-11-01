@@ -9,7 +9,7 @@ const { JSDOM } = require('jsdom');
 const root = path.join(__dirname, '..');
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
-function host({ mobile = false, locale = 'en_US', stored = {}, exportMarkdown = '' } = {}) {
+function host({ mobile = false, locale = 'en_US', stored = {}, exportMarkdown = '', appVersion = '3.8.9' } = {}) {
   const dom = new JSDOM('<!doctype html><body></body>', { url: 'https://siyuan.invalid/' });
   const storage = new Map(Object.entries(structuredClone(stored)));
   const listeners = new Map();
@@ -51,7 +51,7 @@ function host({ mobile = false, locale = 'en_US', stored = {}, exportMarkdown = 
         Plugin, Setting, getAllEditor: () => [], showMessage() {},
         fetchSyncPost: async (url, body) => {
           kernelRequests.push({url, body: plain(body)});
-          return { code: 0, data: url === '/api/export/exportMdContent' ? {hPath: '/Fixture', content: exportMarkdown} : {} };
+          return { code: 0, data: url === '/api/export/exportMdContent' ? {hPath: '/Fixture', content: exportMarkdown} : url === '/api/system/version' ? appVersion : {} };
         },
       };
       if (mobile) throw new Error('Node builtins are unavailable in the mobile frontend');
@@ -77,6 +77,100 @@ function host({ mobile = false, locale = 'en_US', stored = {}, exportMarkdown = 
 }
 
 (async () => {
+  // Upgrade migration must re-export unchanged documents once per share, and
+  // retry after cancellation or upload failure without changing other shares.
+  for (const kind of ['doc', 'notebook']) {
+    const migration = host({mobile: true, stored: {settings: {siteUrl: 'https://note.etalib.space', apiKey: 'key'}}});
+    try {
+      const {plugin} = migration;
+      await plugin.loadState();
+      const rootId = '20261027000000-aaaaaaa';
+      const otherId = '20261027000000-bbbbbbb';
+      const share = {id: 'migration-' + kind, docId: rootId, notebookId: rootId, slug: 'test', type: kind};
+      const docs = [{docId: rootId, title: 'First'}, {docId: otherId, title: 'Second'}];
+      let exports = [], uploadCalls = 0, initBodies = [], fail = false, cancel = false, failures = false;
+      Object.assign(plugin, {
+        notebooks: [{id: rootId, name: 'Notebook'}],
+        createProgressHandle: () => ({update() {}, close() {}, setBarVisible() {}, confirm: async () => !cancel}),
+        verifyRemote: async () => {}, resolveDocInfoFromAnyId: async () => ({title: 'First'}),
+        resolveNotebookIdFromDoc: async () => '', resolveDocIcon: async () => '',
+        getShareByDocId: () => share, getShareByNotebookId: () => share,
+        isNotebookClosedForAutoUpdate: async () => false,
+        supportsIncrementalShare: () => true, supportsDocChunkUpload: () => false,
+        fetchShareSnapshot: async () => ({docs: [], assets: []}),
+        listDocSubtree: async () => docs, listDocsInNotebook: async () => ({docs}),
+        fillDocIcons: async () => {}, collectStructChangedDocIds: () => [],
+        collectIncrementalCandidateDocIds: async () => ({candidateDocIds: []}),
+        getDocBlockCountCache: () => ({[rootId]: 1}),
+        collectDocExportResults: async selected => {
+          exports.push(selected.map(doc => doc.docId));
+          return selected.map((doc, index) => ({doc, index, exportRes: {}, markdown: '<img src="assets/a.png" style="width: 320px;">', assets: [], failures: failures ? ['missing'] : []}));
+        },
+        resolveIconUpload: async () => '', maybeWarnExportReference: async () => {},
+        buildScopedIncrementalPlan: async ({exportedDocs}) => ({uploadDocs: exportedDocs, deletedDocIds: [], deletedAssetPaths: [], uploadAssetEntries: [], uploadAssets: [], summary: {changedDocs: 1}}),
+        formatIncrementSummaryDetail: () => '', uploadAssetsChunked: async () => {},
+        remoteRequest: async (path, options) => { uploadCalls++; if (path.endsWith('/init')) initBodies.push(plain(options.body)); if (fail && path.includes('/complete')) throw new Error('Upload failed'); return {uploadId: 'test-upload'}; },
+        cancelUploadSession: async () => {}, syncRemoteShares: async () => {},
+        setAutoUpdateShareNotebookHint: () => {}, updateSharePasswordCache: async () => {},
+        setIncrementalCursor: async () => {}, refreshDocBlockCountCacheForShare: async () => {},
+        syncAutoUpdateStructDigestAfterShareSuccess: async () => {}, getShareUrl: () => 'https://note.etalib.space/s/test',
+        renderSettingCurrent: () => {}, refreshDocTreeMarksLater: () => {}, notify: () => {},
+      });
+      const run = () => kind === 'doc'
+        ? plugin.shareDoc(rootId, {includeChildren: true, allowRequestError: false})
+        : plugin.shareNotebook(rootId, {allowRequestError: false});
+      cancel = true;
+      await assert.rejects(run());
+      assert.deepEqual(plain(exports.at(-1)), [rootId, otherId], `${kind}: cancellation exports every old document`);
+      cancel = false; fail = true;
+      await assert.rejects(run(), /Upload failed/);
+      assert.deepEqual(plain(exports.at(-1)), [rootId, otherId], `${kind}: failed upload retries all documents`);
+      fail = false; failures = true;
+      const beforeAssetFailure = uploadCalls;
+      await assert.rejects(run());
+      assert.equal(uploadCalls, beforeAssetFailure, `${kind}: incomplete migration does not upload`);
+      failures = false;
+      await run();
+      assert.deepEqual(plain(exports.at(-1)), [rootId, otherId], `${kind}: asset failure does not finish migration`);
+      assert.deepEqual(initBodies.at(-1).metadata.docs.map(doc => doc.docId), [rootId, otherId], `${kind}: migrated documents enter the upload`);
+      assert(initBodies.at(-1).metadata.docs.every(doc => doc.markdown.includes('width: 320px;')), `${kind}: exported sizes enter the upload`);
+      await run();
+      assert.deepEqual(plain(exports.at(-1)), [], `${kind}: later updates return to incremental selection`);
+      assert(plugin.needsImageSizeMigration('another-share'), 'Other shares migrate independently');
+      await plugin.loadState();
+      assert(!plugin.needsImageSizeMigration(share.id), 'Completed migration survives reload');
+      share.id = 'noop-' + kind;
+      plugin.buildScopedIncrementalPlan = async () => ({summary: {}});
+      const uploadsBeforeNoop = uploadCalls;
+      if (kind === 'doc') await plugin.shareDoc(rootId, {includeChildren: true, background: true});
+      else await plugin.shareNotebook(rootId, {background: true});
+      assert.equal(uploadCalls, uploadsBeforeNoop, 'Identical migrated content needs no upload');
+      assert(!plugin.needsImageSizeMigration(share.id), 'A complete successful comparison finishes migration');
+    } finally { migration.close(); }
+  }
+
+  for (const [appVersion, expectedComplete] of [['3.2.9', false], ['3.3.0', true], ['3.8.9', true], ['unknown', false]]) {
+    const versionFixture = host({mobile: true, appVersion, stored: {settings: {siteUrl: 'https://note.etalib.space', apiKey: 'key'}}});
+    try {
+      await versionFixture.plugin.loadState();
+      await versionFixture.plugin.markImageSizeMigrationComplete('share-version');
+      assert.equal(!versionFixture.plugin.needsImageSizeMigration('share-version'), expectedComplete, `${appVersion}: only supported kernels finish migration`);
+    } finally { versionFixture.close(); }
+  }
+
+  const olderKernel = host({mobile: true, appVersion: '3.2.9', stored: {settings: {siteUrl: 'https://note.etalib.space', apiKey: 'key'}}});
+  try {
+    await olderKernel.plugin.loadState();
+    await olderKernel.plugin.markImageSizeMigrationComplete('share-upgrade');
+    const newerKernel = host({mobile: true, appVersion: '3.8.9', stored: Object.fromEntries(olderKernel.storage)});
+    try {
+      await newerKernel.plugin.loadState();
+      assert(newerKernel.plugin.needsImageSizeMigration('share-upgrade'), 'Upgrading SiYuan retries exports made with an unsupported kernel');
+      await newerKernel.plugin.markImageSizeMigrationComplete('share-upgrade');
+      assert(!newerKernel.plugin.needsImageSizeMigration('share-upgrade'));
+    } finally { newerKernel.close(); }
+  } finally { olderKernel.close(); }
+
   // The shared export path is used by initial publication and subsequent sync.
   // A pre-3.3 host ignores imgTag and still returns its Markdown unchanged.
   for (const {markdown, expected, path, uploadPath} of [
