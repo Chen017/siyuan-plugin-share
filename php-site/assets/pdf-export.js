@@ -522,6 +522,7 @@
       const size = await worker.get('pageSize');
       const container = await worker.get('container');
       removeMetricsGuard = SPSPdfTextLayer.protectFontMetrics(container);
+      await SPSPdfTextLayer.prepareMathSvg(container);
       const height = container.getBoundingClientRect().height;
       // Match jsPDF's canvas rounding, otherwise a 1px remainder creates a page.
       const pageHeight = Math.floor(size.inner.px.width * size.inner.ratio);

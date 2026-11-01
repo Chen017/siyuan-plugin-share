@@ -39,6 +39,7 @@ jobs:
         run: |
           chrome=$(command -v google-chrome)
           NODE_PATH="$RUNNER_TEMP/browser-test/node_modules" SPS_TEST_BROWSER="$chrome" node tests/image-sizing.cjs
+          SIYUAN_BROWSER_EXECUTABLE="$chrome" SIYUAN_PLAYWRIGHT_MODULE="$RUNNER_TEMP/browser-test/node_modules/playwright" node tests/pdf-math.cjs
           SIYUAN_CHROMIUM_EXECUTABLE="$chrome" \
           SIYUAN_BROWSER_EXECUTABLE="$chrome" \
           SIYUAN_PLAYWRIGHT_MODULE="$RUNNER_TEMP/browser-test/node_modules/playwright" \

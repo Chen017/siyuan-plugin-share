@@ -61,6 +61,34 @@
     return () => style.remove();
   }
 
+  async function prepareMathSvg(container) {
+    // html2canvas reserializes SVGs without KaTeX's inherited styles and
+    // positioning. Snapshot each symbol at its laid-out size instead, while
+    // leaving the formula's text and layout in the DOM for pagination/selection.
+    const images = Array.from(container.querySelectorAll('.katex svg'), (svg) => {
+      const rect = svg.getBoundingClientRect();
+      if (!rect.width || !rect.height) return null;
+      const style = getComputedStyle(svg);
+      const copy = svg.cloneNode(true);
+      copy.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      copy.setAttribute('width', rect.width);
+      copy.setAttribute('height', rect.height);
+      copy.style.color = style.color;
+      copy.style.fill = style.fill;
+      copy.style.stroke = style.stroke;
+      copy.querySelectorAll('path').forEach((path) => { path.style.stroke = 'none'; });
+      const image = document.createElement('img');
+      image.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(copy));
+      image.style.cssText = `position:${style.position};display:${style.display};border:0;border-radius:0;`;
+      image.style.setProperty('width', `${rect.width}px`, 'important');
+      image.style.setProperty('height', `${rect.height}px`, 'important');
+      image.style.setProperty('max-width', 'none', 'important');
+      svg.replaceWith(image);
+      return image;
+    }).filter(Boolean);
+    await Promise.all(images.map((image) => image.decode()));
+  }
+
   // Use actual text boxes, not an arbitrary pixel row, as page boundaries.
   // The same offsets drive both image cropping and selectable text placement.
   function paginate(records, height, pageHeight, protectedRanges = [], forcedBreaks = []) {
@@ -180,5 +208,5 @@
       pdf.restoreGraphicsState();
     }
   }
-  globalThis.SPSPdfTextLayer = { capture, protectFontMetrics, paginate, pageAt, write };
+  globalThis.SPSPdfTextLayer = { capture, protectFontMetrics, prepareMathSvg, paginate, pageAt, write };
 })();
