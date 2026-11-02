@@ -86,3 +86,5 @@ CI 差异修复：数学占位标识使用非安全上下文同样提供的 getR
 - 搜索摘要先处理完整数学边界，再选择匹配附近的普通文字并截断；接口字段不变，公式用 Formula 描述。新公开地址通过显式 apply_public_url 部署选项更新，普通部署不重置该设置。
 
 行为回归：frontend、reader-ui、controls、pdf-ui、PHP runtime/admin 用例。真实浏览器 ui-refinement-browser 由现有 test_pdf_browser_rendering_and_save 调用，再由 PHP Actions 的 --browser 入口执行，覆盖图片键盘、PDF 单滚动、八组明暗视口、触控日历、危险操作对比度、高对比、文字缩放与未保存提醒。真实 iOS/Android、VoiceOver/TalkBack 尚需人工实机检查，自动测试不能代替实际朗读结论。
+
+主题别名在各页面 body 上定义，跟随该页的实际基础颜色解析；不能放在 :root 后继承已经解析的浅色值。真实浏览器验收分别检查 PDF 外层面板及 iframe 内选择控件在明暗主题的文字对比度，防止阅读器生成样式与后台完整样式的作用域差异被漏过。旧搜索响应也统一回退为 Formula／Image 普通描述。
