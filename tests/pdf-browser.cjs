@@ -120,7 +120,14 @@ const chooseScope = async (page, value) => {
       await reader.locator('a[data-share-nav="doc"][data-doc-id="' + id + '"]').first().click();
       await reader.waitForFunction((docId) => document.querySelector('.share-shell')?.dataset.shareDocId === docId, id);
     };
+    await openDocument(fixture.docIds[1]);
+    await reader.waitForFunction(() => document.querySelector('.markdown-body')?.dataset.spsRendered === '1');
+    assert.equal(await reader.locator('script[src*="katex.min.js"],script[src*="highlight.min.js"]').count(), 0,
+      'A plain document does not load math or syntax highlighting');
     await openDocument(fixture.docIds[0]);
+    await reader.locator('.markdown-body .katex').first().waitFor();
+    await reader.waitForFunction(() => document.querySelector('.markdown-body')?.dataset.spsRendered === '1');
+    assert.ok(await reader.locator('pre code.hljs').count(), 'Code is highlighted after same-page navigation');
     assert.equal(await reader.locator('.kb-title-row .share-document-actions [data-pdf-export-link]').count(), 1);
     await openDocument(fixture.docIds[1]);
     assert.equal(new URL(await reader.locator('[data-pdf-export-link]').getAttribute('href'), base).searchParams.get('doc'), fixture.docIds[1]);

@@ -176,6 +176,35 @@
     diagramScripts.set(file, promise);
     return promise;
   };
+  const markdownStyles = new Map();
+  const loadMarkdownStyle = (file) => {
+    if (document.querySelector(`link[href*='/assets/vendor/${file}']`)) return Promise.resolve();
+    if (markdownStyles.has(file)) return markdownStyles.get(file);
+    const promise = new Promise((resolve, reject) => {
+      const url = new URL(`vendor/${file}`, appScriptUrl || document.baseURI);
+      if (diagramVersions[file]) url.searchParams.set('v', diagramVersions[file]);
+      const link = document.createElement('link');
+      link.rel = 'stylesheet'; link.href = url.href;
+      link.onload = resolve;
+      link.onerror = () => { link.remove(); reject(new Error(`Could not load stylesheet: ${file}`)); };
+      document.head.append(link);
+    }).catch(error => { markdownStyles.delete(file); throw error; });
+    markdownStyles.set(file, promise);
+    return promise;
+  };
+  const markdownDependencies = () => {
+    const sources = Array.from(document.querySelectorAll('textarea.markdown-source[data-md-id]'), node => node.value || '').join('\n');
+    const pending = [];
+    if (/[$]|\\[()[\]]/.test(sources)) {
+      if (!window.katex) pending.push(loadDiagramScript('katex.min.js', () => !!window.katex));
+      if (diagramVersions['katex.min.css']) pending.push(loadMarkdownStyle('katex.min.css'));
+    }
+    if (/(?:```|~~~)|^(?: {4}|\t)\S|<pre\b/im.test(sources)) {
+      if (!window.hljs) pending.push(loadDiagramScript('highlight.min.js', () => !!window.hljs));
+      if (diagramVersions['highlight.min.css']) pending.push(loadMarkdownStyle('highlight.min.css'));
+    }
+    return pending;
+  };
   let imageViewerReady = false;
   let shareNavReady = false;
   let shareDynamicToken = 0;
@@ -5510,7 +5539,9 @@ const initImageViewer = () => {
 
     initDocTreeScroll();
     const token = ++shareDynamicToken;
-    scheduleIdle(() => {
+    scheduleIdle(async () => {
+      if (token !== shareDynamicToken) return;
+      try { await Promise.all(markdownDependencies()); } catch (err) { console.error(err); }
       if (token !== shareDynamicToken) return;
       try {
         initMarkdown();

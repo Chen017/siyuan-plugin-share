@@ -81,6 +81,11 @@ http {
     gzip_min_length 1024;
     gzip_types text/css application/javascript application/json text/plain image/svg+xml;
 
+    map $arg_v $asset_cache_control {
+        default "public, max-age=604800";
+        "~^[0-9a-f]{16}$" "public, max-age=31536000, immutable";
+    }
+
     access_log /var/log/nginx/access.log;
 
     include /etc/nginx/conf.d/*.conf;
@@ -120,8 +125,7 @@ server {
     # Public application assets only; uploaded attachments retain their permission checks.
     location /assets/ {
         try_files $uri =404;
-        expires 7d;
-        add_header Cache-Control "public";
+        add_header Cache-Control $asset_cache_control;
     }
 
     # Existing files/directories are served directly, otherwise route to index.php

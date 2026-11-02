@@ -3,6 +3,16 @@
   let dialog;
   let dialogFrame;
   let closeTimer;
+  const pdfCssUrl = document.currentScript?.dataset.pdfCss;
+  let pdfCss;
+  const ensurePdfCss = () => pdfCss || (pdfCss = new Promise((resolve, reject) => {
+    if (!pdfCssUrl || document.querySelector('link[href*="/assets/pdf-export.css"]')) return resolve();
+    const link = document.createElement('link');
+    link.rel = 'stylesheet'; link.href = pdfCssUrl;
+    link.onload = resolve;
+    link.onerror = () => { link.remove(); reject(new Error('Unable to load export styles.')); };
+    document.head.append(link);
+  }).catch(error => { pdfCss = null; throw error; }));
   const closeDialog = () => {
     if (!dialog?.open || closeTimer) return;
     dialogFrame.contentWindow.postMessage({ type: 'sps-pdf-cancel' }, location.origin);
@@ -16,10 +26,11 @@
       closeTimer = null;
     }, delay);
   };
-  document.addEventListener('click', (event) => {
+  document.addEventListener('click', async (event) => {
     const link = event.target.closest?.('[data-pdf-export-link]');
     if (!link || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
+    try { await ensurePdfCss(); } catch { location.href = link.href; return; }
     if (!dialog) {
       dialog = document.createElement('dialog');
       dialog.className = 'pdf-export-dialog';
@@ -545,22 +556,35 @@
       }
       const pages = SPSPdfTextLayer.paginate(text, height, pageHeight, protectedRanges, forcedBreaks);
       let pdf;
-      for (let page = 0; page < pages.length; page++) {
+      for (let page = 0; page < pages.length;) {
+        const last = Math.min(page + 2, pages.length);
         // toCanvas detaches its overlay. Reuse this exact paginated layout so
         // later pages cannot be reflowed or measured differently.
         if (!container.isConnected) document.body.append(worker.prop.overlay);
         worker = worker.set({ html2canvas: { scale: 2, backgroundColor: '#ffffff', useCORS: true, allowTaint: false, logging: false,
+          ignoreElements: (element) => element === documentBody || element === preview,
           windowWidth: innerWidth, scrollX: 0, scrollY: 0, y: pages[page].start, width: size.inner.px.width,
-          height: pages[page].end - pages[page].start } }).toCanvas();
+          height: pages[last - 1].end - pages[page].start } }).toCanvas();
         await worker;
         const canvas = await worker.get('canvas');
-        if (!pdf) {
-          worker = worker.toPdf();
-          await worker;
-          pdf = await worker.get('pdf');
-        } else {
-          pdf.addPage();
-          pdf.addImage(canvas.toDataURL('image/jpeg', .98), 'JPEG', 14, 16, size.inner.width, canvas.height * size.inner.width / canvas.width);
+        const batchStart = pages[page].start;
+        for (; page < last; page++) {
+          const top = Math.round((pages[page].start - batchStart) * 2);
+          const bottom = Math.min(canvas.height, Math.round((pages[page].end - batchStart) * 2));
+          const slice = document.createElement('canvas');
+          slice.width = canvas.width;
+          slice.height = bottom - top;
+          slice.getContext('2d').drawImage(canvas, 0, top, slice.width, slice.height, 0, 0, slice.width, slice.height);
+          if (!pdf) {
+            worker.prop.canvas = slice;
+            worker = worker.toPdf();
+            await worker;
+            pdf = await worker.get('pdf');
+          } else {
+            pdf.addPage();
+            pdf.addImage(slice.toDataURL('image/jpeg', .98), 'JPEG', 14, 16, size.inner.width, slice.height * size.inner.width / slice.width);
+          }
+          slice.width = slice.height = 0;
         }
         canvas.width = canvas.height = 0;
       }

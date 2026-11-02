@@ -349,8 +349,6 @@ function render_page(string $title, string $content, ?array $user = null, string
     }
     if ($includeMarkdown) {
         echo "<link rel='stylesheet' href='" . htmlspecialchars(site_asset_url('vendor/github-markdown.min.css'), ENT_QUOTES, 'UTF-8') . "'>";
-        echo "<link rel='stylesheet' href='" . htmlspecialchars(site_asset_url('vendor/katex.min.css'), ENT_QUOTES, 'UTF-8') . "'>";
-        echo "<link rel='stylesheet' href='" . htmlspecialchars(site_asset_url('vendor/highlight.min.css'), ENT_QUOTES, 'UTF-8') . "'>";
     }
     echo "<link rel='stylesheet' href='" . htmlspecialchars(site_asset_url('controls.css'), ENT_QUOTES, 'UTF-8') . "'>";
     $styleUrl = htmlspecialchars(site_asset_url('style.css'), ENT_QUOTES, 'UTF-8');
@@ -368,7 +366,7 @@ function render_page(string $title, string $content, ?array $user = null, string
     if ($layout === 'share') {
         echo "<style id='sps-share-font-force'>body.layout-share .markdown-body,body.layout-share .markdown-body :where(p,li,a,strong,em,del,mark,h1,h2,h3,h4,h5,h6,blockquote,td,th){font-family:var(--font-markdown) !important;}</style>";
     }
-    if ($layout === 'share') {
+    if ($layout === 'share' && !empty($options['pdf_export'])) {
         $pdfStyleUrl = htmlspecialchars(site_asset_url('pdf-export.css'), ENT_QUOTES, 'UTF-8');
         echo "<link rel='stylesheet' href='{$pdfStyleUrl}'>";
     }
@@ -445,13 +443,11 @@ function render_page(string $title, string $content, ?array $user = null, string
         echo "<script defer src='" . htmlspecialchars(site_asset_url('vendor/markdown-it-ins.min.js'), ENT_QUOTES, 'UTF-8') . "'></script>";
         echo "<script defer src='" . htmlspecialchars(site_asset_url('vendor/markdown-it-container.min.js'), ENT_QUOTES, 'UTF-8') . "'></script>";
         echo "<script defer src='" . htmlspecialchars(site_asset_url('vendor/markdown-it-anchor.min.js'), ENT_QUOTES, 'UTF-8') . "'></script>";
-        echo "<script defer src='" . htmlspecialchars(site_asset_url('vendor/katex.min.js'), ENT_QUOTES, 'UTF-8') . "'></script>";
-        echo "<script defer src='" . htmlspecialchars(site_asset_url('vendor/highlight.min.js'), ENT_QUOTES, 'UTF-8') . "'></script>";
     }
     echo "<script defer src='" . htmlspecialchars(site_asset_url('controls.js'), ENT_QUOTES, 'UTF-8') . "'></script>";
     $appJsUrl = htmlspecialchars(site_asset_url('app.js'), ENT_QUOTES, 'UTF-8');
     $diagramVersions = [];
-    foreach (['mermaid.min.js', 'echarts.min.js', 'abcjs-basic-min.js', 'viz.js', 'full.render.js', 'raphael.min.js', 'flowchart.min.js'] as $file) {
+    foreach (['mermaid.min.js', 'echarts.min.js', 'abcjs-basic-min.js', 'viz.js', 'full.render.js', 'raphael.min.js', 'flowchart.min.js', 'katex.min.js', 'highlight.min.js', 'katex.min.css', 'highlight.min.css'] as $file) {
         $diagramVersions[$file] = site_asset_version('vendor/' . $file);
     }
     $versionJson = htmlspecialchars(json_encode($diagramVersions, JSON_UNESCAPED_SLASHES), ENT_QUOTES, 'UTF-8');
@@ -464,7 +460,8 @@ function render_page(string $title, string $content, ?array $user = null, string
     }
     if ($layout === 'share') {
         $pdfJsUrl = htmlspecialchars(site_asset_url('pdf-export.js'), ENT_QUOTES, 'UTF-8');
-        echo "<script defer src='{$pdfJsUrl}'></script>";
+        $pdfCssUrl = htmlspecialchars(site_asset_url('pdf-export.css'), ENT_QUOTES, 'UTF-8');
+        echo "<script defer src='{$pdfJsUrl}' data-pdf-css='{$pdfCssUrl}'></script>";
     }
     echo "</body>";
     echo "</html>";
