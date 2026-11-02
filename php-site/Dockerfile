@@ -6,7 +6,7 @@ COPY scripts/minify-css.cjs /build/minify-css.cjs
 COPY php-site/assets/ /build/assets/
 RUN set -e; for f in app.js controls.js pdf-export.js pdf-text-layer.js; do \
       ./node_modules/.bin/terser "assets/$f" --compress --mangle --output "assets/$f.min" && mv "assets/$f.min" "assets/$f"; \
-    done && node /build/minify-css.cjs assets/style.css assets/controls.css assets/pdf-export.css
+    done && node /build/minify-css.cjs assets/style.css assets/reader-style.css assets/controls.css assets/pdf-export.css
 
 FROM php:8.3.36-fpm-alpine
 

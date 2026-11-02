@@ -74,7 +74,7 @@ window.addEventListener('load', async () => {
         print('Chromium Mermaid passed: flowchart, sequence, Gantt and class diagrams render as SVG.')
     else:
         css = [(root / 'php-site/assets/vendor/github-markdown.min.css').as_uri(),
-               (root / 'php-site/assets/style.css').as_uri(),
+               (root / 'php-site/assets/reader-style.css').as_uri(),
                (root / 'php-site/assets/pdf-export.css').as_uri()]
         links = ''.join('<link rel="stylesheet" href="' + html.escape(url, quote=True) + '">' for url in css)
         headings = ''.join(f'<h{n}>Heading {n} <strong>数学标题与公式 x²</strong></h{n}>' for n in range(1, 7))

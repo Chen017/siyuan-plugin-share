@@ -29,6 +29,7 @@ jobs:
         run: npm install --prefix "$RUNNER_TEMP/reader-test" --no-save --ignore-scripts jsdom@27.4.0 jspdf@4.0.0
       - name: Check plugin and reader syntax and JSON manifests
         run: |
+          node scripts/build-reader-css.cjs --check
           for file in index.js php-site/assets/*.js; do node --check "$file"; done
           node -e "for (const path of ['plugin.json', 'i18n/en_US.json', 'i18n/zh_CN.json']) JSON.parse(require('node:fs').readFileSync(path, 'utf8'))"
       - name: Verify plugin lifecycle, Markdown and reader interaction

@@ -351,7 +351,7 @@ function render_page(string $title, string $content, ?array $user = null, string
         echo "<link rel='stylesheet' href='" . htmlspecialchars(site_asset_url('vendor/github-markdown.min.css'), ENT_QUOTES, 'UTF-8') . "'>";
     }
     echo "<link rel='stylesheet' href='" . htmlspecialchars(site_asset_url('controls.css'), ENT_QUOTES, 'UTF-8') . "'>";
-    $styleUrl = htmlspecialchars(site_asset_url('style.css'), ENT_QUOTES, 'UTF-8');
+    $styleUrl = htmlspecialchars(site_asset_url($layout === 'share' ? 'reader-style.css' : 'style.css'), ENT_QUOTES, 'UTF-8');
     echo "<link rel='stylesheet' href='{$styleUrl}'>";
     $siteCustomCssEnabled = get_bool_setting('site_custom_css_enabled', true);
     $siteCustomCss = (string)get_setting('site_custom_css', '');

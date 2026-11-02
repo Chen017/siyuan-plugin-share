@@ -178,7 +178,7 @@ class Regression(AdminShareTests, SelectedFixTests, PdfCookieTests, PdfReleaseTe
         self.assertIn('data-reader-show-tree', welcome)
         self.assertIn('reader-mobile-bar', text)
         self.assertNotIn('share-side-trigger', text)
-        self.assertIn('/assets/style.css', text)
+        self.assertIn('/assets/reader-style.css', text)
         status, _, body = Client(self.base).request('/s/' + share['slug'] + '?partial=1')
         self.assertEqual(status, 200)
         self.assertIn('data-notebook-welcome', json.loads(body)['data']['html'])

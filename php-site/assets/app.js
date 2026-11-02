@@ -1477,6 +1477,7 @@
   const getShareAssetsBaseUrl = () => {
     const source =
       document.querySelector("script[src*='/assets/app.js']")?.src ||
+      document.querySelector("link[href*='/assets/reader-style.css']")?.href ||
       document.querySelector("link[href*='/assets/style.css']")?.href ||
       "";
     if (!source) return "";
@@ -1792,8 +1793,8 @@
       assetsBaseUrl,
     );
     const siteCssUrl = resolveShareAssetUrl(
-      "link[href*='/assets/style.css']",
-      "style.css",
+      "link[href*='/assets/reader-style.css'],link[href*='/assets/style.css']",
+      "reader-style.css",
       assetsBaseUrl,
     );
     const scriptEntries = getShareMarkdownScriptEntries(assetsBaseUrl);
