@@ -92,7 +92,7 @@ PR 的两套回归与合并后的部署回归分别验证 PR 提交和实际 mai
 | 隐私保护：图表源码不应自动发给外部渲染服务；图表加载需保留公式、Markdown 和 PDF 表现。 | `tests/frontend.cjs` 及 `tests/pdf-*.cjs`。 |
 | 旧版 Markdown 的特制链接与引用、旧版 Mermaid 的异常 Gantt 日期可能卡住渲染线程；已升级修复版本，来源和哈希保存在 `php-site/assets/vendor/RENDERER_DEPENDENCIES.md`。 | `tests/render-security.cjs` 对实际库执行带超时的异常输入，真实 PDF 浏览器测试覆盖公式和 Mermaid。 |
 | PDF 可见排版与可选择文字层必须对齐；生成使用隔离容器和有限并发。 | `tests/pdf-text-layer.cjs`、`tests/pdf-text-layer.py`、`tests/pdf-browser.cjs`、`tests/pdf-long.cjs`。 |
-| KaTeX 大括号等可伸缩分隔符的连接段在导出时不能出现断缝；六级标题间距在阅读器和 PDF 中须保持一致。 | `tests/pdf-delimiter.cjs`、`tests/pdf-math.cjs`、`tests/heading-spacing.cjs`。 |
+| KaTeX 大型大括号与分组括号使用单个连续轮廓，网页及导出均不能出现断缝或接头凸起；六级标题间距在阅读器和 PDF 中须保持一致。 | `tests/pdf-delimiter.cjs`、`tests/pdf-math.cjs`、`tests/heading-spacing.cjs`。升级 KaTeX 后运行 `node scripts/katex-continuous-delimiters.cjs`，如果上游结构改变，脚本会拒绝修改，需要重新审查。轮廓来自 KaTeX Size4 字形，许可见 `php-site/assets/vendor/KaTeX.LICENSE.txt`。 |
 | 私有权限的源码检出不能让 Nginx 无法读取镜像内静态文件；上传必须继续经授权路由。 | Docker 构建时规范文件权限；`tests/run.py --docker` 检查容器与 Nginx。 |
 | 原先已有 Tag 可指向不同提交，而 ZIP 却按当前提交生成；发布必须校验两者一致。 | `tests/release-tag.py` 使用真实轻量和注释 Tag。 |
 | CI 曾在检查阅读器按钮对齐时出现间歇性失败；字体或布局变化可能发生在两次位置读取之间。浏览器测试等待字体并在同一帧读取两个按钮，仍要求实际位置和高度对齐。 | `tests/pdf-browser.cjs` 检查宽屏和窄屏布局。 |

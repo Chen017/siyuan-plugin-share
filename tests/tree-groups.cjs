@@ -20,7 +20,9 @@ const {chromium} = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright')
     const pixel = value => { const canvas=document.createElement('canvas');canvas.width=canvas.height=1;const ctx=canvas.getContext('2d');ctx.fillStyle=value;ctx.fillRect(0,0,1,1);return [...ctx.getImageData(0,0,1,1).data].slice(0,3).map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4;}); };
     const luminance = rgb => .2126*rgb[0]+.7152*rgb[1]+.0722*rgb[2];
     const selected = groups.slice(0,12).map(g=>{const item=g.querySelector('[data-level="2"] .kb-tree-item');item.classList.add('is-active');const style=getComputedStyle(item), bg=style.backgroundColor, fg=luminance(pixel(style.color)), back=luminance(pixel(bg));item.focus({preventScroll:true});const focusBg=getComputedStyle(item).backgroundColor, focusShadow=getComputedStyle(item).boxShadow;item.blur();item.classList.remove('is-active');return {bg,focusBg,focusShadow,contrast:(Math.max(fg,back)+.05)/(Math.min(fg,back)+.05)};});
-    return {colors,line,sticky,second,nestedTop,rowHeight,paneRadius,padding,paddingTop,selected,header:getComputedStyle(headers[0]).backgroundColor,panel:getComputedStyle(pane.parentElement).backgroundColor};
+    const items=[...groups[0].querySelectorAll('[data-level="2"] .kb-tree-item')];
+    const first=items[0].getBoundingClientRect(),next=items[1].getBoundingClientRect();
+    return {colors,line,sticky,second,nestedTop,rowHeight,paneRadius,padding,paddingTop,selected,highlightHeight:first.height,highlightGap:next.top-first.bottom,header:getComputedStyle(headers[0]).backgroundColor,panel:getComputedStyle(pane.parentElement).backgroundColor};
    });
    assert(result.colors.every(c=>c==='rgba(0, 0, 0, 0)'), `${scheme} course groups have no background`);
    assert.equal(new Set(result.line.slice(0,12)).size,12,`${scheme} ordered branch palette`);
@@ -29,6 +31,8 @@ const {chromium} = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright')
    assert(Math.abs(result.nestedTop-result.rowHeight)<2, `${scheme} subgroup sticks below its course heading: ${JSON.stringify(result)}`);
    assert.equal(parseFloat(result.padding),0,`${scheme} no group bottom spacing`);
    assert.equal(parseFloat(result.paddingTop),0,`${scheme} no group top spacing`);
+   assert.equal(result.highlightHeight,result.rowHeight-4,`${scheme} highlight inset keeps the row geometry`);
+   assert.equal(result.highlightGap,4,`${scheme} adjacent active/focused highlights have a 4px gap`);
    for (const [i,item] of result.selected.entries()) {
     assert.notEqual(item.bg,'rgba(0, 0, 0, 0)',`${scheme} group ${i} selected state remains visible`);
     assert.equal(item.focusBg,item.bg,`${scheme} group ${i} focus matches selection color`);

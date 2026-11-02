@@ -4481,7 +4481,7 @@ html, body, body * { scrollbar-color: color-mix(in srgb, var(--muted) 35%, trans
 .kb-tree-children:not([data-level="0"]) { padding-left: var(--tree-indent); margin-block: 0; }
 .kb-tree .kb-tree .kb-tree .kb-tree .kb-tree .kb-tree-children { --tree-indent: 12px; padding-left: var(--tree-indent); }
 .kb-tree-row { height: var(--tree-row-height); min-height: var(--tree-row-height); align-items: center; }
-.kb-tree-item, .kb-tree-folder { height: var(--tree-row-height); min-height: var(--tree-row-height); align-items: center; padding-block: 0; }
+.kb-tree-item, .kb-tree-folder { height: calc(var(--tree-row-height) - 4px); min-height: calc(var(--tree-row-height) - 4px); align-items: center; padding-block: 0; }
 .kb-tree-toggle, .kb-tree-spacer { position: relative; width: var(--tree-toggle-width); height: var(--tree-row-height); flex: 0 0 var(--tree-toggle-width); margin: 0; }
 .kb-tree-children:not([data-level="0"]) > .kb-tree-node::before { content: ''; position: absolute; left: calc(var(--tree-toggle-width)/2 - var(--tree-indent)); top: 0; bottom: 0; width: 1px; background: var(--tree-line); pointer-events: none; }
 .kb-tree-children:not([data-level="0"]) > .kb-tree-node::after { content: ''; position: absolute; box-sizing: border-box; left: calc(var(--tree-toggle-width)/2 - var(--tree-indent)); top: 0; width: var(--tree-indent); height: calc(var(--tree-row-height)/2 + .5px); border-left: 1px solid var(--tree-line); border-bottom: 1px solid var(--tree-line); border-bottom-left-radius: 9px; pointer-events: none; }

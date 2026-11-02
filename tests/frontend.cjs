@@ -123,6 +123,16 @@ async function page(raw, {failMermaid = false, slowGraphviz = false} = {}) {
     assert(body.lastElementChild.textContent.includes('**'), 'Escaped markers remain literal');
   } finally { boldMath.close(); }
 
+  const curlyMath = await page(String.raw`The frame satisfies $\begin{cases}e_1'=\kappa e_2\\e_2'=-\kappa e_1+\tau e_3\\e_3'=-\tau e_2\end{cases}$.`);
+  try {
+    const body=curlyMath.w.document.querySelector('.markdown-body');
+    const delimiter=body.querySelector('.delimsizing.mult');
+    assert.equal(delimiter.querySelectorAll('svg').length,1,'Markdown sanitization keeps the single curly SVG');
+    assert(delimiter.querySelector('path').getAttribute('d').endsWith(' Z'),'The complete continuous outline survives sanitization');
+    assert(!delimiter.querySelector('.delimsizinginner'),'No font pieces remain in the large brace');
+    assert(curlyMath.w.document.querySelector('.markdown-source').value.includes('cases'),'The original formula source remains intact');
+  } finally { curlyMath.close(); }
+
   const images = await page([
     '<img src="/assets/sized.png" style="width: 400px; height: 300px" onerror="alert(1)">',
     '<img src="/assets/width.png" style="width: 280px">',

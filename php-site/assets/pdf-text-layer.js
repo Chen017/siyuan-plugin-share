@@ -83,11 +83,6 @@
       image.style.setProperty('width', `${rect.width}px`, 'important');
       image.style.setProperty('height', `${rect.height}px`, 'important');
       image.style.setProperty('max-width', 'none', 'important');
-      if (svg.closest('.delimsizing.mult')) {
-        // The extender meets font glyphs at fractional pixel boundaries.
-        // html2canvas rounds those layers independently; overlap their ends.
-        image.style.transform = `scaleY(${(rect.height + 4) / rect.height})`;
-      }
       svg.replaceWith(image);
       return image;
     }).filter(Boolean);
