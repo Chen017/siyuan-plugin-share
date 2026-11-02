@@ -25,7 +25,7 @@ Generated reader CSS is rebuilt from the shared stylesheet. Plugin packaging tak
 
 ## Verification record
 
-Passed during implementation: 76 PHP runtime checks; targeted admin Undo, HTTPS configuration and search integration; existing DOM/plugin/render-security/controls/footnotes regressions; packaging and documentation; real Chromium and Edge PDF/UI acceptance; both-theme heading and tree tests; deployment guard simulation. Final full local regression and PR Actions results are recorded in the delivery response after completion.
+Passed during implementation: 78 PHP runtime checks; targeted admin Undo, HTTPS configuration and search integration; existing DOM/plugin/render-security/controls/footnotes regressions; packaging and documentation; real Chromium and Edge PDF/UI acceptance; both-theme heading and tree tests; deployment guard simulation. The full local run passed 68 cases with only the Docker/Nginx case skipped locally; the final PR PHP Actions ran all 68 in Docker successfully. Both feature PR Actions passed before merge.
 
 Edge's internal downloads-hub has an empty Playwright Page URL. The no-extra-application-pages assertion now resolves real browser-level CDP target URLs and excludes only actual edge:// or chrome:// targets in the reader context. Unknown blank pages remain counted. The unrelated MIME experiment was reverted.
 
@@ -39,4 +39,6 @@ These limitations do not imply a screen-reader certification or a measured anima
 
 ## Merge and deployment gate
 
-PR #10 must pass both existing Actions suites on its final revision before merge. Main's deployment workflow repeats regression for the actual main commit, verifies container health, unchanged core-data fingerprints and SQLite integrity. The explicit apply_public_url deployment option configures the intended HTTPS URL after the normal preservation checks. Live reader/PDF/English-title checks and the final screenshot refresh complete delivery; never treat the initial partial commits as completion.
+PR #10 passed both Actions suites and merged as 20f7810. Deployment 41524316418 passed regression, service health, core-data preservation and SQLite integrity. Explicit HTTPS configuration deployment 41524405529 also completed successfully without changing PDF limits. Live checks confirmed the English title, mathematical semantics, PDF filter/count/clear and missing-share language; all three existing README screenshots were refreshed in place.
+
+Live dark-mode inspection found that root-level semantic aliases retained light values when the reader overrides its palette on body. The final verification branch moves aliases to the actual page-theme scope and adds panel/control text-contrast assertions to every browser theme/viewport combination. It also unifies the legacy search fallback descriptions. This final branch must pass both existing Actions suites before merge; the subsequent main deployment and live dark-mode recheck complete delivery.

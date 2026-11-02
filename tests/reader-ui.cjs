@@ -191,6 +191,7 @@ const payload = title => ({ok: true, json: async () => ({code: 0, data: {html: m
     const link = results.querySelector('a');
     assert(link && !link.hasAttribute('target'), 'Results preserve current-tab navigation');
     assert(!link.textContent.includes('$x^2$'), 'Search snippets do not expose math delimiters');
+    assert(link.textContent.includes('Formula') && !link.textContent.includes('[formula]'), 'Legacy snippet fallback uses the same readable formula description');
     input.dispatchEvent(new search.w.KeyboardEvent('keydown', {key: 'ArrowDown', bubbles: true}));
     assert(link.classList.contains('is-keyboard-active'));
     search.w.fetch = async () => payload('课程 A');

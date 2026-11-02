@@ -4551,7 +4551,7 @@ details[open] > summary::before { transform: rotate(45deg); }
 }
 
 /* Semantic layers share the existing light/dark palette. */
-:root { --canvas-bg: var(--bg); --content-bg: var(--surface); --sidebar-bg: var(--panel-bg); --overlay-bg: var(--surface); --input-bg: var(--surface-muted); }
+body:is(.layout-app,.layout-share,.layout-public,.layout-auth) { --canvas-bg: var(--bg); --content-bg: var(--surface); --sidebar-bg: var(--panel-bg); --overlay-bg: var(--surface); --input-bg: var(--surface-muted); }
 .layout-app .input, .layout-share .input { background: var(--input-bg); }
 .layout-app .admin-account .button.ghost { color: var(--muted); background: transparent; }
 .reader-icon { width: 18px; height: 18px; flex: none; }

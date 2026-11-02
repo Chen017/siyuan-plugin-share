@@ -5170,9 +5170,9 @@ const initImageViewer = () => {
       let html = '<ul class="kb-search-list">';
       results.forEach((r) => {
         const titleHtml = highlightText(r.title, query);
-        const snippet = String(r.snippet || "").replace(/\$\$[\s\S]*?\$\$|\$[^$\n]+\$/g, "[formula]")
-          .replace(/\${1,2}[^$]*$/g, "[formula]")
-          .replace(/!\[[^\]]*\]\([^)]*\)/g, "[image]").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+        const snippet = String(r.snippet || "").replace(/\$\$[\s\S]*?\$\$|\$[^$\n]+\$/g, "Formula")
+          .replace(/\${1,2}[^$]*$/g, "Formula")
+          .replace(/!\[[^\]]*\]\([^)]*\)/g, "Image").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
           .replace(/(?:\*\*|__|`|^#{1,6}\s)/g, "");
         const snippetHtml = highlightText(snippet, query);
         const pathHtml = r.hpath ? escapeHtml(r.hpath) : '';

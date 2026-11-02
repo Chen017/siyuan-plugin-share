@@ -3,6 +3,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {chromium} = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright');
+const textContrast = node => {
+ const style=getComputedStyle(node),canvas=document.createElement('canvas');canvas.width=canvas.height=1;const ctx=canvas.getContext('2d');
+ const luminance=color=>{ctx.clearRect(0,0,1,1);ctx.fillStyle=color;ctx.fillRect(0,0,1,1);const v=[...ctx.getImageData(0,0,1,1).data].slice(0,3).map(x=>{x/=255;return x<=.04045?x/12.92:((x+.055)/1.055)**2.4;});return .2126*v[0]+.7152*v[1]+.0722*v[2];};
+ const foreground=luminance(style.color),background=luminance(style.backgroundColor);return (Math.max(foreground,background)+.05)/(Math.min(foreground,background)+.05);
+};
 (async()=>{
  const [shareUrl, output]=process.argv.slice(2), fixture=JSON.parse(fs.readFileSync(0,'utf8'));
  const browser=await chromium.launch({executablePath:process.env.SIYUAN_BROWSER_EXECUTABLE||undefined,headless:true});
@@ -49,6 +54,8 @@ const {chromium} = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright')
    await page.locator('[data-pdf-export-link]').click();
    const modal=page.locator('dialog.pdf-export-dialog');await modal.waitFor();
    const options=page.frameLocator('[data-pdf-dialog-frame]');await options.locator('[data-pdf-export-form][data-export-state]').waitFor();
+   assert(await modal.evaluate(textContrast)>=4.5, `${colorScheme}/${width} PDF panel text contrast`);
+   assert(await options.getByRole('combobox',{name:'Export scope',exact:true}).evaluate(textContrast)>=4.5, `${colorScheme}/${width} export control text contrast`);
    await options.locator('.pdf-export-scroll').evaluate(node=>{
     const filler=document.createElement('div');filler.dataset.layoutFixture='';
     filler.textContent='A long document selection needs one main scroll owner. '.repeat(150);node.append(filler);
