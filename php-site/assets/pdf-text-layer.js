@@ -86,7 +86,7 @@
       if (svg.closest('.delimsizing.mult')) {
         // The extender meets font glyphs at fractional pixel boundaries.
         // html2canvas rounds those layers independently; overlap their ends.
-        image.style.transform = `scaleY(${(rect.height + 2) / rect.height})`;
+        image.style.transform = `scaleY(${(rect.height + 4) / rect.height})`;
       }
       svg.replaceWith(image);
       return image;
