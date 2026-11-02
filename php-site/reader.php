@@ -291,6 +291,7 @@ function render_doc_tree(array $nodes, string $slug, ?string $activeId = null, i
         }
         $group = $groupNotebookRoots && $level === 0 && $hasChildren;
         if ($group) $nodeClass .= ' kb-tree-group';
+        if ($groupNotebookRoots && $level === 1 && $hasChildren) $nodeClass .= ' kb-tree-subgroup';
         $groupAttr = $group ? ' data-tree-group="' . ($groupIndex++ % 12) . '"' : '';
         $html .= '<li class="' . $nodeClass . '"' . $groupAttr . ' data-tree-key="' . htmlspecialchars($nodeKey) . '">';
         $html .= '<div class="kb-tree-row">';

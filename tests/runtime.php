@@ -25,12 +25,14 @@ function check(bool $condition, string $message): void {
 $treeFixture = [];
 for ($i = 0; $i < 14; $i++) {
     $treeFixture[] = ['title' => "Course $i", 'doc' => ['doc_id' => "course-$i", 'title' => "Course $i"],
-        'children' => [['title' => 'Lesson', 'doc' => ['doc_id' => "lesson-$i", 'title' => 'Lesson'], 'children' => []]]];
+        'children' => [['title' => 'Lesson', 'doc' => ['doc_id' => "lesson-$i", 'title' => 'Lesson'],
+            'children' => [['title' => 'Note', 'doc' => ['doc_id' => "note-$i", 'title' => 'Note'], 'children' => []]]]]];
 }
 array_splice($treeFixture, 1, 0, [[ 'title' => 'Standalone', 'doc' => ['doc_id' => 'standalone', 'title' => 'Standalone'], 'children' => [] ]]);
 $groupedTree = render_doc_tree($treeFixture, 'fixture', null, 0, '', '', true);
 preg_match_all('/data-tree-group="(\d+)"/', $groupedTree, $groupMatches);
 check($groupMatches[1] === array_map('strval', [0,1,2,3,4,5,6,7,8,9,10,11,0,1]), 'Only notebook root groups receive ordered, cycling colors');
+check(substr_count($groupedTree, 'kb-tree-subgroup') === 14, 'Second-level nodes with children support nested sticky headings');
 check(!str_contains(render_doc_tree($treeFixture, 'fixture'), 'data-tree-group='), 'Document shares do not acquire notebook group styling');
 
 check(

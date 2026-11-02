@@ -4502,33 +4502,38 @@ html, body, body * { scrollbar-color: color-mix(in srgb, var(--muted) 35%, trans
 .kb-tree-group[data-tree-group="10"] { --group-accent: #a692a5; }
 .kb-tree-group[data-tree-group="11"] { --group-accent: #a69b90; }
 .kb-tree-group {
-  --group-surface: color-mix(in srgb, var(--group-accent) 11%, var(--panel-bg));
   --group-line: color-mix(in srgb, var(--group-accent) 70%, var(--panel-bg));
-  background: var(--group-surface);
-  border-radius: 9px;
-  margin-block: 4px;
 }
+.kb-side-body:has(.kb-tree-group) { scroll-padding-top: 72px; }
 .kb-tree-group .kb-tree { --tree-line: var(--group-line); }
 .kb-tree-group .kb-tree-spacer::after { background: var(--group-line); }
-body.layout-share .kb-tree-group .kb-tree-item.is-active {
+body.layout-share .kb-tree-group .kb-tree-item:is(.is-active, :focus, :active) {
   background: color-mix(in srgb, var(--group-accent) 28%, var(--panel-bg));
   color: color-mix(in srgb, var(--group-accent) 32%, #192126);
 }
+body.layout-share .kb-tree-group .kb-tree-item:focus { box-shadow: inset 2px 0 var(--group-line); }
 .kb-tree-group > .kb-tree-row {
   position: sticky;
   top: 0;
   z-index: 3;
-  background: var(--group-surface);
+  background: var(--panel-bg);
+  border-radius: 9px;
+}
+.kb-tree-group .kb-tree-subgroup > .kb-tree-row {
+  position: sticky;
+  top: var(--tree-row-height);
+  z-index: 2;
+  background: var(--panel-bg);
   border-radius: 9px;
 }
 @media (prefers-color-scheme: dark) {
-  .kb-tree-group { --group-surface: color-mix(in srgb, var(--group-accent) 12%, var(--panel-bg)); --group-line: color-mix(in srgb, var(--group-accent) 65%, var(--panel-bg)); }
-  body.layout-share .kb-tree-group .kb-tree-item.is-active {
+  .kb-tree-group { --group-line: color-mix(in srgb, var(--group-accent) 65%, var(--panel-bg)); }
+  body.layout-share .kb-tree-group .kb-tree-item:is(.is-active, :focus, :active) {
     background: color-mix(in srgb, var(--group-accent) 30%, var(--panel-bg));
     color: color-mix(in srgb, var(--group-accent) 38%, #fff);
   }
 }
-@media(max-width:960px), (pointer:coarse) { .kb-tree { --tree-row-height:44px; --tree-toggle-width: 32px; } }
+@media(max-width:960px), (pointer:coarse) { .kb-tree { --tree-row-height:44px; --tree-toggle-width: 32px; } .kb-side-body:has(.kb-tree-group) { scroll-padding-top: 88px; } }
 .notebook-actions > .button[data-reader-resume] { max-width: 100%; align-items: baseline; white-space: normal; line-height: 1.5; overflow-wrap: anywhere; flex-wrap: wrap; gap: 4px 8px; }
 .notebook-actions > .button[data-reader-resume] > span { min-width: 0; overflow-wrap: anywhere; }
 .notebook-actions > .button[data-reader-resume]:hover { background: var(--surface-muted); }
