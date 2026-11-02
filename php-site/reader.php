@@ -426,10 +426,10 @@ function route_share(string $slug, ?string $docId = null): void {
         $content .= '<div class="share-gate">';
         $content .= '<div class="share-gate-note">This share is password protected.</div>';
         if ($error) {
-            $content .= '<div class="alert error">' . htmlspecialchars($error) . '</div>';
+            $content .= '<div class="alert error" id="share-password-error" role="alert">' . htmlspecialchars($error) . '</div>';
         }
         $content .= '<form method="post" class="share-gate-form">';
-        $content .= '<input class="input" type="password" name="share_password" placeholder="Enter the share password" required>';
+        $content .= '<label for="share-password">Share password</label><div class="share-password-control"><input class="input" id="share-password" type="password" name="share_password" autocomplete="current-password"' . ($error ? ' aria-invalid="true" aria-describedby="share-password-error"' : '') . ' required><button type="button" class="button" data-share-password-toggle aria-controls="share-password" aria-pressed="false">Show password</button></div>';
         $content .= '<button class="button primary" type="submit">Unlock</button>';
         $content .= '</form></div></div></div>';
         render_page($shareTitleRaw, $content, null, '', ['layout' => 'share']);

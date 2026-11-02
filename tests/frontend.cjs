@@ -90,6 +90,9 @@ async function page(raw, {failMermaid = false, slowGraphviz = false} = {}) {
   try {
     assert.deepEqual(plain.requests, [], 'Ordinary math notes do not load diagram engines');
     assert(plain.w.document.querySelector('.katex'), 'Math still renders');
+    assert(plain.w.document.querySelector('.katex math'), 'Generated mathematical semantics survive sanitization');
+    assert(plain.w.document.querySelector('.katex annotation').textContent.includes('x^2'));
+    assert.equal(plain.w.document.querySelector('.image-viewer').getAttribute('aria-modal'), 'true');
     assert.equal(plain.w.document.querySelector('[data-share-tab]').getAttribute('aria-pressed'), 'true');
     assert.equal(plain.w.document.querySelector('[data-share-tab]').hasAttribute('aria-selected'), false);
     const heading = plain.w.document.querySelector('.markdown-body h1');
@@ -98,6 +101,27 @@ async function page(raw, {failMermaid = false, slowGraphviz = false} = {}) {
     plain.w.document.querySelector('.share-toc-link').click();
     assert.equal(plain.w.document.activeElement, heading, 'TOC moves keyboard focus to its real target');
     assert.equal(plain.w.document.querySelector('[data-viewer-download]').tagName, 'BUTTON');
+    const picture = plain.w.document.createElement('img');
+    picture.alt = 'Keyboard image'; picture.src = '/image.png';
+    plain.w.document.querySelector('.markdown-body').append(picture);
+    await delay(20);
+    assert.equal(picture.tabIndex, 0);
+    picture.focus();
+    picture.dispatchEvent(new plain.w.KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+    const viewer = plain.w.document.querySelector('.image-viewer');
+    const close = viewer.querySelector('button[data-viewer-close]');
+    assert.equal(viewer.hidden, false);
+    assert.equal(plain.w.document.activeElement, close);
+    assert.equal(close.parentElement.className, 'image-viewer-ui');
+    assert(viewer.querySelector('details [data-viewer-rotate-cw]'));
+    assert.equal(viewer.querySelector('.image-viewer-thumb').getAttribute('aria-pressed'), 'true');
+    const last = viewer.querySelector('.image-viewer-thumb'); last.focus();
+    last.dispatchEvent(new plain.w.KeyboardEvent('keydown', {key: 'Tab', bubbles: true, cancelable: true}));
+    assert.equal(plain.w.document.activeElement, close);
+    close.click();
+    await delay(250);
+    assert.equal(plain.w.document.activeElement, picture);
+    assert.equal(viewer.hidden, true);
     assert.equal(plain.renders(), 1);
     plain.w.dispatchEvent(new plain.w.Event('load'));
     plain.w.dispatchEvent(new plain.w.Event('sps:markdown-ready'));
@@ -185,6 +209,12 @@ async function page(raw, {failMermaid = false, slowGraphviz = false} = {}) {
       if (language === 'plantuml') assert(fixture.w.document.querySelector('.md-diagram').textContent.includes(source));
     } finally { fixture.close(); }
   }
+  const untrustedMath = await page('<math><mtext>UNTRUSTED_MATH</mtext></math>\n\n<span data-sps-trusted-math="fake">FAKE_PLACEHOLDER</span>\n\n$x^2$');
+  try {
+    assert.equal(untrustedMath.w.document.querySelectorAll('math').length, 1, 'Only generated mathematical content enters the page');
+    assert(!untrustedMath.w.document.querySelector('.markdown-body').textContent.includes('FAKE_PLACEHOLDER'));
+    assert.equal(untrustedMath.w.document.querySelector('.katex math').querySelector('annotation').textContent, 'x^2');
+  } finally { untrustedMath.close(); }
   const mixed = await page('```echarts\n{"series":[]}\n```\n\n```dot\ndigraph { A -> B }\n```', {slowGraphviz: true});
   try {
     assert(mixed.events.indexOf('echarts-rendered') >= 0);

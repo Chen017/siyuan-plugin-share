@@ -4265,6 +4265,9 @@ body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .notebook-w
   .kb-search-input { min-height: 44px; font-size: 16px; }
 }
 @media (max-width:480px) {
+  body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-body h2 { line-height: 1.4; margin-top: 1.5em; margin-bottom: .6em; }
+  body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-body h3 { line-height: 1.4; margin-top: 1.25em; margin-bottom: .55em; }
+  body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-body :is(h1,h2,h3,h4,h5,h6) + :is(h1,h2,h3,h4,h5,h6) { margin-top: .7em; }
   .kb-main { padding-inline: 22px; }
   body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .notebook-welcome > .kb-title { font-size: 34px; }
   .notebook-intro { font-size: 1rem; }
@@ -4529,3 +4532,20 @@ details[open] > summary::before { transform: rotate(45deg); }
   body.layout-share .reader-frame :is(.kb-sidebar,.share-toc) { transition: none; }
 }
 @media(max-width:960px), print { .reader-sidebar-reopen { display: none; } }
+
+/* Stable media controls: close is independent of the wrapping action group. */
+.image-viewer-ui > button[data-viewer-close] { position: absolute; z-index: 3; top: max(12px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); }
+.image-viewer-actions { right: 64px; max-width: calc(100% - 76px); gap: 6px; }
+.image-viewer-more { position: relative; }
+.image-viewer-more summary { padding: 10px; cursor: pointer; list-style: none; }
+.image-viewer-more[open] { background: var(--surface); border-radius: 10px; }
+.image-viewer-more summary:focus-visible, .markdown-body img[role="button"]:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+.share-password-control { display: flex; flex-wrap: wrap; gap: 8px; }
+.share-password-control input { flex: 1 1 160px; min-width: 0; }
+@media (max-width: 960px) {
+  .share-toc-body, .share-toc-list { width: 100%; min-width: 0; max-width: 100%; }
+  .share-toc-link, .share-toc-text { white-space: normal; overflow-wrap: anywhere; }
+}
+@media (pointer: coarse) {
+  .sps-select-trigger, .sps-select-option, .sps-date-trigger, .sps-control-panel button { min-height: 44px; }
+}

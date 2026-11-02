@@ -30,6 +30,18 @@ function page({mobile = false, reduced = false, record, welcome = true, beforeEv
 }
 const payload = title => ({ok: true, json: async () => ({code: 0, data: {html: main(title), docId: title === '课程 A' ? 'a' : 'b', title}})});
 (async () => {
+  const gate = page({beforeEval(w) {
+    w.document.body.insertAdjacentHTML('beforeend', '<label for="share-password">Share password</label><input id="share-password" type="password" value="secret"><button data-share-password-toggle aria-controls="share-password" aria-pressed="false">Show password</button>');
+  }});
+  try {
+    const button = gate.doc.querySelector('[data-share-password-toggle]');
+    button.click();
+    assert.equal(gate.doc.getElementById('share-password').type, 'text');
+    assert.equal(button.getAttribute('aria-pressed'), 'true');
+    button.click();
+    assert.equal(gate.doc.getElementById('share-password').type, 'password');
+    assert.equal(gate.doc.getElementById('share-password').value, 'secret');
+  } finally { gate.close(); }
   const p = page({mobile: true, record: {id: 'b', y: 640, time: Date.now()}});
   try {
     assert.equal(p.doc.querySelector('[data-reader-resume]').hidden, false);

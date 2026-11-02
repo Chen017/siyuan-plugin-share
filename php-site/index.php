@@ -12,7 +12,7 @@ if (file_exists(__DIR__ . '/config.example.php')) {
 }
 
 $config = [
-    'app_name' => '思源笔记分享',
+    'app_name' => 'SiYuan Share',
     'site_version' => '',
     'db_path' => __DIR__ . '/storage/app.db',
     'uploads_dir' => __DIR__ . '/uploads',
@@ -33,6 +33,10 @@ if (file_exists(__DIR__ . '/config.php')) {
 }
 if ($exampleVersion !== null) {
     $config['site_version'] = $exampleVersion;
+}
+// Existing installations retain config.php during upgrades.
+if (in_array($config['app_name'], ['思源分享', '思源笔记分享'], true)) {
+    $config['app_name'] = 'SiYuan Share';
 }
 
 $sessionDays = (int)($config['session_lifetime_days'] ?? 30);
@@ -334,13 +338,13 @@ function render_page(string $title, string $content, ?array $user = null, string
     if (!empty($options['pdf_embedded'])) $layoutClass .= ' pdf-export-embedded';
     $navKey = (string)($options['nav'] ?? '');
     echo "<!doctype html>";
-    $pageLanguage = in_array($layout, ['share', 'public', 'auth'], true) ? 'en' : 'zh-CN';
+    $pageLanguage = 'en';
     echo "<html lang='{$pageLanguage}'>";
     echo "<head>";
     echo "<meta charset='utf-8'>";
     echo "<meta name='viewport' content='width=device-width, initial-scale=1'>";
     echo "<title>{$pageTitle} - {$app}</title>";
-    $description = htmlspecialchars(mb_substr($title . ' - ' . $config['app_name'] . '，在线阅读与分享笔记、课程资料和学习记录。', 0, 160), ENT_QUOTES, 'UTF-8');
+    $description = htmlspecialchars(mb_substr($title . ' - ' . $config['app_name'] . '. Read and share notes, course materials and learning journals online.', 0, 160), ENT_QUOTES, 'UTF-8');
     echo "<meta name='description' content='{$description}'>";
     if ($baseHref !== '') {
         $safeBase = htmlspecialchars($baseHref);
@@ -484,7 +488,7 @@ function render_404_page(): void {
     $content .= '</div>';
     $content .= '<h1 class="error-page__code">404</h1>';
     $content .= '<h2 class="error-page__title">页面飞走了</h2>';
-    $content .= '<p class="error-page__desc">你访问的页面不存在，可能已被移除或者地址有误。</p>';
+    $content .= '<p class="error-page__desc">This page does not exist. It may have been removed or the address may be incorrect.</p>';
     $content .= '<a class="error-page__back" href="' . $base . '/">';
     $content .= '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>';
     $content .= 'Home</a>';
@@ -500,13 +504,13 @@ function render_share_not_found_page(): void {
     $content .= '<div class="error-page__stars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>';
     $content .= '<div class="error-page__signal"><i></i><i></i><i></i><i></i><div class="error-page__signal-core"></div></div>';
     $content .= '</div>';
-    $content .= '<h2 class="error-page__title">找不到这个分享</h2>';
-    $content .= '<p class="error-page__desc">该分享链接不存在或已被创建者删除。</p>';
+    $content .= '<h2 class="error-page__title">Share not found</h2>';
+    $content .= '<p class="error-page__desc">This share does not exist or has been deleted by its owner.</p>';
     $content .= '<a class="error-page__back" href="' . $base . '/">';
     $content .= '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>';
     $content .= 'Home</a>';
     $content .= '</div>';
-    render_page('分享不存在', $content, null);
+    render_page('Share not found', $content, null);
 }
 
 const SHARE_SLUG_MIN_LENGTH = 6;
@@ -649,7 +653,7 @@ function site_version(): string {
 function handle_share_search(string $slug): void {
     $share = find_share_by_slug($slug);
     if (!$share) {
-        api_response(404, null, '分享不存在');
+        api_response(404, null, 'Share not found');
     }
     if (share_is_expired($share)) {
         api_response(403, null, '分享已关闭');

@@ -4,6 +4,21 @@ import re
 
 
 class AdminShareTests:
+    def test_english_site_brand_and_password_gate(self):
+        admin = self.admin()
+        status, _, body = admin.request('/dashboard')
+        self.assertEqual(status, 200)
+        self.assertIn(b"<html lang='en'>", body)
+        self.assertIn(b'SiYuan Share</title>', body)
+        share = self.share(password='Gate-Password!')
+        visitor = type(self.client)(self.base)
+        _, _, gate = visitor.request('/s/' + share['slug'])
+        self.assertIn(b'<label for="share-password">Share password</label>', gate)
+        self.assertIn(b'data-share-password-toggle', gate)
+        _, _, error = visitor.request('/s/' + share['slug'], {'share_password': 'wrong'})
+        self.assertIn(b'aria-describedby="share-password-error"', error)
+        self.assertIn(b'id="share-password-error" role="alert"', error)
+
     def editor_fields(self, client, share, **changes):
         path = '/admin/share?share_id=' + str(share['id'])
         status, _, body = client.request(path)

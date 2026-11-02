@@ -2813,7 +2813,11 @@
     });
     document.addEventListener("click", (event) => {
       const target = event.target;
-      if (target.closest(".kb-sidebar a, .share-toc a") && !event.ctrlKey && !event.metaKey && !event.shiftKey) setOpen(false, false);
+      if (target.closest(".kb-sidebar a, .share-toc a") && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+        const link = target.closest('a');
+        setOpen(false, false);
+        if (link?.getAttribute('href')?.startsWith('#')) document.getElementById(link.getAttribute('href').slice(1))?.focus({preventScroll: true});
+      }
       if (target.closest("[data-reader-show-tree]")) {
         document.dispatchEvent(new Event('sps:reader-show-sidebar'));
         document.querySelector('[data-share-tab="tree"]')?.click();
@@ -3234,6 +3238,16 @@ const initImageViewer = () => {
       document.body.appendChild(viewer);
     }
 
+    const actions = viewer.querySelector('.image-viewer-actions');
+    const closeButton = actions.querySelector('button[data-viewer-close]');
+    viewer.querySelector('.image-viewer-ui').prepend(closeButton);
+    const more = document.createElement('details');
+    more.className = 'image-viewer-more';
+    const moreLabel = document.createElement('summary');
+    moreLabel.textContent = 'More';
+    moreLabel.setAttribute('aria-label', 'More image actions');
+    more.append(moreLabel, actions.querySelector('[data-viewer-rotate-ccw]'), actions.querySelector('[data-viewer-rotate-cw]'));
+    actions.append(more);
     const stage = viewer.querySelector("[data-viewer-stage]");
     const image = viewer.querySelector("[data-viewer-img]");
     const zoomOut = viewer.querySelector("[data-viewer-zoom-out]");
@@ -3421,6 +3435,8 @@ const initImageViewer = () => {
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = `image-viewer-thumb${idx === index ? " is-active" : ""}`;
+        btn.setAttribute('aria-label', `Image ${idx + 1}${item.alt ? ': ' + item.alt : ''}`);
+        btn.setAttribute('aria-pressed', String(idx === index));
         const img = document.createElement("img");
         img.src = getImageSrc(item);
         img.alt = item.alt || "";
@@ -3476,19 +3492,53 @@ const initImageViewer = () => {
       updateView();
     };
 
+    let imageTrigger;
+    let isolated = [];
+    const prepareImageEntrypoints = () => collectImages().forEach(img => {
+      if (img.closest('a, button')) return;
+      img.tabIndex = 0;
+      img.setAttribute('role', 'button');
+      img.setAttribute('aria-label', img.alt ? `Open image: ${img.alt}` : 'Open image');
+      img.setAttribute('aria-haspopup', 'dialog');
+    });
+    prepareImageEntrypoints();
+    window.addEventListener('sps:markdown-ready', prepareImageEntrypoints);
+    new MutationObserver(prepareImageEntrypoints).observe(document.querySelector('.share-shell') || document.body, {childList: true, subtree: true});
+    viewer.setAttribute('role', 'dialog');
+    viewer.setAttribute('aria-modal', 'true');
+    viewer.setAttribute('aria-label', 'Image viewer');
+    document.addEventListener('keydown', event => {
+      if (viewer.hidden && event.target.matches?.('.markdown-body img[role="button"]') && ['Enter', ' '].includes(event.key)) {
+        event.preventDefault();
+        openViewer(collectImages().indexOf(event.target));
+      }
+      if (!viewer.hidden && event.key === 'Tab') {
+        const targets = [...viewer.querySelectorAll('button:not(:disabled), summary, [href], [tabindex="0"]')].filter(node => !node.closest('[hidden]') && (!node.closest('details:not([open])') || node.tagName === 'SUMMARY'));
+        const first = targets[0], last = targets[targets.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
+    });
     const openViewer = (startIndex) => {
       items = collectImages();
       if (!items.length) return;
       index = clamp(startIndex, 0, items.length - 1);
+      imageTrigger = items[index];
+      isolated = [...document.body.children].filter(node => node !== viewer && !['SCRIPT', 'STYLE', 'LINK'].includes(node.tagName)).map(node => [node, node.inert]);
+      isolated.forEach(([node]) => { node.inert = true; });
       showSurface(viewer);
       document.body.classList.add("image-viewer-open");
       updateView();
+      viewer.querySelector('button[data-viewer-close]')?.focus();
     };
 
     const closeViewer = () => {
       hideSurface(viewer, () => {
         viewer.hidden = true;
         document.body.classList.remove("image-viewer-open");
+        isolated.forEach(([node, inert]) => { node.inert = inert; });
+        isolated = [];
+        if (imageTrigger?.isConnected) imageTrigger.focus({preventScroll: true});
       });
     };
 
@@ -3900,20 +3950,23 @@ const initImageViewer = () => {
       });
     };
 
+    const trustedMath = new Map();
+    let mathSequence = 0;
+    const mathPrefix = `sps-math-${crypto.randomUUID()}-`;
     const useKatex = () => {
-      if (typeof window.markdownitKatex === "function") {
-        md.use(window.markdownitKatex, {throwOnError: false, errorColor: "#cc0000"});
-        return;
-      }
       if (!window.katex || typeof window.katex.renderToString !== "function") return;
 
       const renderKatex = (source, displayMode) => {
         try {
-          return window.katex.renderToString(String(source || ""), {
+          const output = window.katex.renderToString(String(source || ""), {
+            trust: false, output: "htmlAndMathml",
             displayMode,
             throwOnError: false,
             errorColor: "#cc0000",
           });
+          const key = mathPrefix + (++mathSequence);
+          trustedMath.set(key, output);
+          return `<span data-sps-trusted-math="${key}"></span>`;
         } catch {
           return md.utils.escapeHtml(String(source || ""));
         }
@@ -4865,7 +4918,17 @@ const initImageViewer = () => {
         if (!target) return;
         const raw = source.value || "";
         if (renderedMarkdown.get(target) === raw) return;
+        trustedMath.clear();
         target.innerHTML = sanitizeShareHtml(md.render(raw));
+        target.querySelectorAll('[data-sps-trusted-math]').forEach(placeholder => {
+          const output = trustedMath.get(placeholder.dataset.spsTrustedMath);
+          if (output !== undefined) {
+            const rendered = document.createElement('template');
+            rendered.innerHTML = output;
+            placeholder.replaceWith(rendered.content);
+          } else placeholder.remove();
+        });
+        trustedMath.clear();
         renderedMarkdown.set(target, raw);
         prepareSizedImages(target);
         showMissingImages(target);
@@ -5575,6 +5638,14 @@ const initImageViewer = () => {
   initActionTableOverflowState();
 
   window.SPSControls?.mount();
+  document.querySelector('[data-share-password-toggle]')?.addEventListener('click', event => {
+    const button = event.currentTarget;
+    const input = document.getElementById(button.getAttribute('aria-controls'));
+    const visible = input.type === 'password';
+    input.type = visible ? 'text' : 'password';
+    button.setAttribute('aria-pressed', String(visible));
+    button.textContent = visible ? 'Hide password' : 'Show password';
+  });
   if (document.querySelector("form[data-confirm-message]")) initFormConfirm();
 
   initFlashToast();
