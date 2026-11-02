@@ -571,8 +571,8 @@ function route_share(string $slug, ?string $docId = null): void {
             $content = '<div class="share-shell share-shell--notebook" data-share-doc-id="' . htmlspecialchars($activeDocId) . '">';
             $content .= $sidebar;
             $content .= $mainHtml;
-            $content .= '</div>';
-            render_page($docTitleRaw, $content, null, '', ['layout' => 'share', 'markdown' => true]);
+            $content .= render_share_footer() . '</div>';
+            render_page($docTitleRaw, $content, null, '', ['layout' => 'share', 'markdown' => true, 'footer_in_shell' => true]);
             return;
         }
 
@@ -607,8 +607,8 @@ function route_share(string $slug, ?string $docId = null): void {
         $content .= '</div>';
         $content .= '<div class="markdown-body" data-md-id="doc">' . render_markdown($markdown) . '</div>';
         $content .= '<textarea class="markdown-source" data-md-id="doc" readonly spellcheck="false" aria-label="Markdown source">' . htmlspecialchars($markdown) . '</textarea>';
-        $content .= '</div></div></div>';
-        render_page($docTitleRaw, $content, null, '', ['layout' => 'share', 'markdown' => true]);
+        $content .= '</div></div>' . render_share_footer() . '</div>';
+        render_page($docTitleRaw, $content, null, '', ['layout' => 'share', 'markdown' => true, 'footer_in_shell' => true]);
     }
 
     if ($share['type'] === 'notebook') {
@@ -685,8 +685,8 @@ function route_share(string $slug, ?string $docId = null): void {
             $content = '<div class="share-shell share-shell--notebook" data-share-doc-id="' . htmlspecialchars((string)$docId) . '">';
             $content .= $sidebar;
             $content .= $mainHtml;
-            $content .= '</div>';
-            render_page($docTitleRaw, $content, null, '', ['layout' => 'share', 'markdown' => true]);
+            $content .= render_share_footer() . '</div>';
+            render_page($docTitleRaw, $content, null, '', ['layout' => 'share', 'markdown' => true, 'footer_in_shell' => true]);
         }
 
         if (!$docId) {
@@ -703,8 +703,8 @@ function route_share(string $slug, ?string $docId = null): void {
             $content = '<div class="share-shell share-shell--notebook" data-share-doc-id="">';
             $content .= $sidebar;
             $content .= $mainHtml;
-            $content .= '</div>';
-            render_page($shareTitleRaw, $content, null, '', ['layout' => 'share', 'markdown' => true]);
+            $content .= render_share_footer() . '</div>';
+            render_page($shareTitleRaw, $content, null, '', ['layout' => 'share', 'markdown' => true, 'footer_in_shell' => true]);
         }
 
     }

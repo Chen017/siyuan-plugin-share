@@ -4311,21 +4311,24 @@ body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .share-page
   background: var(--panel-bg); pointer-events: none;
 }
 body.layout-share .reader-frame > .share-shell {
-  position: relative; max-width: none; margin: 0; background: transparent;
+  position: relative; max-width: none; margin: 0; background: transparent; flex-wrap: wrap;
 }
-body.layout-share .reader-frame > .share-footer {
+body.layout-share .reader-frame > .share-footer,
+body.layout-share .reader-frame > .share-shell > .share-footer {
   position: relative; max-width: none; margin: 0; width: 100%;
+  flex: 0 0 100%;
   padding: 20px 24px 24px calc(var(--reader-column) + 24px); background: transparent;
   overflow-wrap: anywhere;
 }
 @media (min-width: 961px) {
-  body.layout-share .reader-frame :is(.kb-sidebar, .share-toc) { top: 20px; height: calc(100dvh - 48px); background: transparent; box-shadow: none; border-right: 0; }
+  body.layout-share .reader-frame :is(.kb-sidebar, .share-toc) { height: calc(100dvh - 48px); background: transparent; box-shadow: none; border-right: 0; }
 }
 @media (max-width: 960px) {
   body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .share-page { padding: 8px; }
   .reader-frame { border-radius: 14px; }
   .reader-frame::before { display: none; }
-  body.layout-share .reader-frame > .share-footer { padding: 20px 16px; }
+  body.layout-share .reader-frame > .share-footer,
+  body.layout-share .reader-frame > .share-shell > .share-footer { padding: 20px 16px; }
   body.layout-share .reader-frame :is(.kb-sidebar, .share-toc) { background: var(--panel-bg); box-shadow: var(--shadow); }
   .notebook-welcome { min-height: min(65vh, 540px); }
 }

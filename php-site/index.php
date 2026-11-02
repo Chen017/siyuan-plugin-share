@@ -313,6 +313,10 @@ function diagram_preload_files(string $content): array {
     return $files;
 }
 
+function render_share_footer(): string {
+    return "<footer class='share-footer'><span class='footer-credit'>Maintained by <a class='footer-owner' href='https://github.com/Chen017/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Chen017</a></span></footer>";
+}
+
 function render_page(string $title, string $content, ?array $user = null, string $baseHref = '', array $options = []): void {
     global $config;
     $base = base_path();
@@ -391,7 +395,7 @@ function render_page(string $title, string $content, ?array $user = null, string
         }
         echo "<header class='reader-mobile-bar'><button class='reader-nav-button' type='button' data-share-drawer-open aria-label='Open navigation' aria-expanded='false'><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='currentColor' d='M4 6h16v2H4zM4 11h16v2H4zM4 16h16v2H4z'/></svg><span>Navigation</span></button><span class='reader-mobile-title' data-reader-mobile-title>{$pageTitle}</span></header>";
         echo $content;
-        echo "<footer class='share-footer'><span class='footer-credit'>Maintained by <a class='footer-owner' href='https://github.com/Chen017/siyuan-plugin-share' target='_blank' rel='noopener noreferrer'>Chen017</a></span></footer>";
+        if (empty($options['footer_in_shell'])) echo render_share_footer();
         if (empty($options['pdf_export'])) echo "</div>";
         echo "<div class='share-side-backdrop' data-share-drawer-close></div>";
         echo "<p class='reader-status sr-only' data-reader-status role='status' aria-live='polite'></p>";
