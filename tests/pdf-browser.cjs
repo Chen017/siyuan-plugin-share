@@ -182,8 +182,18 @@ const chooseScope = async (page, value) => {
     await reader.setViewportSize({ width: 1100, height: 900 });
     await title.evaluate((n, value) => { n.textContent = value; }, originalTitle);
     const originalUrl = reader.url();
-    const applicationPages = () => context.pages().filter((page) => !/^(edge|chrome):\/\//.test(page.url()));
-    const pagesBefore = applicationPages().length;
+    const applicationPages = async () => {
+      // Browser-level targets expose Edge's downloads-hub URL even when its
+      // Playwright Page has no script execution context or visible URL.
+      const session = await browser.newBrowserCDPSession();
+      try {
+        const {targetInfos} = await session.send('Target.getTargets');
+        const current = targetInfos.find(target => target.type === 'page' && target.url === reader.url());
+        assert(current?.browserContextId, 'The reader target must be identifiable');
+        return targetInfos.filter(target => target.type === 'page' && target.browserContextId === current.browserContextId && !/^(edge|chrome):\/\//.test(target.url));
+      } finally { await session.detach(); }
+    };
+    const pagesBefore = (await applicationPages()).length;
     await reader.locator('[data-pdf-export-link]').click();
     const modal = reader.locator('dialog.pdf-export-dialog');
     await modal.waitFor({ state: 'visible' });
@@ -196,6 +206,14 @@ const chooseScope = async (page, value) => {
     await scopeControl.press('Enter');
     assert.equal(await options.locator('[data-pdf-scope]').inputValue(), 'selected');
     assert.equal(await options.locator('[data-pdf-selection]').isVisible(), true);
+    assert(await options.getByRole('button', {name:'Export',exact:true}).isDisabled(), 'Empty selection is blocked');
+    await options.locator('[name="doc_ids[]"]').first().check();
+    await options.locator('[data-pdf-filter]').fill('NO_MATCH_FOR_EXPORT_FILTER');
+    assert.match(await options.locator('[data-pdf-selected-count]').textContent(), /1 selected/);
+    assert.equal(await options.locator('[name="doc_ids[]"]:checked').count(), 1);
+    await options.getByRole('button', {name:'Clear selection',exact:true}).click();
+    assert.equal(await options.locator('[name="doc_ids[]"]:checked').count(), 0);
+    await options.locator('[data-pdf-filter]').fill('');
     await scopeControl.click();
     await scopeControl.press('Escape');
     assert.equal(await modal.isVisible(), true, 'Escape closes the menu before the dialog');
@@ -226,7 +244,7 @@ const chooseScope = async (page, value) => {
     await options.locator('[data-pdf-quota]').filter({ hasText: '118 documents remaining' }).waitFor();
     await options.locator('[data-pdf-quota] summary').click();
     assert.match(await options.locator('[data-pdf-quota]').innerText(), /Next recovery/);
-    assert.equal(applicationPages().length, pagesBefore, 'Dialog and automatic download open no extra application tabs');
+    assert.equal((await applicationPages()).length, pagesBefore, 'Dialog and automatic download open no extra application tabs');
     assert.equal(reader.url(), originalUrl, 'Reader stays on the document');
     await reader.getByRole('button', { name: 'Close export dialog' }).click();
     await modal.waitFor({ state: 'hidden' });
@@ -251,12 +269,30 @@ const chooseScope = async (page, value) => {
     try {
       await options.getByRole('button', { name: 'Retry remaining documents', exact: true }).waitFor({ timeout: 45000 });
     } catch (error) {
-      throw new Error(`Retry state missing: ${await options.locator('[data-pdf-form-status]').textContent()}; ${error.message}`);
+      throw new Error(`Retry state missing: ${await options.locator('[data-pdf-form-status]').textContent()}; state=${await options.locator('[data-pdf-export-form]').getAttribute('data-export-state')}; errors=${JSON.stringify(errors)}; ${error.message}`);
     }
     await reader.unroute('**/assets/vendor/html2pdf.bundle.min.js*', libraryFailure);
     const task = reader.frames().find((frame) => frame.name() === 'sps-pdf-worker');
     const taskCredentials = await task.locator('[data-pdf-preview]').evaluate((node) => ({ csrf: node.dataset.csrf, lease: node.dataset.lease }));
     await reader.getByRole('button', { name: 'Close export dialog' }).click();
+    const cancellation = reader.locator('dialog.confirm-dialog');
+    await cancellation.waitFor({state:'visible'});
+    assert.match(await cancellation.textContent(), /Files already downloaded will remain/);
+    await cancellation.getByRole('button', {name:'Keep exporting',exact:true}).click();
+    await reader.locator('dialog.confirm-dialog').waitFor({state:'detached'});
+    assert(await modal.isVisible(), 'Declining cancellation keeps export open');
+    await reader.keyboard.press('Escape');
+    await reader.locator('dialog.confirm-dialog').waitFor({state:'visible'});
+    await reader.locator('dialog.confirm-dialog').getByRole('button', {name:'Keep exporting',exact:true}).click();
+    await reader.locator('dialog.confirm-dialog').waitFor({state:'detached'});
+    assert(await modal.isVisible(), 'Escape follows the same active-export confirmation rule');
+    await reader.mouse.click(10,10);
+    await reader.locator('dialog.confirm-dialog').waitFor({state:'visible'});
+    await reader.locator('dialog.confirm-dialog').getByRole('button', {name:'Keep exporting',exact:true}).click();
+    await reader.locator('dialog.confirm-dialog').waitFor({state:'detached'});
+    assert(await modal.isVisible(), 'Backdrop follows the same active-export confirmation rule');
+    await reader.getByRole('button', { name: 'Close export dialog' }).click();
+    await reader.locator('dialog.confirm-dialog').getByRole('button', {name:'Cancel export',exact:true}).click();
     await modal.waitFor({ state: 'hidden' });
     await reader.waitForTimeout(150);
     assert.equal((await context.request.post(shareUrl + '/export/verify', { form: taskCredentials })).status(), 410, 'Closing the dialog releases an interrupted task');

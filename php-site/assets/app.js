@@ -3086,6 +3086,26 @@
     }, 120);
   };
 
+  // Shared confirmation surface for editing and long-running tasks.
+  window.SPSConfirm = ({title = 'Confirm action', message, confirmLabel = 'Confirm', cancelLabel = 'Cancel', dangerous = false}) => new Promise(resolve => {
+    const previous = document.activeElement;
+    const modal = document.createElement('dialog');
+    modal.className = 'confirm-dialog';
+    modal.innerHTML = '<form method="dialog"><h2 id="action-confirm-title"></h2><p id="action-confirm-message"></p><div class="form-actions"><button value="cancel" autofocus></button><button value="confirm"></button></div></form>';
+    modal.setAttribute('aria-labelledby', 'action-confirm-title');
+    modal.setAttribute('aria-describedby', 'action-confirm-message');
+    modal.querySelector('h2').textContent = title;
+    modal.querySelector('p').textContent = message;
+    modal.querySelector('[value="cancel"]').textContent = cancelLabel;
+    const confirm = modal.querySelector('[value="confirm"]');
+    confirm.textContent = confirmLabel;
+    confirm.className = dangerous ? 'button danger' : 'button primary';
+    modal.querySelector('[value="cancel"]').className = 'button';
+    modal.addEventListener('close', () => { const accepted = modal.returnValue === 'confirm'; modal.remove(); previous?.isConnected && previous.focus({preventScroll: true}); resolve(accepted); }, {once: true});
+    document.body.append(modal);
+    modal.showModal();
+  });
+
   const initFormConfirm = () => {
     let pending = null;
     const dialog = document.createElement("dialog");
@@ -3122,6 +3142,34 @@
     }});
   };
 
+  const initUnsavedEdits = () => {
+    if (!document.body.classList.contains('layout-app')) return;
+    const forms = [...document.querySelectorAll('form.settings-form')];
+    const snapshot = form => JSON.stringify([...form.elements].filter(field => field.name && !['hidden', 'submit', 'button'].includes(field.type)).map(field => [field.name, field.value, ['checkbox','radio'].includes(field.type) ? field.checked : null]));
+    const originals = new Map(forms.map(form => [form, snapshot(form)]));
+    let submitting = false, asking = false;
+    const dirty = () => forms.some(form => snapshot(form) !== originals.get(form));
+    window.addEventListener('beforeunload', event => { if (!submitting && dirty()) { event.preventDefault(); event.returnValue = ''; } });
+    forms.forEach(form => form.addEventListener('submit', event => {
+      submitting = true;
+      queueMicrotask(() => { if (event.defaultPrevented) submitting = false; });
+    }));
+    document.addEventListener('click', async event => {
+      const link = event.target.closest('a[href]');
+      if (!link || event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || link.target || link.hasAttribute('download')) return;
+      if (link.hasAttribute('data-discard-edits')) { submitting = true; return; }
+      const next = new URL(link.href, location.href);
+      if (next.pathname === location.pathname && next.search === location.search) return;
+      if (!dirty()) return;
+      event.preventDefault();
+      if (asking) return;
+      asking = true;
+      const approved = await window.SPSConfirm({title: 'Unsaved changes', message: 'Leave this page and discard your changes?', confirmLabel: 'Discard changes', cancelLabel: 'Keep editing', dangerous: true});
+      asking = false;
+      if (approved) { submitting = true; location.href = link.href; }
+    });
+  };
+
   const initFlashToast = () => {
     const isApp = document.body.classList.contains("layout-app");
     const isShare = document.body.classList.contains("layout-share");
@@ -3139,9 +3187,10 @@
       toast.classList.add("toast");
       stack.appendChild(toast);
       flash.remove();
+      toast.querySelector('[data-notice-dismiss]')?.addEventListener('click', () => toast.remove());
     });
     setTimeout(() => {
-      stack.querySelectorAll(".toast").forEach((toast) => {
+      stack.querySelectorAll(".toast:not([data-notice-persistent])").forEach((toast) => {
         toast.classList.add("is-hidden");
         toast.addEventListener("transitionend", () => toast.remove(), {
           once: true,
@@ -3743,6 +3792,8 @@ const initImageViewer = () => {
     document.addEventListener("keydown", (event) => {
       if (viewer.hidden) return;
       if (event.key === "Escape") {
+        event.preventDefault();
+        if (more.open) { more.open = false; moreLabel.focus(); return; }
         closeViewer();
       } else if (event.key === "ArrowLeft") {
         setIndex(index - 1);
@@ -5646,6 +5697,7 @@ const initImageViewer = () => {
     button.setAttribute('aria-pressed', String(visible));
     button.textContent = visible ? 'Hide password' : 'Show password';
   });
+  initUnsavedEdits();
   if (document.querySelector("form[data-confirm-message]")) initFormConfirm();
 
   initFlashToast();

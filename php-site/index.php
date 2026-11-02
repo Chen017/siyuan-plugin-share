@@ -487,13 +487,13 @@ function render_404_page(): void {
     $content .= '<div class="error-page__comet"></div>';
     $content .= '</div>';
     $content .= '<h1 class="error-page__code">404</h1>';
-    $content .= '<h2 class="error-page__title">页面飞走了</h2>';
+    $content .= '<h2 class="error-page__title">Page not found</h2>';
     $content .= '<p class="error-page__desc">This page does not exist. It may have been removed or the address may be incorrect.</p>';
     $content .= '<a class="error-page__back" href="' . $base . '/">';
     $content .= '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>';
     $content .= 'Home</a>';
     $content .= '</div>';
-    render_page('页面未找到', $content, null);
+    render_page('Page not found', $content, null);
 }
 
 function render_share_not_found_page(): void {
@@ -656,10 +656,10 @@ function handle_share_search(string $slug): void {
         api_response(404, null, 'Share not found');
     }
     if (share_is_expired($share)) {
-        api_response(403, null, '分享已关闭');
+        api_response(403, null, 'This share is closed');
     }
     if (share_requires_password($share) && !share_access_granted((int)$share['id'])) {
-        api_response(403, null, '请先输入访问密码');
+        api_response(403, null, 'Enter the share password first');
     }
     $q = trim((string)($_GET['q'] ?? ''));
     if (mb_strlen($q) < 1) {
@@ -683,20 +683,9 @@ function handle_share_search(string $slug): void {
         $params[$pk] = $likeVal;
     }
     $firstWord = $words[0];
-    $params[':q_raw'] = $firstWord;
-    $params[':q_raw2'] = $firstWord;
     $whereWords = implode(' AND ', $wordConditions);
     $stmt = $pdo->prepare("
-        SELECT doc_id, title, hpath,
-            CASE
-                WHEN INSTR(markdown, :q_raw) > 50 THEN
-                    SUBSTR(markdown, INSTR(markdown, :q_raw) - 40, 200)
-                WHEN INSTR(markdown, :q_raw) > 0 THEN
-                    SUBSTR(markdown, 1, 200)
-                ELSE
-                    SUBSTR(markdown, 1, 200)
-            END AS snippet_raw,
-            INSTR(markdown, :q_raw2) AS match_pos
+        SELECT doc_id, title, hpath, markdown AS snippet_raw
         FROM share_docs
         WHERE share_id = :sid
           AND {$whereWords}
@@ -704,20 +693,9 @@ function handle_share_search(string $slug): void {
         LIMIT 30
     ");
     $stmt->execute($params);
-    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
     $results = [];
-    foreach ($rows as $row) {
-        $raw = $row['snippet_raw'] ?? '';
-        $raw = preg_replace('/^---\s*\n.*?\n---\s*\n/s', '', $raw);
-        $snippet = preg_replace('/[#*`~>\[\]!]+/', '', $raw);
-        $snippet = trim(preg_replace('/\s+/', ' ', $snippet));
-        $matchPos = (int)($row['match_pos'] ?? 0);
-        if ($matchPos > 50) {
-            $snippet = '...' . $snippet;
-        }
-        if (mb_strlen($snippet) > 120) {
-            $snippet = mb_substr($snippet, 0, 120) . '...';
-        }
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $snippet = search_summary((string)($row['snippet_raw'] ?? ''), $firstWord);
         $results[] = [
             'docId'   => $row['doc_id'],
             'title'   => $row['title'],
@@ -787,7 +765,7 @@ function require_api_user(): array {
     }
     $user = api_user_from_key($key);
     if (!$user) {
-        api_response(401, null, 'API Key 无效或已失效，请前往控制台重新生成');
+        api_response(401, null, 'The API key is invalid or expired. Generate a new key in administration.');
     }
     return $user;
 }

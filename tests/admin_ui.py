@@ -1,9 +1,54 @@
 """Website share editing must enforce the same access and revision rules as sync."""
 import re
+import subprocess
+from pathlib import Path
 
 
 
 class AdminShareTests:
+    def test_explicit_public_https_configuration_preserves_other_settings(self):
+        helper = Path(__file__).resolve().parents[1] / 'scripts/configure-public-url.php'
+        original = self.rows('SELECT key,value FROM settings ORDER BY key')
+        def run(url):
+            if self.container:
+                command = ['docker', 'exec', '-i', '--user', 'www-data', self.container, 'php', '/dev/stdin', '/var/www/html', url]
+                return subprocess.run(command, input=helper.read_text(encoding='utf-8'), capture_output=True, text=True, timeout=20)
+            return subprocess.run([self.php_executable, str(helper), str(Path(self.bootstrap_path).parent), url], capture_output=True, text=True, timeout=20)
+        try:
+            for invalid in ['http://unsafe.example', 'https://user:secret@example.org', 'https://example.org/?q=1', 'https://example.org/#fragment']:
+                rejected = run(invalid)
+                self.assertNotEqual(rejected.returncode, 0)
+            self.assertEqual(self.rows('SELECT key,value FROM settings ORDER BY key'), original)
+            result = run('https://note.etalib.space')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            after = self.rows('SELECT key,value FROM settings ORDER BY key')
+            self.assertEqual([r for r in after if r['key'] != 'site_base_url'], [r for r in original if r['key'] != 'site_base_url'])
+            share = self.share()
+            page = self.admin().request('/admin/share?share_id=' + str(share['id']))[2]
+            self.assertIn(('https://note.etalib.space/s/' + share['slug']).encode(), page)
+        finally:
+            previous = next(row['value'] for row in original if row['key'] == 'site_base_url')
+            self.rows("UPDATE settings SET value='" + previous.replace("'", "''") + "' WHERE key='site_base_url'")
+
+    def test_soft_delete_named_undo_and_permanent_confirmation(self):
+        share = self.share(title='Undo <fixture>')
+        admin = self.admin()
+        page = admin.request('/dashboard')[2]
+        token = re.search(rb'name="csrf" value="([^"]+)"', page)[1].decode()
+        fields = {'csrf': token, 'share_id': share['id']}
+        self.assertEqual(admin.request('/admin/share-delete', fields)[0], 302)
+        notice = admin.request('/dashboard')[2]
+        self.assertIn(b'data-notice-persistent', notice)
+        self.assertIn(b'Undo &lt;fixture&gt;', notice)
+        self.assertIn(b'>Undo</button>', notice)
+        self.assertIn(b'The share link is inactive', notice)
+        deleted = admin.request('/dashboard?status=deleted')[2]
+        self.assertIn(b'This cannot be undone.', deleted)
+        self.assertIn(b'Undo &lt;fixture&gt;', deleted)
+        self.assertEqual(admin.request('/admin/share-restore', fields)[0], 302)
+        self.assertIn(b'Share restored.', admin.request('/dashboard')[2])
+        self.assertIn(b'PHP83_MARKER', type(self.client)(self.base).request('/s/' + share['slug'])[2])
+
     def test_english_site_brand_and_password_gate(self):
         admin = self.admin()
         status, _, body = admin.request('/dashboard')

@@ -20,12 +20,14 @@
       if (!active) return;
       if (!active.trigger.isConnected) { close(); return; }
       const rect = active.trigger.getBoundingClientRect(), panel = active.panel;
-      const width = Math.min(Math.max(rect.width, active.calendar ? 292 : 180), window.innerWidth - 24);
+      const coarse = window.matchMedia?.('(pointer: coarse)').matches;
+      const gutter = active.calendar && coarse && window.innerWidth < 360 ? 0 : 12;
+      const width = Math.min(Math.max(rect.width, active.calendar ? (coarse ? 336 : 292) : 180), window.innerWidth - gutter * 2);
       panel.style.width = `${width}px`;
       panel.style.maxHeight = `${Math.max(160, window.innerHeight - 32)}px`;
       const height = panel.getBoundingClientRect().height;
       const top = rect.bottom + 6 + height > window.innerHeight - 12 ? Math.max(12, rect.top - height - 6) : rect.bottom + 6;
-      panel.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))}px`;
+      panel.style.left = `${Math.max(gutter, Math.min(rect.left, window.innerWidth - width - gutter))}px`;
       panel.style.top = `${top}px`;
     };
     const open = (control) => {
@@ -33,7 +35,7 @@
       control.panel.hidden = false;
       control.trigger.setAttribute('aria-expanded', 'true');
       place();
-      if (!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) control.panel.animate?.([{opacity: 0, transform: 'translateY(-3px)'}, {opacity: 1, transform: 'translateY(0)'}], {duration: 140, easing: 'cubic-bezier(.2,.8,.2,1)'});
+      if (!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) control.panel.animate?.([{transform: 'translateY(-3px)'}, {transform: 'translateY(0)'}], {duration: 140, easing: 'cubic-bezier(.2,.8,.2,1)'});
     };
     const label = (input) => {
       if (input.getAttribute('aria-label')) return input.getAttribute('aria-label');

@@ -42,6 +42,33 @@ const payload = title => ({ok: true, json: async () => ({code: 0, data: {html: m
     assert.equal(gate.doc.getElementById('share-password').type, 'password');
     assert.equal(gate.doc.getElementById('share-password').value, 'secret');
   } finally { gate.close(); }
+  let dismissToasts;
+  const notices = page({beforeEval(w) {
+    w.document.body.insertAdjacentHTML('beforeend', '<div class="flash" data-notice-persistent>Deleted fixture <button data-notice-dismiss>Dismiss</button></div><p class="flash">Ordinary notice</p>');
+    const timeout = w.setTimeout.bind(w);
+    w.setTimeout = (callback, ms, ...args) => ms === 4200 ? (dismissToasts=callback, 0) : timeout(callback, ms, ...args);
+  }});
+  try {
+    assert(dismissToasts);dismissToasts();
+    const persistent=notices.doc.querySelector('.toast[data-notice-persistent]');
+    assert(persistent && !persistent.classList.contains('is-hidden'),'Undo notices do not expire automatically');
+    assert(notices.doc.querySelector('.toast:not([data-notice-persistent])').classList.contains('is-hidden'));
+    persistent.querySelector('[data-notice-dismiss]').click();assert(!persistent.isConnected);
+  } finally {notices.close();}
+  const editor = page({beforeEval(w) {
+    w.document.body.className = 'layout-app';
+    w.document.body.insertAdjacentHTML('beforeend', '<form class="settings-form"><input name="title" value="Original"><button type="submit">Save</button></form><a href="/other" id="leave">Leave</a><a href="/other" data-discard-edits id="discard">Cancel</a>');
+  }});
+  try {
+    let event = new editor.w.Event('beforeunload', {cancelable:true}); editor.w.dispatchEvent(event); assert(!event.defaultPrevented);
+    const field=editor.doc.querySelector('[name="title"]');field.value='Changed';
+    event=new editor.w.Event('beforeunload',{cancelable:true});editor.w.dispatchEvent(event);assert(event.defaultPrevented,'Dirty edits require browser unload warning');
+    const form=editor.doc.querySelector('.settings-form');form.addEventListener('submit', event=>event.preventDefault());form.dispatchEvent(new editor.w.Event('submit',{cancelable:true}));await delay();
+    event=new editor.w.Event('beforeunload',{cancelable:true});editor.w.dispatchEvent(event);assert(event.defaultPrevented,'Prevented submission does not discard edit protection');
+    let requested=0;editor.w.SPSConfirm=async()=>{requested++;return false;};
+    editor.doc.querySelector('#leave').click();await delay();assert.equal(requested,1);assert.equal(field.value,'Changed');
+    field.value='Original';event=new editor.w.Event('beforeunload',{cancelable:true});editor.w.dispatchEvent(event);assert(!event.defaultPrevented,'Reverting values clears dirty state');
+  } finally {editor.close();}
   const p = page({mobile: true, record: {id: 'b', y: 640, time: Date.now()}});
   try {
     assert.equal(p.doc.querySelector('[data-reader-resume]').hidden, false);

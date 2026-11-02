@@ -98,6 +98,11 @@ if ($path === '/dashboard') {
     $content = '<div class="admin-page-heading"><div><p class="admin-eyebrow">Your library</p><h1>Shared notes</h1><p class="muted">Manage links, passwords and access in one place.</p></div><div class="storage-summary"><span>Storage used</span><strong>' . format_bytes($used) . '</strong><small>of ' . ($limit > 0 ? format_bytes($limit) : 'unlimited storage') . '</small></div></div>';
     if ($allStored !== $used) $content .= '<p class="muted">All retained notes and attachments: ' . format_bytes($allStored) . '</p>';
     foreach (['error', 'info'] as $kind) if ($message = flash($kind)) $content .= '<p class="flash' . ($kind === 'error' ? ' error' : '') . '" role="status">' . htmlspecialchars($message) . '</p>';
+    $undo = $_SESSION['share_undo'] ?? null;
+    unset($_SESSION['share_undo']);
+    if (is_array($undo)) {
+        $content .= '<div class="flash" role="status" data-notice-persistent><span>Deleted &ldquo;' . htmlspecialchars((string)$undo['title'], ENT_QUOTES, 'UTF-8') . '&rdquo;. The share link is inactive.</span><form class="inline-form" method="post" action="' . $base . '/admin/share-restore">' . render_hidden_inputs(['csrf' => csrf_token(), 'share_id' => (int)$undo['id']]) . '<button class="button" type="submit">Undo</button></form><button class="button ghost" type="button" data-notice-dismiss aria-label="Dismiss notification">×</button></div>';
+    }
     $search = trim((string)($_GET['share_search'] ?? ''));
     $status = (string)($_GET['status'] ?? 'active');
     if (!in_array($status, ['active', 'deleted', 'all'], true)) $status = 'active';
@@ -120,7 +125,7 @@ if ($path === '/dashboard') {
         if (!$deleted) $content .= '<a class="button" href="' . $manage . '">Manage</a>';
         $actions = $deleted ? ['restore' => 'Restore', 'hard-delete' => 'Delete permanently'] : ['delete' => 'Delete'];
         foreach ($actions as $action => $label) {
-            $confirm = $action === 'hard-delete' ? ' data-confirm-message="Permanently delete this share and its files?"' : '';
+            $confirm = $action === 'hard-delete' ? ' data-confirm-message="' . htmlspecialchars('Permanently delete “' . $share['title'] . '” and its files? This cannot be undone.', ENT_QUOTES, 'UTF-8') . '"' : '';
             $content .= '<form class="inline-form" method="post" action="' . $base . '/admin/share-' . $action . '"' . $confirm . '>' . render_hidden_inputs(['csrf' => csrf_token(), 'share_id' => $share['id']]) . '<button class="button' . ($action === 'restore' ? '' : ' danger') . '" type="submit">' . $label . '</button></form>';
         }
         $content .= '</div></div></article>';
@@ -203,7 +208,8 @@ if (in_array($path, ['/admin/share-delete', '/admin/share-restore', '/admin/shar
             db()->prepare('UPDATE shares SET revision = revision + 1, deleted_at = ?, updated_at = ? WHERE id = ?')->execute([$path === '/admin/share-delete' ? now() : null, now(), $id]);
             recalculate_user_storage((int)$share['user_id']);
         }
-        flash('info', 'Share updated.');
+        if ($path === '/admin/share-delete') $_SESSION['share_undo'] = ['id' => $id, 'title' => $share['title']];
+        else flash('info', $path === '/admin/share-restore' ? 'Share restored. Its link is available again.' : 'Share permanently deleted.');
     }
     redirect('/dashboard#shares');
 }

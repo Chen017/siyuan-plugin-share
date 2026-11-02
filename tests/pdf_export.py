@@ -164,6 +164,10 @@ class PdfExportTests:
         subprocess.run(['node', str(Path(__file__).with_name('pdf-browser.cjs')), self.base + '/s/' + share['slug'], str(output)],
                        input=json.dumps({'apiKey': self.key, 'shareId': share['id'], 'docIds': [doc['docId'] for doc in docs], 'visitorCookie': self.pdf_worker_cookie}), text=True, check=True, timeout=240)
 
+        # Keep UI acceptance under the existing browser test/Actions entrypoint.
+        subprocess.run(['node', str(Path(__file__).with_name('ui-refinement-browser.cjs')), self.base + '/s/' + share['slug'], str(output)],
+                       input=json.dumps({'shareId': share['id'], 'docIds': [doc['docId'] for doc in docs]}), text=True, check=True, timeout=120)
+
     def pdf_visitor(self, share, password=None):
         self.rows('DELETE FROM pdf_export_events')
         self.rows('DELETE FROM pdf_export_leases')

@@ -30,7 +30,7 @@ npm install --prefix "$PWD/.test-output/reader-test" --no-save --ignore-scripts 
 python -m pip install pypdfium2==5.14.0
 export NODE_PATH="$PWD/.test-output/reader-test/node_modules"
 python tests/run.py --php /path/to/php-8.3
-for test in plugin frontend reader-ui controls footnotes; do node "tests/$test.cjs"; done
+for test in plugin frontend reader-ui pdf-ui controls footnotes; do node "tests/$test.cjs"; done
 node tests/pdf-text-layer.cjs .test-output/pdf-selection
 python tests/pdf-text-layer.py .test-output/pdf-selection
 python tests/package.py
@@ -105,3 +105,13 @@ PR 的两套回归与合并后的部署回归分别验证 PR 提交和实际 mai
 - 依赖升级：先确认版本来源、许可、漏洞适用性和浏览器兼容，再运行受影响的阅读器、图表及 PDF 测试。第三方压缩文件不适合做无依据的手工修改；没有完整依赖清单或安全扫描时不要声称依赖无漏洞。
 - Nginx 已明确拒绝 `storage/`，但与其他镜像层调整一样，仍需在真实容器中执行对应回归；不要只凭 PHP CLI 测试认定 Nginx 规则已验证。
 - Mermaid 10.9.8 预打包文件内含 DOMPurify 3.4.2，后续版本有安全公告。部分公告需要 `IN_PLACE` 等特定使用条件，目前尚未完成对所有内嵌调用路径的适用性评估，不能宣称无风险；来源、版本和哈希见 `php-site/assets/vendor/RENDERER_DEPENDENCIES.md`。
+
+## 公开地址与本轮 UI 验收
+
+网站界面使用英文和 SiYuan Share 站名；读取配置时只归一化两个旧默认中文名称，其他自定义名称保留。网站翻译不改变思源插件本身的语言包或笔记内容。
+
+公开分享地址仍使用 Site settings 的 site_base_url。部署工作流的 apply_public_url 选项是本次操作者明确选择的更新：通过 scripts/configure-public-url.php 只写入 https://note.etalib.space，保留其他设置，拒绝 HTTP、凭据、查询和 fragment。普通部署不改写地址，不信任未经配置的转发请求头。该脚本的行为测试属于 admin_ui，通过 tests/run.py 和 PHP Actions 执行。
+
+新增 tests/pdf-ui.cjs 已接入 frontend-regression.yml；tests/ui-refinement-browser.cjs 由 PDF 浏览器用例调用，PHP Actions 的 --browser 会执行。界面修改仍需重建 reader-style.css，共享 controls.* 由现有打包器装入插件 resources；本轮没有独立复制或分叉控件实现。终验结果和实机未验证项见 UI_REFINEMENT_DELIVERY.md。
+
+Edge 的原生 downloads-hub 可能以空 Page URL 出现在 Playwright 中。PDF 无新增应用标签页检查使用浏览器级 CDP 目标列表，只排除同上下文中真实 edge:// 或 chrome:// 内部目标；未知空白页仍计入，不能通过忽略空 URL 来规避断言。
