@@ -85,6 +85,9 @@ const assets = path.join(__dirname, '../php-site/assets');
     await viewer.waitFor({state: 'visible'});
     assert.equal(await viewer.evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(243, 245, 247)', 'SVG viewer uses the same light background');
     assert.equal(await viewer.evaluate(el => getComputedStyle(el).backgroundImage), 'none', 'SVG viewer has no checkerboard over the light background');
+    await svgPage.emulateMedia({colorScheme: 'light'});
+    assert.equal(await viewer.evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(255, 255, 255)', 'Light SVG viewer uses white');
+    assert.equal(await viewer.evaluate(el => getComputedStyle(el).backgroundImage), 'none', 'Light SVG viewer has no checkerboard');
     await svgPage.close();
     console.log('Image sizing and dark SVG backgrounds passed on desktop and mobile.');
   } finally { await browser.close(); }

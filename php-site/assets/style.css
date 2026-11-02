@@ -2249,7 +2249,7 @@ body.share-side-open .share-side-backdrop {
   font-family: var(--font-display);
   margin-top: 1.4em;
   line-height: 1.35;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 /* Keep all six levels visibly distinct from body text, including in PDF. */
@@ -2263,6 +2263,10 @@ body.share-side-open .share-side-backdrop {
 .markdown-body strong,
 .markdown-body b {
   font-weight: 700;
+}
+
+.markdown-body :is(h1, h2, h3, h4, h5, h6) :is(strong, b) {
+  font-weight: inherit;
 }
 
 .layout-share .markdown-body h1,
@@ -2764,6 +2768,10 @@ body.image-viewer-open {
 .image-viewer-img.is-loaded {
   background-image: conic-gradient(#d0d0d0 25%, #fff 25% 50%, #d0d0d0 50% 75%, #fff 75%);
   background-size: 16px 16px;
+}
+
+body.layout-share .image-viewer-img:is([src$=".svg" i], [src*=".svg?" i], [src*=".svg#" i]) {
+  background: #fff;
 }
 
 .image-viewer-stage.is-dragging,
@@ -4153,7 +4161,7 @@ body:is(.layout-app, .layout-public, .layout-auth) { background: var(--bg); back
 .share-document-actions [data-share-toggle] { min-inline-size: 8em; }
 body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .kb-header { padding-bottom: 24px; margin-bottom: 28px; }
 body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-body { font-size: 16px; line-height: 1.85; letter-spacing: .005em; }
-body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-body :is(h1,h2,h3) { letter-spacing: -.02em; font-weight: 600; }
+body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-body :is(h1,h2,h3) { letter-spacing: -.02em; font-weight: 700; }
 body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-body h2 { margin-top: 2em; }
 body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-body blockquote { border-left: 2px solid var(--primary); background: var(--surface-muted); border-radius: 0 10px 10px 0; padding: 14px 20px; color: var(--muted); }
 .notebook-welcome { max-width: 640px; min-height: clamp(480px, 72vh, 760px); padding-block: 40px 56px; }

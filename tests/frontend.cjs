@@ -111,6 +111,18 @@ async function page(raw, {failMermaid = false, slowGraphviz = false} = {}) {
     assert.equal(plain.errors.length, 0, String(plain.errors));
   } finally { plain.close(); }
 
+  const boldMath = await page('## Plain heading\n\n## **Bold heading**\n\n- **$p_0 \\in x(A)$**: condition\n- **$x$**，next\n- **text $x$**: next\n- `$x$` and \\*\\*$x$\\*\\*');
+  try {
+    const body = boldMath.w.document.querySelector('.markdown-body');
+    const items = body.querySelectorAll('li');
+    for (const item of Array.from(items).slice(0, 3)) {
+      assert(item.querySelector('strong .katex'), 'Bold math renders inside emphasis');
+      assert(!item.textContent.includes('**'), 'Emphasis markers are not displayed');
+    }
+    assert(body.querySelector('code').textContent.includes('$x$'), 'Code remains literal');
+    assert(body.lastElementChild.textContent.includes('**'), 'Escaped markers remain literal');
+  } finally { boldMath.close(); }
+
   const images = await page([
     '<img src="/assets/sized.png" style="width: 400px; height: 300px" onerror="alert(1)">',
     '<img src="/assets/width.png" style="width: 280px">',

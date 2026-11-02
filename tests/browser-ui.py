@@ -77,7 +77,7 @@ window.addEventListener('load', async () => {
                (root / 'php-site/assets/style.css').as_uri(),
                (root / 'php-site/assets/pdf-export.css').as_uri()]
         links = ''.join('<link rel="stylesheet" href="' + html.escape(url, quote=True) + '">' for url in css)
-        headings = ''.join(f'<h{n}>Heading {n} 数学标题与公式 x²</h{n}>' for n in range(1, 7))
+        headings = ''.join(f'<h{n}>Heading {n} <strong>数学标题与公式 x²</strong></h{n}>' for n in range(1, 7))
         page = work / 'headings.html'
         page.write_text(f'''<!doctype html><html><head><meta charset="utf-8">{links}
 <style>.sample{{width:320px;max-width:100%;}} body{{padding:20px}} .sample h1,.sample h2,.sample h3,.sample h4,.sample h5,.sample h6{{margin-top:.45em;margin-bottom:.2em}}</style></head>
@@ -86,7 +86,7 @@ window.addEventListener('load', async () => {
 <script>
 const groups=[...document.querySelectorAll('.markdown-body')];
 const valid=groups.every(g=>{{const sizes=[1,2,3,4,5,6].map(n=>parseFloat(getComputedStyle(g.querySelector('h'+n)).fontSize));
-const body=parseFloat(getComputedStyle(g.querySelector('p')).fontSize);return sizes.every((v,i)=>v>body && (!i || sizes[i-1]>v)) && parseInt(getComputedStyle(g.querySelector('h4')).fontWeight)>=600;}});
+const body=parseFloat(getComputedStyle(g.querySelector('p')).fontSize);return sizes.every((v,i)=>v>body && (!i || sizes[i-1]>v)) && [...g.querySelectorAll('h1,h2,h3,h4,h5,h6')].every(h=>parseInt(getComputedStyle(h).fontWeight)>=700 && getComputedStyle(h).fontWeight===getComputedStyle(h.querySelector('strong')).fontWeight);}});
 const sample=document.querySelector('.sample');document.body.dataset.result=valid && sample.scrollWidth<=sample.clientWidth?'pass':'fail';
 document.body.dataset.sizes=[...groups[0].querySelectorAll('h1,h2,h3,h4,h5,h6,p')].map(x=>getComputedStyle(x).fontSize).join(',');
 document.body.dataset.viewport=String(window.innerWidth);

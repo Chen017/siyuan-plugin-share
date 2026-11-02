@@ -3894,20 +3894,17 @@ const initImageViewer = () => {
         }
       };
 
-      md.inline.ruler.after("escape", "katex_inline", (state, silent) => {
-        if (state.src[state.pos] !== "$") return false;
-        if (state.src[state.pos + 1] === "$") return false;
-        let start = state.pos + 1;
+      const findInlineMathEnd = (src, start) => {
         let match = start;
-        while ((match = state.src.indexOf("$", match)) !== -1) {
-          if (state.src[match - 1] === "\\") {
+        while ((match = src.indexOf("$", match)) !== -1) {
+          if (src[match - 1] === "\\") {
             match += 1;
             continue;
           }
           // Skip $ inside braced groups (e.g. \text{...$...$...})
           let braceDepth = 0;
           for (let i = start; i < match; i++) {
-            const ch = state.src[i];
+            const ch = src[i];
             if (ch === "\\" && i + 1 < match) { i++; continue; }
             if (ch === "{") braceDepth++;
             else if (ch === "}") braceDepth--;
@@ -3916,14 +3913,42 @@ const initImageViewer = () => {
             match += 1;
             continue;
           }
-          const content = state.src.slice(start, match);
+          const content = src.slice(start, match);
           if (!content.trim()) {
             match += 1;
             continue;
           }
+          return match;
+        }
+        return -1;
+      };
+
+      // CommonMark treats the closing dollar as punctuation, so **$x$**:
+      // can otherwise leave the emphasis markers visible before punctuation.
+      md.inline.ruler.before("emphasis", "strong_katex", (state, silent) => {
+        if (state.src.slice(state.pos, state.pos + 3) !== "**$" || state.src[state.pos + 3] === "$") return false;
+        const start = state.pos + 3;
+        const end = findInlineMathEnd(state.src, start);
+        if (end < 0 || state.src.slice(end + 1, end + 3) !== "**") return false;
+        if (!silent) {
+          state.push("strong_open", "strong", 1).markup = "**";
+          const token = state.push("katex_inline", "math", 0);
+          token.content = state.src.slice(start, end);
+          token.markup = "$";
+          state.push("strong_close", "strong", -1).markup = "**";
+        }
+        state.pos = end + 3;
+        return true;
+      });
+
+      md.inline.ruler.after("escape", "katex_inline", (state, silent) => {
+        if (state.src[state.pos] !== "$" || state.src[state.pos + 1] === "$") return false;
+        const start = state.pos + 1;
+        const match = findInlineMathEnd(state.src, start);
+        if (match !== -1) {
           if (!silent) {
             const token = state.push("katex_inline", "math", 0);
-            token.content = content;
+            token.content = state.src.slice(start, match);
             token.markup = "$";
           }
           state.pos = match + 1;
