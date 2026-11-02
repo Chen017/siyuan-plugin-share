@@ -271,11 +271,12 @@ function render_share_search_box(): string {
     return $html;
 }
 
-function render_doc_tree(array $nodes, string $slug, ?string $activeId = null, int $level = 0, string $path = '', string $assetBasePath = ''): string {
+function render_doc_tree(array $nodes, string $slug, ?string $activeId = null, int $level = 0, string $path = '', string $assetBasePath = '', bool $groupNotebookRoots = false): string {
     if (empty($nodes)) {
         return '';
     }
     $html = '<ul class="kb-tree kb-tree-children" data-level="' . $level . '">';
+    $groupIndex = 0;
     foreach ($nodes as $node) {
         $doc = $node['doc'] ?? null;
         $hasChildren = !empty($node['children']);
@@ -288,7 +289,10 @@ function render_doc_tree(array $nodes, string $slug, ?string $activeId = null, i
         if ($hasChildren) {
             $nodeClass .= $shouldOpen ? ' is-open' : ' is-collapsed';
         }
-        $html .= '<li class="' . $nodeClass . '" data-tree-key="' . htmlspecialchars($nodeKey) . '">';
+        $group = $groupNotebookRoots && $level === 0 && $hasChildren;
+        if ($group) $nodeClass .= ' kb-tree-group';
+        $groupAttr = $group ? ' data-tree-group="' . ($groupIndex++ % 12) . '"' : '';
+        $html .= '<li class="' . $nodeClass . '"' . $groupAttr . ' data-tree-key="' . htmlspecialchars($nodeKey) . '">';
         $html .= '<div class="kb-tree-row">';
         if ($hasChildren) {
             $html .= '<button class="kb-tree-toggle" type="button" aria-label="Expand or collapse ' . htmlspecialchars((string)$node['title'], ENT_QUOTES, 'UTF-8') . '" aria-expanded="' . ($shouldOpen ? 'true' : 'false') . '">';
@@ -314,7 +318,7 @@ function render_doc_tree(array $nodes, string $slug, ?string $activeId = null, i
         }
         $html .= '</div>';
         if ($hasChildren) {
-            $html .= render_doc_tree($node['children'], $slug, $activeId, $level + 1, $pathKey, $assetBasePath);
+            $html .= render_doc_tree($node['children'], $slug, $activeId, $level + 1, $pathKey, $assetBasePath, $groupNotebookRoots);
         }
         $html .= '</li>';
     }
@@ -608,7 +612,7 @@ function route_share(string $slug, ?string $docId = null): void {
 
     if ($share['type'] === 'notebook') {
         $notebookTree = build_doc_tree($docs, $docId);
-        $treeHtml = render_doc_tree($notebookTree, $slug, $docId, 0, '', $assetBasePath);
+        $treeHtml = render_doc_tree($notebookTree, $slug, $docId, 0, '', $assetBasePath, true);
         $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
         $sidebar .= render_reader_library($shareTitleRaw, $slug);
         $sidebar .= render_share_search_box();
