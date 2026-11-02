@@ -86,7 +86,7 @@ window.addEventListener('load', async () => {
 <script>
 const groups=[...document.querySelectorAll('.markdown-body')];
 const valid=groups.every(g=>{{const sizes=[1,2,3,4,5,6].map(n=>parseFloat(getComputedStyle(g.querySelector('h'+n)).fontSize));
-const body=parseFloat(getComputedStyle(g.querySelector('p')).fontSize);return sizes.every((v,i)=>v>body && (!i || sizes[i-1]>v)) && [...g.querySelectorAll('h1,h2,h3,h4,h5,h6')].every(h=>parseInt(getComputedStyle(h).fontWeight)>=700 && getComputedStyle(h).fontWeight===getComputedStyle(h.querySelector('strong')).fontWeight);}});
+const body=parseFloat(getComputedStyle(g.querySelector('p')).fontSize);return sizes.every((v,i)=>v>body && (!i || sizes[i-1]>v)) && [...g.querySelectorAll('h1,h2,h3,h4,h5,h6')].every(h=>parseInt(getComputedStyle(h).fontWeight)===600 && getComputedStyle(h).fontWeight===getComputedStyle(h.querySelector('strong')).fontWeight);}});
 const sample=document.querySelector('.sample');document.body.dataset.result=valid && sample.scrollWidth<=sample.clientWidth?'pass':'fail';
 document.body.dataset.sizes=[...groups[0].querySelectorAll('h1,h2,h3,h4,h5,h6,p')].map(x=>getComputedStyle(x).fontSize).join(',');
 document.body.dataset.viewport=String(window.innerWidth);

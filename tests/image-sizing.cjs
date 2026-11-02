@@ -88,7 +88,32 @@ const assets = path.join(__dirname, '../php-site/assets');
     await svgPage.emulateMedia({colorScheme: 'light'});
     assert.equal(await viewer.evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(255, 255, 255)', 'Light SVG viewer uses white');
     assert.equal(await viewer.evaluate(el => getComputedStyle(el).backgroundImage), 'none', 'Light SVG viewer has no checkerboard');
+    const thumbnails = svgPage.locator('.image-viewer-thumb');
+    await svgPage.waitForFunction(() => [...document.querySelectorAll('.image-viewer-thumb')].every(el => el.classList.contains('is-loaded')));
+    for (const scheme of ['light', 'dark']) {
+      await svgPage.emulateMedia({colorScheme: scheme});
+      assert.equal(await thumbnails.first().evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(255, 255, 255)', `${scheme} SVG thumbnail is white`);
+      assert.equal(await thumbnails.first().evaluate(el => getComputedStyle(el).backgroundImage), 'none', `${scheme} SVG thumbnail has no checkerboard`);
+      assert.notEqual(await thumbnails.last().evaluate(el => getComputedStyle(el).backgroundImage), 'none', 'Raster thumbnail retains checkerboard');
+    }
     await svgPage.close();
+
+    const typography = await browser.newPage();
+    await typography.goto('file:///' + path.join(assets, 'style.css').replace(/\\/g, '/'));
+    await typography.setContent(`<link rel="stylesheet" href="file:///${path.join(assets, 'style.css').replace(/\\/g, '/')}"><body class="layout-share"><main class="kb-main"><h1 class="kb-title">Document 标题</h1><article class="markdown-body"><h2>Heading <strong>Bold</strong></h2><p>Regular 正文 <strong>Emphasis 强调</strong></p></article></main><section class="pdf-document"><section class="pdf-doc"><h1>Document 标题</h1><article class="markdown-body"><h2>Heading <strong>Bold</strong></h2><p>Regular 正文 <strong>Emphasis 强调</strong></p></article></section></section></body>`);
+    for (const scheme of ['light', 'dark']) {
+      await typography.emulateMedia({colorScheme: scheme});
+      const styles = await typography.evaluate(async () => {
+        await Promise.all([400, 500, 600].map(w => document.fonts.load(`${w} 16px "MiSans Latin"`, 'Hello')));
+        const style = selector => { const s = getComputedStyle(document.querySelector(selector)); return [s.fontFamily, s.fontWeight]; };
+        return {loaded: [400, 500, 600].every(w => document.fonts.check(`${w} 16px "MiSans Latin"`, 'Hello')),
+          title: style('.kb-title'), pdfTitle: style('.pdf-doc > h1'), heading: style('.markdown-body h2'), headingBold: style('.markdown-body h2 strong'), body: style('.markdown-body p'), strong: style('.markdown-body p strong')};
+      });
+      assert(styles.loaded, `${scheme}: official font weights loaded`);
+      for (const key of ['title', 'pdfTitle', 'heading', 'headingBold', 'body', 'strong']) assert(styles[key][0].includes('MiSans Latin'), `${key} uses MiSans Latin with system fallback`);
+      assert.deepEqual([styles.title[1], styles.pdfTitle[1], styles.heading[1], styles.headingBold[1], styles.body[1], styles.strong[1]], ['600', '600', '600', '600', '400', '500']);
+    }
+    await typography.close();
     console.log('Image sizing and dark SVG backgrounds passed on desktop and mobile.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

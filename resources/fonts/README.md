@@ -1,15 +1,19 @@
-# MiSans source font
+# MiSans fonts
 
-`MiSans-Regular.ttf` is the original input to `scripts/subset-misans.py`.
-Its bytes, copyright and embedded name/license records are preserved from the
-previous `php-site/assets/MiSans-Regular.ttf` file.
+The reader and exported PDFs use Xiaomi's MiSans font service Latin WOFF2
+subsets for weights 400, 500 and 600, with system-font fallback for Chinese.
+The files under `php-site/assets/MiSans-official-*` were downloaded from the
+official `font.sec.miui.com/font/css?family=MiSans:400,500,600,650:Latin&display=swap`
+font service on 2026-11-02, using its declared unicode ranges except U+3007, which falls back to the system font. These are the
+official MiSans Latin-script subsets of the MiSans family, not the separately
+named MiSans Latin family. The service returns identical bytes for 600 and 650; both document and note
+headings therefore use 600. Chinese continues to use the browser's system-font fallback.
 
-The reader uses the generated `php-site/assets/MiSans-Latin.woff2` for Latin text
-and system fonts for Chinese. Source fonts are excluded from server/plugin ZIPs
-and Docker build contexts. PDF fonts remain under the server's vendor assets.
+`MiSans-Regular.ttf` is the historical input to `scripts/subset-misans.py`,
+which creates the older `MiSans-Latin.woff2`. Those files are retained for
+reproducibility; the reader uses the official slices instead. Font source files
+are excluded from server/plugin ZIPs and Docker build contexts. PDF selection
+fonts remain under the server's vendor assets.
 
-Regenerate from the repository root with Python and `fonttools[woff]` available:
-
-```sh
-python scripts/subset-misans.py
-```
+MiSans is a Xiaomi font; its terms and attribution requirement are described in
+the [official license](https://hyperos.mi.com/font/en/download/).
