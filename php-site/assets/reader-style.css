@@ -4538,7 +4538,7 @@ details[open] > summary::before { transform: rotate(45deg); }
 .image-viewer-actions { right: 64px; max-width: calc(100% - 76px); gap: 6px; }
 .image-viewer-more { position: relative; }
 .image-viewer-more summary { padding: 10px; cursor: pointer; list-style: none; }
-.image-viewer-more[open] { background: var(--surface); border-radius: 10px; }
+.image-viewer-more[open] { background: rgb(15 20 28 / 98%); color: #fff; border-radius: 10px; }
 .image-viewer-more summary:focus-visible, .markdown-body img[role="button"]:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
 .share-password-control { display: flex; flex-wrap: wrap; gap: 8px; }
 .share-password-control input { flex: 1 1 160px; min-width: 0; }
