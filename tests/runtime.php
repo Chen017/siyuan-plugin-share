@@ -22,6 +22,19 @@ function check(bool $condition, string $message): void {
     $checks++;
 }
 
+check(search_summary('Before $x^2$ after', 'after') === 'Before Formula after', 'Search abstracts complete formulas before clipping');
+check(!str_contains(search_summary(str_repeat('prefix ', 40) . '$' . str_repeat('x', 300) . '$ target result', 'target'), 'xxx'), 'Long formulas cannot leak through excerpt boundaries');
+check(search_summary('[Readable](https://example.com) **text**', 'text') === 'Readable text', 'Search summaries retain link labels as plain text');
+check(search_summary('A $\\text{cost $5}$ B', 'B') === 'A Formula B', 'Braced dollar text does not break formula boundaries');
+
+$exportLabels = pdf_export_document_labels([
+    ['doc_id' => 'parent', 'title' => 'Course', 'hpath' => '', 'parent_id' => ''],
+    ['doc_id' => 'child', 'title' => 'Lecture', 'hpath' => '', 'parent_id' => 'parent'],
+    ['doc_id' => 'known', 'title' => 'Note', 'hpath' => '/Original/Note', 'parent_id' => 'parent'],
+]);
+check($exportLabels['child'] === 'Course / Lecture' && $exportLabels['known'] === '/Original/Note', 'Export filtering preserves hierarchical path context');
+check(pdf_export_document_labels([['doc_id' => 'cycle', 'title' => 'Cycle', 'parent_id' => 'cycle']])['cycle'] === 'Cycle', 'Export label generation terminates on cyclic parent data');
+
 $treeFixture = [];
 for ($i = 0; $i < 14; $i++) {
     $treeFixture[] = ['title' => "Course $i", 'doc' => ['doc_id' => "course-$i", 'title' => "Course $i"],

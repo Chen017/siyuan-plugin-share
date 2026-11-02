@@ -36,7 +36,7 @@ body.layout-share .markdown-body a[href] {
   --primary: #0066cc;
   --primary-700: #005bb5;
   --accent: #1aa7a1;
-  --danger: #e25555;
+  --danger: #b4232f;
   --border: #e5e5e9;
   --shadow: 0 16px 48px rgb(24 35 48 / 14%);
   --shadow-soft: 0 2px 8px rgb(24 35 48 / 5%);
@@ -4123,10 +4123,10 @@ body.layout-share :is(.kb-tree-item, .share-toc-link, .reader-nav-button, .reade
   .reader-drawer-close { color: var(--muted); }
   .kb-sidebar, .share-toc {
     flex: none; width: min(88vw, 360px); top: 0; height: 100dvh; padding: 8px 12px max(16px, env(safe-area-inset-bottom));
-    margin-top: 0 !important; transition: transform var(--motion-dismiss) var(--ease-dismiss), opacity var(--motion-dismiss) ease, visibility 0s var(--motion-dismiss);
+    margin-top: 0 !important; opacity: 1; transition: transform var(--motion-dismiss) var(--ease-dismiss), visibility 0s var(--motion-dismiss);
     visibility: hidden;
   }
-  body.share-side-open :is(.kb-sidebar, .share-toc) { visibility: visible; transition-delay: 0s; transition-duration: var(--motion-present), var(--motion-change), 0s; transition-timing-function: var(--ease-present), ease, linear; }
+  body.share-side-open :is(.kb-sidebar, .share-toc) { visibility: visible; transition-delay: 0s; transition-duration: var(--motion-present), 0s; transition-timing-function: var(--ease-present), linear; }
   .kb-sidebar[aria-hidden="false"], .share-toc[aria-hidden="false"] { visibility: visible; }
   .kb-main { padding: 28px 20px 40px; }
   .kb-main > .share-empty { position: static; transform: none; min-height: 40vh; width: auto; pointer-events: auto; }
@@ -4212,7 +4212,7 @@ body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .notebook-w
 .notebook-actions { gap: 10px; margin: 24px 0 36px; }
 .notebook-actions > .button { min-height: 40px; padding: 10px 16px; font-weight: 500; }
 .notebook-actions > .button.primary .reader-icon { width: 16px; height: 16px; transition: transform var(--motion-feedback) var(--ease-response); }
-.notebook-actions > .button[data-reader-resume] { flex-basis: 100%; width: 100%; justify-content: flex-start; border-color: var(--border); background: var(--surface); color: var(--primary); padding: 10px 16px; }
+.notebook-actions > .button[data-reader-resume] { flex-basis: 100%; width: 100%; justify-content: flex-start; border-color: var(--border); background: var(--surface); color: var(--text); padding: 10px 16px; }
 .notebook-reading-hint { border: 0; padding: 0; font-size: .75rem; line-height: 1.8; }
 .share-footer { font-size: .6875rem; color: var(--muted); }
 .reader-drawer-close svg { width: 18px; height: 18px; }
@@ -4265,6 +4265,9 @@ body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .notebook-w
   .kb-search-input { min-height: 44px; font-size: 16px; }
 }
 @media (max-width:480px) {
+  body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-body h2 { line-height: 1.4; margin-top: 1.5em; margin-bottom: .6em; }
+  body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-body h3 { line-height: 1.4; margin-top: 1.25em; margin-bottom: .55em; }
+  body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-body :is(h1,h2,h3,h4,h5,h6) + :is(h1,h2,h3,h4,h5,h6) { margin-top: .7em; }
   .kb-main { padding-inline: 22px; }
   body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .notebook-welcome > .kb-title { font-size: 34px; }
   .notebook-intro { font-size: 1rem; }
@@ -4421,7 +4424,7 @@ html, body, body * { scrollbar-color: color-mix(in srgb, var(--muted) 35%, trans
 .kb-tree-group[data-tree-group="10"] { --group-accent: #a692a5; }
 .kb-tree-group[data-tree-group="11"] { --group-accent: #a69b90; }
 .kb-tree-group {
-  --group-line: color-mix(in srgb, var(--group-accent) 70%, var(--panel-bg));
+  --group-line: color-mix(in srgb, var(--group-accent) 45%, var(--panel-bg));
 }
 .kb-side-body:has(.kb-tree-group) { scroll-padding-top: 72px; }
 .kb-tree-group .kb-tree { --tree-line: var(--group-line); }
@@ -4446,7 +4449,7 @@ body.layout-share .kb-tree-group .kb-tree-item:focus { box-shadow: inset 2px 0 v
   border-radius: 9px;
 }
 @media (prefers-color-scheme: dark) {
-  .kb-tree-group { --group-line: color-mix(in srgb, var(--group-accent) 65%, var(--panel-bg)); }
+  .kb-tree-group { --group-line: color-mix(in srgb, var(--group-accent) 40%, var(--panel-bg)); }
   body.layout-share .kb-tree-group .kb-tree-item:is(.is-active, :focus, :active) {
     background: color-mix(in srgb, var(--group-accent) 30%, var(--panel-bg));
     color: color-mix(in srgb, var(--group-accent) 38%, #fff);
@@ -4457,7 +4460,7 @@ body.layout-share .kb-tree-group .kb-tree-item:focus { box-shadow: inset 2px 0 v
 .notebook-actions > .button[data-reader-resume] > span { min-width: 0; overflow-wrap: anywhere; }
 .notebook-actions > .button[data-reader-resume]:hover { background: var(--surface-muted); }
 .share-grid { display: grid; grid-template-columns: minmax(0,1fr); gap: 14px; margin-top: 24px; }
-.share-card { display: flex; flex-direction: column; min-width: 0; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.share-card { display: flex; flex-direction: column; min-width: 0; gap: 12px; padding: 16px; border: 1px solid color-mix(in srgb, var(--border) 60%, transparent); border-radius: 14px; background: var(--surface); }
 .share-title-cell { min-width: 0; }
 .share-title-cell > a, .share-title-cell > strong { font-size: 1rem; font-weight: 600; overflow-wrap: anywhere; }
 .share-card small { display: block; font-size: .75rem; color: var(--muted); margin-top: 4px; overflow-wrap: anywhere; }
@@ -4529,3 +4532,43 @@ details[open] > summary::before { transform: rotate(45deg); }
   body.layout-share .reader-frame :is(.kb-sidebar,.share-toc) { transition: none; }
 }
 @media(max-width:960px), print { .reader-sidebar-reopen { display: none; } }
+
+/* Stable media controls: close is independent of the wrapping action group. */
+.image-viewer-ui > button[data-viewer-close] { position: absolute; z-index: 3; top: max(12px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); }
+.image-viewer-actions { right: 64px; max-width: calc(100% - 76px); gap: 6px; }
+.image-viewer-more { position: relative; }
+.image-viewer-more summary { padding: 10px; cursor: pointer; list-style: none; }
+.image-viewer-more[open] { background: rgb(15 20 28 / 98%); color: #fff; border-radius: 10px; }
+.image-viewer-more summary:focus-visible, .markdown-body img[role="button"]:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+.share-password-control { display: flex; flex-wrap: wrap; gap: 8px; }
+.share-password-control input { flex: 1 1 160px; min-width: 0; }
+@media (max-width: 960px) {
+  .share-toc-body, .share-toc-list { width: 100%; min-width: 0; max-width: 100%; }
+  .share-toc-link, .share-toc-text { white-space: normal; overflow-wrap: anywhere; }
+}
+@media (pointer: coarse) {
+  .sps-select-trigger, .sps-select-option, .sps-date-trigger, .sps-control-panel button { min-height: 44px; }
+}
+
+/* Semantic layers share the existing light/dark palette. */
+:root { --canvas-bg: var(--bg); --content-bg: var(--surface); --sidebar-bg: var(--panel-bg); --overlay-bg: var(--surface); --input-bg: var(--surface-muted); }
+.layout-app .input, .layout-share .input { background: var(--input-bg); }
+.layout-app .admin-account .button.ghost { color: var(--muted); background: transparent; }
+.reader-icon { width: 18px; height: 18px; flex: none; }
+.notebook-actions { align-items: center; }
+.notebook-actions > [data-reader-resume] { margin-top: 0; }
+.notebook-reading-hint { margin-top: 0; }
+.image-viewer-btn { border-color: rgb(255 255 255 / 25%); box-shadow: none; }
+[data-notice-persistent] { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+:where(button, a[href], input, select, textarea, summary):focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+@media (max-width:960px) { body.share-side-open :is(.kb-sidebar,.share-toc) { opacity: 1; background: var(--sidebar-bg); } }
+@media (forced-colors:active) {
+ .button, .share-card, .input { border: 1px solid ButtonText; }
+ .is-active, [aria-pressed=true], [aria-current=page] { outline: 2px solid Highlight; outline-offset: -2px; }
+ :focus-visible { outline: 2px solid Highlight; }
+}
+
+body:is(.layout-app,.layout-share,.layout-public,.layout-auth) { background: var(--canvas-bg); }
+body.layout-share .reader-frame { background: var(--content-bg); }
+body.layout-share .reader-frame :is(.kb-sidebar,.share-toc) { background: var(--sidebar-bg); }
+.confirm-dialog, .sps-footnote-window { background: var(--overlay-bg); }

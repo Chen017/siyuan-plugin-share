@@ -60,7 +60,7 @@ class PdfCookieTests:
             other_session, token = self.new_pdf_cookie_client(path, source=visitor)
             status, _, body = self.pdf_post(other_session, path, token, headers={'X-Real-IP': '203.0.113.88'}, fingerprint='b' * 64)
             self.assertEqual(status, 429, body)
-            self.assertIn('预计'.encode(), body)
+            self.assertIn(b'Expected recovery:', body)
             self.assertEqual(self.rows(f"SELECT SUM(doc_count) AS n FROM pdf_export_events WHERE visitor_hash = '{identity}'")[0]['n'], 120)
             self.rows(f"INSERT INTO pdf_export_clearance VALUES ('{identity}', {int(time.time()) + 3600})")
             self.assertEqual(self.pdf_post(visitor, path, csrf)[0], 429)  # CAPTCHA never refills quota

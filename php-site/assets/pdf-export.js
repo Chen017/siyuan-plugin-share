@@ -11,6 +11,7 @@
   let dialog;
   let dialogFrame;
   let closeTimer;
+  let confirmingClose = false;
   const pdfCssUrl = document.currentScript?.dataset.pdfCss;
   let pdfCss;
   const ensurePdfCss = () => pdfCss || (pdfCss = new Promise((resolve, reject) => {
@@ -21,8 +22,15 @@
     link.onerror = () => { link.remove(); reject(new Error('Unable to load export styles.')); };
     document.head.append(link);
   }).catch(error => { pdfCss = null; throw error; }));
-  const closeDialog = () => {
-    if (!dialog?.open || closeTimer) return;
+  const closeDialog = async () => {
+    if (!dialog?.open || closeTimer || confirmingClose) return;
+    const taskState = dialogFrame.contentDocument?.querySelector('[data-pdf-export-form]')?.dataset.exportState;
+    if (['checking', 'running', 'retry'].includes(taskState)) {
+      confirmingClose = true;
+      const approved = await window.SPSConfirm({title: 'Cancel export?', message: 'Files already downloaded will remain. The current export and remaining documents will stop.', confirmLabel: 'Cancel export', cancelLabel: 'Keep exporting', dangerous: true});
+      confirmingClose = false;
+      if (!approved || !dialog.open) return;
+    }
     dialogFrame.contentWindow.postMessage({ type: 'sps-pdf-cancel' }, location.origin);
     dialog.dataset.closing = '1';
     const delay = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 180;
@@ -75,8 +83,8 @@
     if (dialog.open) return;
     const url = new URL(link.href);
     url.searchParams.set('dialog', '1');
+    dialogFrame.hidden = true;
     dialogFrame.src = url.href;
-    dialogFrame.hidden = false;
     dialog.querySelector('.pdf-dialog-loading').hidden = false;
     dialog.querySelector('.pdf-dialog-loading').textContent = 'Loading export options…';
     document.documentElement.classList.add('pdf-dialog-open');
@@ -127,14 +135,42 @@
     const submit = form.querySelector('button[type=submit]');
     const quota = document.querySelector('[data-pdf-quota]');
     let state = 'idle';
+    let cancelled = false;
+    form.dataset.exportState = 'idle';
     const setState = (next) => {
       state = next;
+      form.dataset.exportState = next;
+      if (parent !== window) parent.postMessage({type: 'sps-pdf-task-state', state: next, completedCount: Number(form.dataset.completedCount || 0), totalCount: Number(form.dataset.totalCount || 0)}, location.origin);
       submit.disabled = next === 'checking' || next === 'running';
       submit.textContent = next === 'running' ? 'Exporting…' : next === 'retry' ? 'Retry remaining documents' : next === 'done' ? 'Export again' : 'Export';
       form.setAttribute('aria-busy', String(submit.disabled));
       document.dispatchEvent(new Event('sps:controls-close'));
       form.querySelectorAll('.sps-select-trigger, [data-pdf-scope], [data-pdf-root], [data-pdf-selection], [data-pdf-challenge]').forEach((node) => { node.inert = ['checking', 'running', 'retry'].includes(next); });
+      updateSelection();
     };
+    const selection = form.querySelector('[data-pdf-selection]');
+    const selectedCount = form.querySelector('[data-pdf-selected-count]');
+    const boxes = [...form.querySelectorAll('[name="doc_ids[]"]')];
+    const updateSelection = () => {
+      if (!selectedCount) return;
+      const count = boxes.filter(box => box.checked).length;
+      const limit = Number(form.dataset.maxDocs);
+      selectedCount.hidden = scope.value !== 'selected';
+      selectedCount.textContent = `${count} selected / ${limit} maximum` + (count === 0 ? ". Select at least one document." : count > limit ? ". Select fewer documents." : "");
+      const invalid = scope.value === 'selected' && (count === 0 || count > limit);
+      selectedCount.classList.toggle('is-invalid', count > limit);
+      submit.disabled = ['checking', 'running'].includes(state) || (state !== 'retry' && invalid);
+    };
+    selection?.addEventListener('change', updateSelection);
+    scope.addEventListener('change', updateSelection);
+    form.querySelector('[data-pdf-filter]')?.addEventListener('input', event => {
+      const query = event.target.value.trim().toLocaleLowerCase();
+      boxes.forEach(box => { box.closest('label').hidden = !box.closest('label').textContent.toLocaleLowerCase().includes(query); });
+      const empty = form.querySelector('[data-pdf-filter-empty]');
+      if (empty) empty.hidden = boxes.some(box => !box.closest('label').hidden);
+    });
+    form.querySelector('[data-pdf-clear]')?.addEventListener('click', () => { boxes.forEach(box => { box.checked = false; }); updateSelection(); });
+    updateSelection();
     const showQuota = (value) => {
       const next = value.next_recovery_at ? `Next recovery: ${new Date(value.next_recovery_at * 1000).toLocaleString('en-GB')} (${value.next_recovery_count} documents, local time). ` : 'Full quota available. ';
       const expanded = quota.querySelector('details')?.open || false;
@@ -158,7 +194,8 @@
     };
     const quotaTimer = setInterval(() => { refreshQuota().catch(() => {}); }, 30000);
     const cancelTask = () => {
-      if (!['running', 'retry'].includes(state)) return;
+      if (!['checking', 'running', 'retry'].includes(state)) return;
+      cancelled = true;
       navigator.sendBeacon?.(`${form.action}/release`, new URLSearchParams({ csrf: form.querySelector('[name=csrf]').value, ticket: form.querySelector('[name=ticket]').value }));
       worker.src = 'about:blank';
       setState('idle');
@@ -177,6 +214,8 @@
       if (message.origin !== location.origin || message.source !== worker.contentWindow || message.data?.type !== 'sps-pdf-export') return;
       formStatus.textContent = String(message.data.message || '');
       updateProgress(form, message.data.percent);
+      form.dataset.completedCount = String(Math.max(0, Number(message.data.completedCount) || 0));
+      form.dataset.totalCount = String(Math.max(0, Number(message.data.totalCount) || 0));
       if (message.data.state === 'done') setState('done');
       if (message.data.state === 'error') setState(message.data.retryable ? 'retry' : 'idle');
       if (['done', 'error'].includes(message.data.state)) refreshQuota().catch(() => {});
@@ -221,6 +260,7 @@
         worker.contentWindow.postMessage({ type: 'sps-pdf-retry' }, location.origin);
         return;
       }
+      cancelled = false;
       setState('checking');
       try {
         let input = form.querySelector("input[name=fingerprint]");
@@ -246,6 +286,7 @@
           return;
         }
         // Submit in the user's gesture where possible; no server-side browser process.
+        if (cancelled) return;
         HTMLFormElement.prototype.submit.call(form);
         setState('running');
         updateProgress(form, 0);
@@ -283,7 +324,7 @@
       status.textContent = message;
       const percent = 100 * (completed.size + fraction) / docs.length;
       updateProgress(panel, percent);
-      if (automatic && parent !== window) parent.postMessage({ type: 'sps-pdf-export', state, message, retryable, percent }, location.origin);
+      if (automatic && parent !== window) parent.postMessage({ type: 'sps-pdf-export', state, message, retryable, percent, completedCount: completed.size, totalCount: docs.length }, location.origin);
     };
     const release = () => {
       if (released) return;

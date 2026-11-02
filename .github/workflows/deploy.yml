@@ -5,6 +5,11 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      apply_public_url:
+        description: 'Explicitly configure the public share address as https://note.etalib.space'
+        required: false
+        default: false
+        type: boolean
       apply_pdf_limits:
         description: 'Explicitly apply 60 minutes / 120 documents per visitor; ordinary deployment preserves saved settings'
         required: false
@@ -125,6 +130,9 @@ jobs:
             fi
             if [ '${{ github.event_name == 'workflow_dispatch' && inputs.apply_pdf_batch_limit && 'yes' || 'no' }}' = yes ]; then
               docker exec --user www-data -i siyuan-share-web php /dev/stdin /var/www/html --batch 120 < scripts/configure-pdf-limits.php
+            fi
+            if [ '${{ github.event_name == 'workflow_dispatch' && inputs.apply_public_url && 'yes' || 'no' }}' = yes ]; then
+              docker exec --user www-data -i siyuan-share-web php /dev/stdin /var/www/html https://note.etalib.space < scripts/configure-public-url.php
             fi
             docker image prune -f
             echo 'VPS updated; container healthy and login HTTP 200.'

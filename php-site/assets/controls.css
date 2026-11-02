@@ -38,3 +38,19 @@
 
 .sps-date-trigger { display: inline-flex; align-items: center; justify-content: center; }
 @supports selector(::-webkit-scrollbar) { .sps-control-panel, .sps-control-panel * { scrollbar-width: auto; scrollbar-color: auto; } }
+
+@media (pointer: coarse) {
+  .sps-select-trigger, .sps-select-option, .sps-date-trigger, .sps-control-panel button { min-height: 44px; }
+  .sps-select-option { display: flex; align-items: center; }
+  .sps-control-panel button { min-width: 44px; }
+  .sps-date-trigger { width: 44px; flex-basis: 44px; }
+  .sps-calendar-grid { gap: 0; }
+}
+@media (pointer: coarse) and (max-width:359px) {
+  .sps-date-panel { padding: 5px; }
+}
+@media (forced-colors:active) {
+  .sps-select-option[aria-selected=true], .sps-calendar-grid button[aria-pressed=true] { outline: 2px solid Highlight; outline-offset: -2px; }
+}
+
+.sps-select-trigger, .sps-date-trigger { background: var(--input-bg, var(--control-bg)); }

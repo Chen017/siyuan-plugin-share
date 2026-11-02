@@ -130,7 +130,7 @@ function render_pdf_export_settings(): string {
 
 function save_pdf_export_settings(array $input): void {
     $limits = $input['limits'] ?? null;
-    if (!is_array($limits)) throw new InvalidArgumentException('请完整填写 PDF 导出限制。');
+    if (!is_array($limits)) throw new InvalidArgumentException('Complete the PDF export limits.');
     $values = [];
     foreach (pdf_export_fields() as $key => $field) {
         $raw = $limits[$key] ?? null;
@@ -138,23 +138,23 @@ function save_pdf_export_settings(array $input): void {
         $whole = $field['whole'] ?? ($scale === 1);
         $pattern = $whole ? '/^[0-9]{1,10}$/D' : '/^[0-9]{1,10}(?:\.[0-9]{1,8})?$/D';
         if (!is_string($raw) || !preg_match($pattern, $raw) || round((float)$raw * $scale) < ($field['min'] ?? 1) || (float)$raw * $scale > $field['max']) {
-            throw new InvalidArgumentException('「' . $field['label'] . '」必须在允许范围内。');
+            throw new InvalidArgumentException($field['label'] . ' must be within the allowed range.');
         }
         $values['pdf_export_' . $key] = (string)(int)round((float)$raw * $scale);
     }
     $enabled = $input['pdf_export_enabled'] ?? '0';
-    if (!is_string($enabled) || !in_array($enabled, ['0', '1'], true)) throw new InvalidArgumentException('无效的导出开关。');
+    if (!is_string($enabled) || !in_array($enabled, ['0', '1'], true)) throw new InvalidArgumentException('Invalid export setting.');
     $rawProxies = $input['pdf_export_trusted_proxies'] ?? '';
-    if (!is_string($rawProxies) || strlen($rawProxies) > 4096) throw new InvalidArgumentException('可信代理地址过长或格式无效。');
+    if (!is_string($rawProxies) || strlen($rawProxies) > 4096) throw new InvalidArgumentException('Trusted proxy addresses are too long or invalid.');
     $proxies = preg_split('/[\s,]+/', trim($rawProxies), -1, PREG_SPLIT_NO_EMPTY);
-    if (count($proxies) > 32) throw new InvalidArgumentException('可信代理最多填写 32 个 IP。');
+    if (count($proxies) > 32) throw new InvalidArgumentException('Enter at most 32 trusted proxy IP addresses.');
     foreach ($proxies as &$ip) {
-        if (!filter_var($ip, FILTER_VALIDATE_IP)) throw new InvalidArgumentException('可信代理只接受精确 IP 地址，不接受网段、通配符或域名。');
+        if (!filter_var($ip, FILTER_VALIDATE_IP)) throw new InvalidArgumentException('Trusted proxies require exact IP addresses, without networks, wildcards or hostnames.');
         $ip = inet_ntop(inet_pton($ip));
     }
     unset($ip);
     $header = $input['pdf_export_ip_header'] ?? '';
-    if (!is_string($header) || !in_array($header, ['HTTP_X_REAL_IP', 'HTTP_CF_CONNECTING_IP'], true)) throw new InvalidArgumentException('请选择支持的真实 IP 请求头。');
+    if (!is_string($header) || !in_array($header, ['HTTP_X_REAL_IP', 'HTTP_CF_CONNECTING_IP'], true)) throw new InvalidArgumentException('Choose a supported client IP header.');
     $values['pdf_export_enabled'] = $enabled;
     $values['pdf_export_trusted_proxies'] = json_encode(array_values(array_unique($proxies)));
     $values['pdf_export_ip_header'] = $header;
@@ -203,17 +203,17 @@ function pdf_export_fail(int $status, string $message): never {
 
 function pdf_export_share(string $slug): array {
     if (!pdf_export_settings()['enabled']) {
-        pdf_export_fail(404, 'PDF 导出未开启。');
+        pdf_export_fail(404, 'PDF export is disabled.');
     }
     $share = find_share_by_slug($slug);
-    if (!$share) pdf_export_fail(404, '分享不存在。');
-    if (share_is_expired($share)) pdf_export_fail(410, '分享已过期。');
+    if (!$share) pdf_export_fail(404, 'Share not found.');
+    if (share_is_expired($share)) pdf_export_fail(410, 'This share has expired.');
     if (share_requires_password($share)) {
         // Compare with this fresh row, not the request-local password hash cache.
         $entry = $_SESSION['share_access'][(int)$share['id']] ?? '';
         $token = is_array($entry) ? ($entry['token'] ?? '') : $entry;
         if (!is_string($token) || !hash_equals(share_access_signature((string)$share['password_hash']), $token)) {
-            pdf_export_fail(403, '请先在分享页验证访问密码。');
+            pdf_export_fail(403, 'Enter the password on the share page first.');
         }
     }
     return $share;
@@ -222,7 +222,7 @@ function pdf_export_share(string $slug): array {
 function pdf_export_csrf(): void {
     $token = $_POST['csrf'] ?? null;
     if (!is_string($token) || $token === '' || !hash_equals(csrf_token(), $token)) {
-        pdf_export_fail(400, '页面验证已失效，请刷新分享页后重试。');
+        pdf_export_fail(400, 'Page verification has expired. Reload the share page and retry.');
     }
 }
 
@@ -252,7 +252,7 @@ function pdf_export_admit(int $shareId, string $fingerprint, int $documentCount 
     $ip = hash('sha256', pdf_export_client_ip());
     $fp = pdf_visitor_fingerprint($fingerprint);
     pdf_visitor_quota($visitor, $limits, $documentCount);
-    if (pdf_visitor_needs_captcha($visitor, $fp)) throw new RuntimeException('导出过于频繁，请先完成一次验证码。', 428);
+    if (pdf_visitor_needs_captcha($visitor, $fp)) throw new RuntimeException('Complete a verification code to continue exporting.', 428);
     $now = time();
     $pdo->exec('PRAGMA busy_timeout = 3000');
     $pdo->exec('BEGIN IMMEDIATE');
@@ -265,13 +265,13 @@ function pdf_export_admit(int $shareId, string $fingerprint, int $documentCount 
         $stmt->execute([$visitor]);
         $counts = $stmt->fetch(PDO::FETCH_ASSOC);
         if ((int)$counts['total'] >= $limits['max_concurrent'] || (int)$counts['own'] > 0) {
-            throw new RuntimeException('已有导出正在进行，请关闭预览或稍后再试。', 429);
+            throw new RuntimeException('Another export is active. Close its preview or retry later.', 429);
         }
         // Reserve a limited visitor slot under the same write transaction, so
         // simultaneous direct export requests cannot oversubscribe the share.
         $share = find_share_by_id($shareId);
-        if (!$share) throw new RuntimeException('分享不存在。', 404);
-        if (share_is_expired($share)) throw new RuntimeException('分享已过期。', 410);
+        if (!$share) throw new RuntimeException('Share not found.', 404);
+        if (share_is_expired($share)) throw new RuntimeException('This share has expired.', 410);
         $token = bin2hex(random_bytes(24));
         $pdo->prepare('INSERT INTO pdf_export_events(ip_hash, fingerprint_hash, created_at, visitor_hash, doc_count, job_token) VALUES (?, ?, ?, ?, 0, ?)')->execute([$ip, $fp, $now, $visitor, $token]);
         $pdo->prepare('INSERT INTO pdf_export_leases(token, share_id, session_hash, ip_hash, fingerprint_hash, expires_at, visitor_hash, document_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')->execute([
@@ -295,13 +295,13 @@ function pdf_export_select_docs(int $shareId, array $input): array {
     $scope = $input['scope'] ?? 'single';
     $root = $input['doc_id'] ?? '';
     if (!is_string($scope) || !is_string($root) || strlen($root) > 200) {
-        throw new RuntimeException('无效的导出范围。', 400);
+        throw new RuntimeException('Invalid export scope.', 400);
     }
     $params = [$shareId];
     $where = '';
     $cte = '';
     if ($scope === 'single' || $scope === 'tree') {
-        if ($root === '') throw new RuntimeException('请选择文档。', 400);
+        if ($root === '') throw new RuntimeException('Choose a document.', 400);
         if ($scope === 'tree') {
             // UNION also terminates malformed parent cycles. LIMIT bounds recursion.
             $cte = 'WITH RECURSIVE subtree(doc_id) AS (
@@ -317,16 +317,16 @@ function pdf_export_select_docs(int $shareId, array $input): array {
     } elseif ($scope === 'selected') {
         $ids = $input['doc_ids'] ?? [];
         if (!is_array($ids) || count($ids) === 0 || count($ids) > $limit) {
-            throw new RuntimeException('请选择 1 至 ' . $limit . ' 篇文档。', 400);
+            throw new RuntimeException('Choose between 1 and ' . $limit . ' documents.', 400);
         }
         foreach ($ids as $id) {
-            if (!is_string($id) || $id === '' || strlen($id) > 200) throw new RuntimeException('无效的文档编号。', 400);
+            if (!is_string($id) || $id === '' || strlen($id) > 200) throw new RuntimeException('Invalid document identifier.', 400);
         }
         $ids = array_values(array_unique($ids));
         $where = ' AND doc_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')';
         $params = array_merge($params, $ids);
     } elseif ($scope !== 'all') {
-        throw new RuntimeException('无效的导出范围。', 400);
+        throw new RuntimeException('Invalid export scope.', 400);
     }
     $stmt = db()->prepare($cte . 'SELECT id, doc_id, title, parent_id, sort_order,
         length(CAST(markdown AS BLOB)) AS markdown_bytes FROM share_docs WHERE share_id = ?' . $where . '
@@ -334,11 +334,11 @@ function pdf_export_select_docs(int $shareId, array $input): array {
     $stmt->execute($params);
     $docs = $stmt->fetchAll(PDO::FETCH_ASSOC);
     if (!$docs || ($scope === 'selected' && count($docs) !== count($ids))) {
-        throw new RuntimeException('所选文档不在当前分享范围内。', 404);
+        throw new RuntimeException('The selected document is not in this share.', 404);
     }
-    if (count($docs) > $limit) throw new RuntimeException('单次最多导出 ' . $limit . ' 篇，请分批选择。', 413);
+    if (count($docs) > $limit) throw new RuntimeException('Maximum documents per batch: ' . $limit . '. Select smaller batches.', 413);
     if (array_sum(array_column($docs, 'markdown_bytes')) > pdf_export_limits()['max_markdown_bytes']) {
-        throw new RuntimeException('文档内容过大，请减少单次导出篇数。', 413);
+        throw new RuntimeException('Document content is too large. Select fewer documents.', 413);
     }
     // Stable pre-order with parents before children, including orphan/cyclic data.
     $ordered = $seen = [];
@@ -367,14 +367,14 @@ function pdf_export_lease(int $shareId, string $visitor, string $token, bool $re
     $stmt = db()->prepare('SELECT * FROM pdf_export_leases WHERE token = ? AND share_id = ? AND session_hash = ? AND visitor_hash = ? AND expires_at > ?');
     $stmt->execute([$token, $shareId, hash('sha256', session_id()), $visitor, $now]);
     $lease = $stmt->fetch(PDO::FETCH_ASSOC);
-    if (!$lease || (int)$lease['created_at'] + 1800 <= $now) throw new RuntimeException('导出任务已失效，请重新打开弹窗。', 410);
+    if (!$lease || (int)$lease['created_at'] + 1800 <= $now) throw new RuntimeException('This export has expired. Reopen the export options.', 410);
     // Renew at most once per minute, rather than once per generated page.
     if ($renew && (int)$lease['expires_at'] <= $now + (int)floor(pdf_export_limits()['lease_seconds'] * 2 / 3)) {
         $expires = min((int)$lease['created_at'] + 1800, $now + pdf_export_limits()['lease_seconds']);
-        if ($expires <= $now) throw new RuntimeException('导出任务已失效，请重新打开弹窗。', 410);
+        if ($expires <= $now) throw new RuntimeException('This export has expired. Reopen the export options.', 410);
         $stmt = db()->prepare('UPDATE pdf_export_leases SET expires_at = ? WHERE token = ? AND expires_at > ?');
         $stmt->execute([$expires, $token, $now]);
-        if ($stmt->rowCount() !== 1) throw new RuntimeException('导出任务已失效，请重新打开弹窗。', 410);
+        if ($stmt->rowCount() !== 1) throw new RuntimeException('This export has expired. Reopen the export options.', 410);
         $lease['expires_at'] = $expires;
     }
     return $lease;
@@ -401,10 +401,10 @@ function pdf_export_document(array $share, string $slug, string $visitor, string
             $stmt = $pdo->prepare('SELECT * FROM pdf_export_documents WHERE job_token = ? AND doc_index = ?');
             $stmt->execute([$token, $index]);
             $entry = $stmt->fetch(PDO::FETCH_ASSOC);
-            if (!$entry) throw new RuntimeException('无效的文档编号。', 400);
+            if (!$entry) throw new RuntimeException('Invalid document identifier.', 400);
             $stmt = $pdo->prepare('SELECT SUM(active) FROM pdf_export_documents WHERE job_token = ?');
             $stmt->execute([$token]);
-            if ((int)$entry['active'] || (int)$stmt->fetchColumn() >= 1) throw new RuntimeException('当前正在生成其他文档，请稍后重试。', 409);
+            if ((int)$entry['active'] || (int)$stmt->fetchColumn() >= 1) throw new RuntimeException('Another document is being generated. Please retry shortly.', 409);
             $pdo->prepare('UPDATE pdf_export_documents SET active = 1 WHERE job_token = ? AND doc_index = ?')->execute([$token, $index]);
             $pdo->exec('COMMIT');
             $reserved = true;
@@ -415,7 +415,7 @@ function pdf_export_document(array $share, string $slug, string $visitor, string
         $stmt = $pdo->prepare('SELECT COALESCE(SUM(prepare_millis), 0) FROM pdf_export_documents WHERE job_token = ?');
         $stmt->execute([$token]);
         $remainingMillis = $limits['max_execution_seconds'] * 1000 - (int)$stmt->fetchColumn();
-        if ($remainingMillis <= 0) throw new RuntimeException('整理文档耗时过长，请减少单次导出篇数。', 413);
+        if ($remainingMillis <= 0) throw new RuntimeException('Document preparation took too long. Select fewer documents.', 413);
         set_time_limit(max(1, (int)ceil($remainingMillis / 1000)));
         $memory = ini_parse_quantity((string)ini_get('memory_limit'));
         ini_set('memory_limit', (string)($memory > 0 ? min($memory, $limits['max_memory_bytes']) : $limits['max_memory_bytes']));
@@ -427,11 +427,11 @@ function pdf_export_document(array $share, string $slug, string $visitor, string
         $sourceBytes = strlen((string)$doc['markdown']);
         $stmt = $pdo->prepare('SELECT COALESCE(SUM(source_bytes), 0) FROM pdf_export_documents WHERE job_token = ? AND doc_index != ?');
         $stmt->execute([$token, $index]);
-        if ($sourceBytes + (int)$stmt->fetchColumn() > $limits['max_markdown_bytes']) throw new RuntimeException('文档内容过大，请分批导出。', 413);
+        if ($sourceBytes + (int)$stmt->fetchColumn() > $limits['max_markdown_bytes']) throw new RuntimeException('Document content is too large. Export smaller batches.', 413);
         $stmt = $pdo->prepare('SELECT COALESCE(SUM(size_bytes), 0) FROM share_assets WHERE share_id = ? AND
             (doc_id IS NULL OR doc_id = \'\' OR doc_id IN (SELECT d.doc_id FROM share_docs d JOIN pdf_export_documents p ON p.document_id = d.id AND p.doc_id = d.doc_id WHERE p.job_token = ? AND d.share_id = ?))');
         $stmt->execute([$shareId, $token, $shareId]);
-        if ((int)$stmt->fetchColumn() > $limits['max_asset_bytes']) throw new RuntimeException('关联附件过大，请减少单次导出篇数。', 413);
+        if ((int)$stmt->fetchColumn() > $limits['max_asset_bytes']) throw new RuntimeException('Attachments are too large. Select fewer documents.', 413);
         $title = (string)$entry['title'];
         $markdown = (string)extract_front_matter((string)$doc['markdown'])['body'];
         $markdown = rewrite_asset_links($markdown, base_path() . '/s/' . rawurlencode($slug) . '/res/');
@@ -451,7 +451,7 @@ function pdf_export_document(array $share, string $slug, string $visitor, string
             $stmt->execute([$token]);
             $sum = $stmt->fetch(PDO::FETCH_ASSOC);
             if ($sum['source'] > $limits['max_markdown_bytes'] || $sum['html'] > $limits['max_html_bytes'] || $sum['images'] > $limits['max_images'] || $sum['millis'] > $limits['max_execution_seconds'] * 1000) {
-                throw new RuntimeException('文档内容、图片或整理耗时超出限制，请分批导出。', 413);
+                throw new RuntimeException('Content, images or preparation time exceed the limit. Export smaller batches.', 413);
             }
             $pdo->exec('COMMIT');
         } catch (Throwable $error) {
@@ -461,14 +461,30 @@ function pdf_export_document(array $share, string $slug, string $visitor, string
         pdf_export_share($slug);
         pdf_visitor_claim($shareId, $token, $index);
         $url = base_path() . '/s/' . rawurlencode($slug) . '/export';
-        $content = '<div data-pdf-preview data-pdf-child="1" data-pdf-index="' . $index . '"' . pdf_export_worker_attributes($url, $token) . '><p data-pdf-status role="status">正在准备排版…</p><button type="button" data-pdf-download disabled>生成 PDF</button></div><main class="pdf-document">' . $section . '</main>';
+        $content = '<div data-pdf-preview data-pdf-child="1" data-pdf-index="' . $index . '"' . pdf_export_worker_attributes($url, $token) . '><p data-pdf-status role="status">Preparing document layout…</p><button type="button" data-pdf-download disabled>Generate PDF</button></div><main class="pdf-document">' . $section . '</main>';
         render_page($title, $content, null, '', ['layout' => 'share', 'markdown' => true, 'pdf_export' => true]);
     } catch (Throwable $error) {
         if ($reserved) $pdo->prepare('UPDATE pdf_export_documents SET active = 0 WHERE job_token = ? AND doc_index = ?')->execute([$token, $index]);
         $code = in_array($error->getCode(), [400, 403, 404, 409, 410, 413, 428, 429], true) ? $error->getCode() : 503;
         if (in_array($code, [404, 413], true)) pdf_export_release($token);
-        pdf_export_fail($code, $code === 503 ? '文档准备失败，请稍后重试。' : $error->getMessage());
+        pdf_export_fail($code, $code === 503 ? 'Document preparation failed. Please retry later.' : $error->getMessage());
     }
+}
+
+function pdf_export_document_labels(array $docs): array {
+    $byId = array_column($docs, null, 'doc_id');
+    $labels = [];
+    foreach ($docs as $doc) {
+        $id = (string)$doc['doc_id'];
+        if (!empty($doc['hpath'])) { $labels[$id] = (string)$doc['hpath']; continue; }
+        $parts = [(string)$doc['title']]; $seen = [$id => true]; $parent = (string)($doc['parent_id'] ?? '');
+        while ($parent !== '' && isset($byId[$parent]) && !isset($seen[$parent]) && count($seen) < 64) {
+            $seen[$parent] = true; array_unshift($parts, (string)$byId[$parent]['title']);
+            $parent = (string)($byId[$parent]['parent_id'] ?? '');
+        }
+        $labels[$id] = implode(' / ', $parts);
+    }
+    return $labels;
 }
 
 function route_pdf_export(string $slug, string $action = ''): never {
@@ -504,7 +520,7 @@ function route_pdf_export(string $slug, string $action = ''): never {
         if ($action === 'claim' && $method === 'POST') {
             $token = $_POST['lease'] ?? '';
             $index = $_POST['index'] ?? '';
-            if (!is_string($token) || !is_string($index) || !preg_match('/^[0-9]{1,3}$/D', $index)) throw new RuntimeException('无效的文档编号。', 400);
+            if (!is_string($token) || !is_string($index) || !preg_match('/^[0-9]{1,3}$/D', $index)) throw new RuntimeException('Invalid document identifier.', 400);
             pdf_visitor_claim($shareId, $token, (int)$index);
             header('Content-Type: application/json; charset=utf-8');
             echo '{"ok":true}';
@@ -513,16 +529,16 @@ function route_pdf_export(string $slug, string $action = ''): never {
         if ($action === 'document' && $method === 'POST') {
             $token = $_POST['lease'] ?? '';
             $index = $_POST['index'] ?? '';
-            if (!is_string($token) || !is_string($index) || !preg_match('/^[0-9]{1,3}$/D', $index)) throw new RuntimeException('无效的文档编号。', 400);
+            if (!is_string($token) || !is_string($index) || !preg_match('/^[0-9]{1,3}$/D', $index)) throw new RuntimeException('Invalid document identifier.', 400);
             pdf_export_document($share, $slug, $visitor, $token, (int)$index);
         }
         if ($action === 'verify' && $method === 'POST') {
             $token = $_POST['lease'] ?? '';
-            if (!is_string($token)) throw new RuntimeException('无效的导出凭据。', 400);
+            if (!is_string($token)) throw new RuntimeException('Invalid export credentials.', 400);
             $lease = pdf_export_lease($shareId, $visitor, $token, ($_POST['renew'] ?? '') === '1');
             if (isset($_POST['finish'])) {
                 $index = $_POST['finish'];
-                if (!is_string($index) || !preg_match('/^[0-9]{1,3}$/D', $index) || (int)$index >= (int)$lease['document_count']) throw new RuntimeException('无效的文档编号。', 400);
+                if (!is_string($index) || !preg_match('/^[0-9]{1,3}$/D', $index) || (int)$index >= (int)$lease['document_count']) throw new RuntimeException('Invalid document identifier.', 400);
                 db()->prepare('UPDATE pdf_export_documents SET active = 0 WHERE job_token = ? AND doc_index = ?')->execute([$token, (int)$index]);
             }
             if (($_POST['abandon'] ?? '') === '1') db()->prepare('UPDATE pdf_export_documents SET active = 0 WHERE job_token = ?')->execute([$token]);
@@ -545,7 +561,7 @@ function route_pdf_export(string $slug, string $action = ''): never {
                 echo json_encode(pdf_visitor_challenge($visitor, $fp));
             } else {
                 http_response_code(428);
-                echo json_encode(['captcha_required' => true, 'error' => '导出过于频繁，请完成一次验证码后继续。'], JSON_UNESCAPED_UNICODE);
+                echo json_encode(['captcha_required' => true, 'error' => 'Complete a verification code to continue exporting.'], JSON_UNESCAPED_UNICODE);
             }
             exit;
         }
@@ -553,18 +569,18 @@ function route_pdf_export(string $slug, string $action = ''): never {
         if ($error->getCode() === 429) header('Retry-After: 300');
         pdf_export_fail(in_array($error->getCode(), [400, 409, 410, 428, 429, 503], true) ? $error->getCode() : 503, $error->getMessage());
     }
-    if ($action !== '') pdf_export_fail(405, '不支持此请求。');
+    if ($action !== '') pdf_export_fail(405, 'This request is not supported.');
     $limits = pdf_export_limits();
     $url = base_path() . '/s/' . rawurlencode($slug) . '/export';
     if ($method === 'GET') {
-        $stmt = db()->prepare('SELECT doc_id, title, hpath FROM share_docs WHERE share_id = ? ORDER BY sort_order, id LIMIT 2001');
+        $stmt = db()->prepare('SELECT doc_id, title, hpath, parent_id FROM share_docs WHERE share_id = ? ORDER BY sort_order, id LIMIT 2001');
         $stmt->execute([$shareId]);
         $docs = $stmt->fetchAll(PDO::FETCH_ASSOC);
         $active = $_GET['doc'] ?? (string)($share['doc_id'] ?? '');
         if (!is_string($active)) $active = '';
         // Include a requested document beyond the first 2000 without enumerating the notebook.
         if ($active !== '' && !in_array($active, array_column($docs, 'doc_id'), true)) {
-            $activeStmt = db()->prepare('SELECT doc_id, title, hpath FROM share_docs WHERE share_id = ? AND doc_id = ? LIMIT 1');
+            $activeStmt = db()->prepare('SELECT doc_id, title, hpath, parent_id FROM share_docs WHERE share_id = ? AND doc_id = ? LIMIT 1');
             $activeStmt->execute([$shareId, $active]);
             $activeDoc = $activeStmt->fetch(PDO::FETCH_ASSOC);
             if ($activeDoc) array_unshift($docs, $activeDoc);
@@ -577,33 +593,35 @@ function route_pdf_export(string $slug, string $action = ''): never {
         $tickets[$ticket] = ['created' => time(), 'visitor' => $visitor, 'slug' => $slug, 'token' => '', 'cancelled' => false];
         $_SESSION['pdf_export_tickets'] = $tickets;
         $usage = htmlspecialchars(json_encode(pdf_visitor_usage($visitor)), ENT_QUOTES, 'UTF-8');
-        $content = '<main class="pdf-export-panel">' . ($dialog ? '' : '<h1>Export PDF</h1>') . '<p>Choose a scope to download each document as a separate PDF. Export may take a while, especially for long documents with images or formulas.</p>';
-        $content .= '<div class="pdf-quota-notice" data-pdf-quota="' . $usage . '" role="status"></div>';
-        $content .= '<p>Maximum ' . $limits['max_docs'] . ' documents per batch. Select large notebooks in smaller batches.</p>';
-        $content .= '<form method="post" action="' . htmlspecialchars($url) . '" target="sps-pdf-worker" data-pdf-export-form' . pdf_export_worker_attributes($url, '') . '>';
+        $docLabels = pdf_export_document_labels($docs);
+        $content = '<main class="pdf-export-panel">' . ($dialog ? '' : '<h1>Export PDF</h1>');
+        $content .= '<form method="post" action="' . htmlspecialchars($url) . '" target="sps-pdf-worker" data-pdf-export-form data-max-docs="' . $limits['max_docs'] . '"' . pdf_export_worker_attributes($url, '') . '><div class="pdf-export-scroll">';
+        $content .= '<p>Choose the documents to download as individual PDFs. Large documents may take longer.</p>';
+        $content .= '<div class="pdf-export-limits" role="group" aria-label="Export limits"><div class="pdf-quota-notice" data-pdf-quota="' . $usage . '" role="status"></div>';
+        $content .= '<p class="field-hint">Maximum ' . $limits['max_docs'] . ' documents per batch.</p></div>';
         $content .= render_hidden_inputs(['csrf' => csrf_token(), 'fingerprint' => '', 'auto_download' => '1', 'ticket' => $ticket]);
         $content .= '<label>Export scope <select class="input" name="scope" data-pdf-scope><option value="single">Single document</option><option value="tree">This document and its subpages</option><option value="all">Entire share</option><option value="selected">Select documents</option></select></label>';
         $content .= '<label data-pdf-root>Document <select class="input" name="doc_id">';
         foreach (array_slice($docs, 0, 2000) as $doc) {
-            $content .= '<option value="' . htmlspecialchars((string)$doc['doc_id']) . '"' . ($doc['doc_id'] === $active ? ' selected' : '') . '>' . htmlspecialchars((string)($doc['hpath'] ?: $doc['title'])) . '</option>';
+            $content .= '<option value="' . htmlspecialchars((string)$doc['doc_id']) . '"' . ($doc['doc_id'] === $active ? ' selected' : '') . '>' . htmlspecialchars($docLabels[(string)$doc['doc_id']]) . '</option>';
         }
-        $content .= '</select></label><fieldset data-pdf-selection hidden><legend>Select documents</legend>';
+        $content .= '</select></label><fieldset data-pdf-selection hidden><legend>Select documents</legend><label>Filter documents<input class="input" type="search" data-pdf-filter autocomplete="off"></label><button type="button" class="button ghost" data-pdf-clear>Clear selection</button><p data-pdf-filter-empty hidden>No documents match this filter.</p>';
         foreach (array_slice($docs, 0, 2000) as $doc) {
-            $content .= '<label><input type="checkbox" name="doc_ids[]" value="' . htmlspecialchars((string)$doc['doc_id']) . '"> ' . htmlspecialchars((string)($doc['hpath'] ?: $doc['title'])) . '</label>';
+            $content .= '<label><input type="checkbox" name="doc_ids[]" value="' . htmlspecialchars((string)$doc['doc_id']) . '"> ' . htmlspecialchars($docLabels[(string)$doc['doc_id']]) . '</label>';
         }
         $content .= '</fieldset>';
         if (count($docs) > 2000) $content .= '<p>Only the first 2,000 documents are listed. Open other documents from the share page to export them.</p>';
         $content .= '<fieldset data-pdf-challenge hidden><legend>Security check (once per browser cookie)</legend><p>Enter the verification code to continue exporting.</p><img data-pdf-captcha-image alt="Verification code"><button class="button ghost" type="button" data-pdf-captcha-refresh>Refresh code</button><label>Verification code <input class="input" name="captcha_answer" autocomplete="off" maxlength="8"></label></fieldset>';
-        $content .= '<button class="button primary" type="submit">Export</button><div class="pdf-progress" data-pdf-progress hidden><div class="pdf-progress-label"><span>Estimated progress</span><span data-pdf-percent>0%</span></div><progress max="100" value="0" aria-label="Estimated export progress"></progress></div><p data-pdf-form-status role="status" aria-live="polite"></p></form>';
+        $content .= '</div><div class="pdf-export-footer"><p data-pdf-selected-count role="status" aria-live="polite" hidden></p><button class="button primary" type="submit" disabled>Export</button><div class="pdf-progress" data-pdf-progress hidden><div class="pdf-progress-label"><span>Estimated progress</span><span data-pdf-percent>0%</span></div><progress max="100" value="0" aria-label="Estimated export progress"></progress></div><p data-pdf-form-status role="status" aria-live="polite"></p></div></form>';
         $content .= '<iframe class="pdf-export-worker" name="sps-pdf-worker" data-pdf-worker title="PDF generation task" aria-hidden="true" tabindex="-1"></iframe>';
         if (!$dialog) $content .= '<a href="' . htmlspecialchars(base_path() . '/s/' . rawurlencode($slug)) . '">Back to share</a>';
         $content .= '</main>';
         render_page('Export PDF', $content, null, '', ['layout' => 'share', 'pdf_export' => true, 'pdf_embedded' => $dialog]);
     }
-    if ($method !== 'POST') pdf_export_fail(405, '不支持此请求。');
+    if ($method !== 'POST') pdf_export_fail(405, 'This request is not supported.');
     $fingerprint = $_POST['fingerprint'] ?? '';
     if (!is_string($fingerprint) || !preg_match('/^[a-f0-9]{64}$/D', $fingerprint)) {
-        pdf_export_fail(400, '无法识别浏览器，请启用 JavaScript 后重试。');
+        pdf_export_fail(400, 'Browser identity is unavailable. Enable JavaScript and retry.');
     }
     $lease = '';
     $complete = false;
@@ -615,7 +633,7 @@ function route_pdf_export(string $slug, string $action = ''): never {
         if (($_POST['auto_download'] ?? '') === '1') {
             $entry = is_string($ticket) ? ($_SESSION['pdf_export_tickets'][$ticket] ?? null) : null;
             if (!$entry || $entry['visitor'] !== $visitor || $entry['slug'] !== $slug || $entry['cancelled'] || $entry['created'] <= time() - 1800) {
-                throw new RuntimeException('导出任务已取消或选项已过期，请关闭弹窗后重试。', 409);
+                throw new RuntimeException('This export was cancelled or the options expired. Close the dialog and retry.', 409);
             }
         }
         $docs = pdf_export_select_docs($shareId, $_POST);
@@ -628,7 +646,7 @@ function route_pdf_export(string $slug, string $action = ''): never {
         $stmt = db()->prepare('SELECT COALESCE(SUM(size_bytes), 0) FROM share_assets WHERE share_id = ? AND
             (doc_id IS NULL OR doc_id = \'\' OR doc_id IN (' . implode(',', array_fill(0, count($docs), '?')) . '))');
         $stmt->execute(array_merge([$shareId], $docIds));
-        if ((int)$stmt->fetchColumn() > $limits['max_asset_bytes']) throw new RuntimeException('关联附件过大，请减少单次导出篇数。', 413);
+        if ((int)$stmt->fetchColumn() > $limits['max_asset_bytes']) throw new RuntimeException('Attachments are too large. Select fewer documents.', 413);
         // Persist only the admitted manifest. Prepare Markdown lazily per document.
         $pdo = db();
         $pdo->exec('BEGIN IMMEDIATE');

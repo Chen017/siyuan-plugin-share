@@ -36,7 +36,7 @@ function pdf_visitor_migrate(PDO $pdo): void {
 
 function pdf_visitor_secret(): string {
     $secret = (string)get_setting('pdf_export_cookie_key', '');
-    if (!preg_match('/^[a-f0-9]{64}$/D', $secret)) throw new RuntimeException('访客标识暂不可用，请稍后重试。', 503);
+    if (!preg_match('/^[a-f0-9]{64}$/D', $secret)) throw new RuntimeException('Visitor identity is temporarily unavailable. Please retry later.', 503);
     return $secret;
 }
 
@@ -51,7 +51,7 @@ function pdf_visitor_cookie_valid(string $cookie): bool {
 function pdf_visitor_id(bool $requireExisting = false): string {
     $cookie = $_COOKIE['sps_pdf_visitor'] ?? '';
     if (!is_string($cookie) || !pdf_visitor_cookie_valid($cookie)) {
-        if ($requireExisting) throw new RuntimeException('请允许 Cookie，并重新打开导出页面。', 409);
+        if ($requireExisting) throw new RuntimeException('Allow cookies and reopen the export options.', 409);
         $payload = bin2hex(random_bytes(24));
         $cookie = $payload . '.' . hash_hmac('sha256', $payload, pdf_visitor_secret());
         $pdo = db();
@@ -68,13 +68,13 @@ function pdf_visitor_id(bool $requireExisting = false): string {
 }
 
 function pdf_visitor_fingerprint($raw): string {
-    if (!is_string($raw) || !preg_match('/^[a-f0-9]{64}$/D', $raw)) throw new RuntimeException('无效的浏览器指纹，请刷新后重试。', 400);
+    if (!is_string($raw) || !preg_match('/^[a-f0-9]{64}$/D', $raw)) throw new RuntimeException('Invalid browser identity. Reload and retry.', 400);
     // Exact hash equality only. Similar devices are not grouped into a quota.
     return hash('sha256', $raw);
 }
 
 function pdf_visitor_quota(string $visitor, array $limits, int $documents = 1): void {
-    if ($documents > $limits['requests']) throw new RuntimeException('本次篇数超过当前访客的个人额度上限，请减少本次篇数。', 429);
+    if ($documents > $limits['requests']) throw new RuntimeException('This batch exceeds your visitor quota. Select fewer documents.', 429);
     $stmt = db()->prepare('SELECT SUM(CASE WHEN visitor_hash = ? THEN doc_count ELSE 0 END) AS own, COUNT(*) AS total
         FROM pdf_export_events WHERE created_at > ?');
     $stmt->execute([$visitor, time() - $limits['window_seconds']]);
@@ -88,9 +88,9 @@ function pdf_visitor_quota(string $visitor, array $limits, int $documents = 1): 
             $needed -= (int)$event['doc_count'];
             if ($needed <= 0) { $resume = (int)$event['created_at'] + $limits['window_seconds']; break; }
         }
-        throw new RuntimeException('导出太频繁，请稍后再试。当前 Cookie 的剩余额度不足，预计 ' . date('Y-m-d H:i:s', $resume) . ' 可继续；也可以减少本次篇数。', 429);
+        throw new RuntimeException('Not enough quota for this browser cookie. Expected recovery: ' . date('Y-m-d H:i:s', $resume) . ' (site time). Alternatively, select fewer documents.', 429);
     }
-    if ((int)$row['total'] >= $limits['max_window_events']) throw new RuntimeException('导出服务繁忙，请稍后再试。', 429);
+    if ((int)$row['total'] >= $limits['max_window_events']) throw new RuntimeException('Export service is busy. Please retry later.', 429);
 }
 
 function pdf_visitor_usage(string $visitor): array {
@@ -137,7 +137,7 @@ function pdf_visitor_needs_captcha(string $visitor, string $fingerprint): bool {
         $entry = $stmt->fetch(PDO::FETCH_ASSOC);
         $known = is_array($entry);
         if (!$known && (int)$pdo->query('SELECT COUNT(*) FROM pdf_export_fingerprints')->fetchColumn() >= 20000) {
-            throw new RuntimeException('导出服务繁忙，请稍后再试。', 429);
+            throw new RuntimeException('Export service is busy. Please retry later.', 429);
         }
         $risk = $known ? (int)$entry['needs_captcha'] === 1 : $otherCookie;
         $pdo->prepare('INSERT INTO pdf_export_fingerprints VALUES (?, ?, ?, ?) ON CONFLICT(fingerprint_hash, visitor_hash) DO UPDATE SET seen_at = excluded.seen_at')
@@ -161,7 +161,7 @@ function pdf_visitor_captcha_budget(string $visitor, string $kind): void {
         $stmt->execute([$visitor]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         if ((int)$row['failures'] >= 10 || ($kind === 'images' && (int)$row['images'] >= 6)) {
-            throw new RuntimeException('验证码尝试过于频繁，请稍后再试。', 429);
+            throw new RuntimeException('Too many verification attempts. Please retry later.', 429);
         }
         $column = $kind === 'images' ? 'images' : 'failures';
         $pdo->prepare('UPDATE pdf_export_captcha_limits SET ' . $column . ' = ' . $column . ' + 1 WHERE visitor_hash = ?')->execute([$visitor]);
@@ -175,7 +175,7 @@ function pdf_visitor_captcha_budget(string $visitor, string $kind): void {
 function pdf_visitor_challenge(string $visitor, string $fingerprint): array {
     pdf_visitor_captcha_budget($visitor, 'images');
     $pdo = db();
-    if ((int)$pdo->query('SELECT COUNT(*) FROM pdf_export_challenges')->fetchColumn() >= 1000) throw new RuntimeException('验证码服务繁忙，请稍后再试。', 429);
+    if ((int)$pdo->query('SELECT COUNT(*) FROM pdf_export_challenges')->fetchColumn() >= 1000) throw new RuntimeException('Verification service is busy. Please retry later.', 429);
     $code = '';
     $alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     for ($i = 0; $i < 5; $i++) $code .= $alphabet[random_int(0, strlen($alphabet) - 1)];
@@ -200,7 +200,7 @@ function pdf_visitor_challenge(string $visitor, string $fingerprint): array {
 
 function pdf_visitor_verify_captcha(string $visitor, string $fingerprint, $token, $answer): void {
     pdf_visitor_captcha_budget($visitor, 'failures');
-    if (!is_string($token) || !is_string($answer) || strlen($answer) > 16) throw new RuntimeException('验证码无效，请重试。', 400);
+    if (!is_string($token) || !is_string($answer) || strlen($answer) > 16) throw new RuntimeException('Invalid verification code. Please retry.', 400);
     $pdo = db();
     $pdo->exec('BEGIN IMMEDIATE');
     try {
@@ -208,7 +208,7 @@ function pdf_visitor_verify_captcha(string $visitor, string $fingerprint, $token
         $stmt->execute([$token, $visitor, $fingerprint, hash('sha256', session_id()), time()]);
         $expected = $stmt->fetchColumn();
         $actual = hash_hmac('sha256', $token . ':' . strtoupper(trim($answer)), pdf_visitor_secret());
-        if (!is_string($expected) || !hash_equals($expected, $actual)) throw new RuntimeException('验证码错误或已过期，请重试。', 400);
+        if (!is_string($expected) || !hash_equals($expected, $actual)) throw new RuntimeException('Incorrect or expired verification code. Please retry.', 400);
         $stmt = $pdo->prepare('SELECT expires_at FROM pdf_export_visitors WHERE visitor_hash = ?');
         $stmt->execute([$visitor]);
         $expires = (int)$stmt->fetchColumn();
@@ -232,7 +232,7 @@ function pdf_visitor_claim(int $shareId, string $token, int $index): void {
         $stmt = $pdo->prepare('SELECT * FROM pdf_export_leases WHERE token = ? AND share_id = ? AND visitor_hash = ? AND session_hash = ? AND expires_at > ?');
         $stmt->execute([$token, $shareId, $visitor, hash('sha256', session_id()), $now]);
         $lease = $stmt->fetch(PDO::FETCH_ASSOC);
-        if (!$lease || $index < 0 || $index >= (int)$lease['document_count']) throw new RuntimeException('导出任务已失效，请重新打开预览。', 410);
+        if (!$lease || $index < 0 || $index >= (int)$lease['document_count']) throw new RuntimeException('This export has expired. Reopen the preview.', 410);
         $stmt = $pdo->prepare('SELECT 1 FROM pdf_export_claims WHERE job_token = ? AND doc_index = ?');
         $stmt->execute([$token, $index]);
         if (!$stmt->fetchColumn()) {

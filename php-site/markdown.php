@@ -646,3 +646,35 @@ function render_markdown(string $markdown): string {
     }
     return sanitize_share_html($parser->text($markdown));
 }
+
+
+/** Build summaries before truncation, so formula boundaries cannot be lost. */
+function search_summary(string $markdown, string $query): string {
+    $source = preg_replace('/\A---\s*\n.*?\n---\s*\n/s', '', $markdown);
+    $plain = '';
+    $length = strlen($source);
+    for ($i = 0; $i < $length;) {
+        if ($source[$i] === '\\' && $i + 1 < $length) { $plain .= substr($source, $i, 2); $i += 2; continue; }
+        if ($source[$i] !== '$') { $plain .= $source[$i++]; continue; }
+        $delimiter = substr($source, $i, 2) === '$$' ? '$$' : '$';
+        $width = strlen($delimiter); $depth = 0; $end = null;
+        for ($j = $i + $width; $j < $length; $j++) {
+            if ($source[$j] === '\\') { $j++; continue; }
+            if ($source[$j] === '{') $depth++;
+            elseif ($source[$j] === '}') $depth = max(0, $depth - 1);
+            elseif ($depth === 0 && substr($source, $j, $width) === $delimiter) { $end = $j; break; }
+        }
+        if ($end === null) { $plain .= substr($source, $i); break; }
+        $plain .= ' Formula '; $i = $end + $width;
+    }
+    $plain = preg_replace('/<(script|style)\b[^>]*>.*?<\/\1>/is', '', $plain);
+    $plain = strip_tags($plain);
+    $plain = preg_replace('/!\[[^\]]*\]\([^)]*\)/u', ' Image ', $plain);
+    $plain = preg_replace('/\[([^\]]+)\]\([^)]*\)/u', '$1', $plain);
+    $plain = preg_replace('/[#*`~>]+/u', '', $plain);
+    $plain = trim(preg_replace('/\s+/u', ' ', $plain));
+    $position = mb_stripos($plain, $query);
+    $start = $position === false ? 0 : max(0, $position - 40);
+    $excerpt = mb_substr($plain, $start, 120);
+    return ($start > 0 ? '…' : '') . $excerpt . (mb_strlen($plain) > $start + 120 ? '…' : '');
+}
