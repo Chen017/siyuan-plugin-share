@@ -136,19 +136,6 @@
     initReaderWelcome();
   };
 
-  const scheduleIdle = (task, {timeout = 1200} = {}) => {
-    const hidden =
-      typeof document !== "undefined" &&
-      (document.hidden || document.visibilityState === "hidden");
-    if (hidden) {
-      return window.setTimeout(task, 0);
-    }
-    if (typeof window.requestIdleCallback === "function") {
-      return window.requestIdleCallback(task, {timeout});
-    }
-    return window.setTimeout(task, 0);
-  };
-
   const tocCleanupMap = new WeakMap();
   const renderedMarkdown = new WeakMap();
   const diagramScripts = new Map();
@@ -2576,9 +2563,17 @@
     tabs.prepend(indicator);
     const positionIndicator = () => {
       const active = buttons.find(btn => btn.classList.contains("is-active"));
-      if (!active || !active.offsetWidth) return;
-      indicator.style.width = `${active.offsetWidth}px`;
-      indicator.style.transform = `translateX(${active.offsetLeft}px)`;
+      if (!active) return;
+      const width = active.offsetWidth;
+      const left = active.offsetLeft;
+      if (!width) return;
+      indicator.style.width = `${width}px`;
+      indicator.style.transform = `translateX(${left}px)`;
+    };
+    let indicatorFrame = 0;
+    const scheduleIndicator = () => {
+      if (indicatorFrame) return;
+      indicatorFrame = window.requestAnimationFrame(() => { indicatorFrame = 0; positionIndicator(); });
     };
     let activeTab = "";
     const setActive = (tab, animate = false) => {
@@ -2597,7 +2592,7 @@
       if (treeActions) {
         treeActions.hidden = tab !== "tree";
       }
-      positionIndicator();
+      scheduleIndicator();
     };
     buttons.forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -2608,8 +2603,8 @@
     });
     setActive(defaultTab);
     // Re-measure after a hidden mobile drawer or a breakpoint becomes visible.
-    if (window.ResizeObserver) new ResizeObserver(positionIndicator).observe(tabs);
-    else window.addEventListener("resize", positionIndicator, {passive: true});
+    if (window.ResizeObserver) new ResizeObserver(scheduleIndicator).observe(tabs);
+    else window.addEventListener("resize", scheduleIndicator, {passive: true});
   };
 
   const initReaderSidebarResize = () => {
@@ -5540,7 +5535,7 @@ const initImageViewer = () => {
 
     initDocTreeScroll();
     const token = ++shareDynamicToken;
-    scheduleIdle(async () => {
+    (async () => {
       if (token !== shareDynamicToken) return;
       try { await Promise.all(markdownDependencies()); } catch (err) { console.error(err); }
       if (token !== shareDynamicToken) return;
@@ -5564,7 +5559,7 @@ const initImageViewer = () => {
       } catch (err) {
         console.error(err);
       }
-    });
+    })();
   };
 
   window.addEventListener(
