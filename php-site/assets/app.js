@@ -3513,7 +3513,7 @@ const initImageViewer = () => {
         openViewer(collectImages().indexOf(event.target));
       }
       if (!viewer.hidden && event.key === 'Tab') {
-        const targets = [...viewer.querySelectorAll('button:not(:disabled), summary, [href], [tabindex="0"]')].filter(node => !node.closest('[hidden]') && (!node.closest('details:not([open])') || node.tagName === 'SUMMARY'));
+        const targets = [...viewer.querySelectorAll('*')].filter(node => node.matches('button:not(:disabled), summary, [href], [tabindex="0"]')).filter(node => !node.closest('[hidden]') && (!node.closest('details:not([open])') || node.tagName === 'SUMMARY'));
         const first = targets[0], last = targets[targets.length - 1];
         if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
@@ -3952,7 +3952,7 @@ const initImageViewer = () => {
 
     const trustedMath = new Map();
     let mathSequence = 0;
-    const mathPrefix = `sps-math-${crypto.randomUUID()}-`;
+    const mathPrefix = `sps-math-${Array.from(crypto.getRandomValues(new Uint32Array(4)), value => value.toString(16)).join('-')}-`;
     const useKatex = () => {
       if (!window.katex || typeof window.katex.renderToString !== "function") return;
 
