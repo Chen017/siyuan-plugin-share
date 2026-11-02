@@ -742,7 +742,6 @@ body.app-side-open {
 .share-shell {
   display: flex;
   align-items: flex-start;
-  min-height: 0;
   flex: 1;
   background: var(--surface);
   border-radius: 0;
@@ -4309,7 +4308,7 @@ body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .share-page
 .reader-frame:has(> .share-shell--doc) { --reader-column: var(--toc-width); }
 .reader-frame::before {
   content: ''; position: absolute; inset: 0 auto 0 0; width: var(--reader-column);
-  background: var(--panel-bg); border-right: 1px solid var(--border); pointer-events: none;
+  background: var(--panel-bg); pointer-events: none;
 }
 body.layout-share .reader-frame > .share-shell {
   position: relative; max-width: none; margin: 0; background: transparent;
@@ -4320,7 +4319,7 @@ body.layout-share .reader-frame > .share-footer {
   overflow-wrap: anywhere;
 }
 @media (min-width: 961px) {
-  body.layout-share .reader-frame :is(.kb-sidebar, .share-toc) { height: calc(100dvh - 48px); background: transparent; box-shadow: none; border-right: 0; }
+  body.layout-share .reader-frame :is(.kb-sidebar, .share-toc) { top: 20px; height: calc(100dvh - 48px); background: transparent; box-shadow: none; border-right: 0; }
 }
 @media (max-width: 960px) {
   body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .share-page { padding: 8px; }

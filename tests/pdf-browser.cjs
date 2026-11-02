@@ -138,8 +138,21 @@ const chooseScope = async (page, value) => {
     assert.equal(await reader.locator('.kb-title-row .share-document-actions [data-pdf-export-link]').count(), 1);
     await openDocument(fixture.docIds[1]);
     assert.equal(new URL(await reader.locator('[data-pdf-export-link]').getAttribute('href'), base).searchParams.get('doc'), fixture.docIds[1]);
+    await reader.evaluate(() => document.fonts.ready);
+    // A long preview collapses to a short source editor when toggled.
+    await reader.locator('.markdown-body').evaluate((body) => {
+      const spacer = document.createElement('div');
+      spacer.id = 'reader-layout-test-spacer'; spacer.style.height = '2000px'; body.append(spacer);
+    });
+    const sidebarBefore = await reader.locator('.kb-sidebar').boundingBox();
     await reader.locator('[data-share-toggle]').click();
+    await reader.locator('#reader-layout-test-spacer').evaluate((node) => node.remove());
     assert.equal(await reader.locator('.share-article.is-markdown [data-pdf-export-link]').count(), 1);
+    const sidebarSource = await reader.locator('.kb-sidebar').boundingBox();
+    assert.ok(Math.abs(sidebarBefore.x - sidebarSource.x) < 1 && Math.abs(sidebarBefore.y - sidebarSource.y) < 1,
+      `Sidebar stays in place in Source mode: ${JSON.stringify({sidebarBefore, sidebarSource})}`);
+    assert.equal(await reader.locator('.reader-frame').evaluate((node) => getComputedStyle(node, '::before').borderRightWidth), '0px',
+      'Sidebar background has no border extending through the footer');
     await reader.locator('[data-share-toggle]').click();
     await reader.locator('a[data-share-nav="doc"][data-doc-id=""]').first().click();
     await reader.waitForFunction(() => document.querySelector('.share-shell')?.dataset.shareDocId === '');
