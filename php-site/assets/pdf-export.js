@@ -1,5 +1,13 @@
 (() => {
   "use strict";
+  const updateProgress = (root, value) => {
+    const progress = root.querySelector('[data-pdf-progress]');
+    if (!progress || !Number.isFinite(value)) return;
+    const percent = Math.max(0, Math.min(100, Math.floor(value)));
+    progress.hidden = false;
+    progress.querySelector('progress').value = percent;
+    progress.querySelector('[data-pdf-percent]').textContent = `${percent}%`;
+  };
   let dialog;
   let dialogFrame;
   let closeTimer;
@@ -168,6 +176,7 @@
     window.addEventListener('message', (message) => {
       if (message.origin !== location.origin || message.source !== worker.contentWindow || message.data?.type !== 'sps-pdf-export') return;
       formStatus.textContent = String(message.data.message || '');
+      updateProgress(form, message.data.percent);
       if (message.data.state === 'done') setState('done');
       if (message.data.state === 'error') setState(message.data.retryable ? 'retry' : 'idle');
       if (['done', 'error'].includes(message.data.state)) refreshQuota().catch(() => {});
@@ -239,6 +248,7 @@
         // Submit in the user's gesture where possible; no server-side browser process.
         HTMLFormElement.prototype.submit.call(form);
         setState('running');
+        updateProgress(form, 0);
         formStatus.textContent = 'Preparing documents for download…';
       } catch (error) {
         formStatus.textContent = error.message || "Unable to prepare the export. Reload the page and retry.";
@@ -269,9 +279,11 @@
     let busy = false;
     let stopRun = () => {};
     let renewAt = Date.now() + Number(panel.dataset.pdfRenewAfter) * 1000;
-    const report = (message, state = 'progress', retryable = false) => {
+    const report = (message, state = 'progress', retryable = false, fraction = 0) => {
       status.textContent = message;
-      if (automatic && parent !== window) parent.postMessage({ type: 'sps-pdf-export', state, message, retryable }, location.origin);
+      const percent = 100 * (completed.size + fraction) / docs.length;
+      updateProgress(panel, percent);
+      if (automatic && parent !== window) parent.postMessage({ type: 'sps-pdf-export', state, message, retryable, percent }, location.origin);
     };
     const release = () => {
       if (released) return;
@@ -292,26 +304,24 @@
       busy = true;
       button.disabled = true;
       const controller = new AbortController();
-      const pending = new Map();
-      const ready = new Map();
-      let next = 0;
-      let downloadIndex = 0;
-      let draining = false;
+      let pending;
       let error;
       let warning = '';
       const abort = (reason) => {
         if (error) return;
         error = reason;
         controller.abort();
-        for (const item of pending.values()) item.reject(reason);
-        for (const item of ready.values()) item.reject(reason);
-        ready.clear();
+        pending?.reject(reason);
       };
       stopRun = abort;
       const onMessage = (message) => {
         if (message.origin !== location.origin || message.data?.type !== 'sps-pdf-document') return;
-        const item = pending.get(message.data.index);
-        if (!item || message.source !== item.frame.contentWindow) return;
+        const item = pending;
+        if (!item || message.data.index !== item.index || message.source !== item.frame.contentWindow) return;
+        if (Number.isFinite(message.data.progress)) {
+          report(`Document ${item.index + 1} / ${docs.length}: ${message.data.message}`, 'progress', false, message.data.progress);
+          return;
+        }
         if (message.data.error) item.reject(new Error(message.data.error));
         else if (message.data.blob instanceof Blob) {
           if (message.data.warning) warning = message.data.warning;
@@ -330,7 +340,7 @@
         let timeout;
         try {
           return await new Promise((resolve, reject) => {
-            pending.set(index, { frame, resolve, reject });
+            pending = { index, frame, resolve, reject };
             timeout = setTimeout(() => reject(new Error('This document took too long to generate. Retry the remaining documents.')), 1800000);
             frame.addEventListener('load', () => {
               if (frame.contentWindow.location.href === 'about:blank') return;
@@ -356,56 +366,11 @@
           });
         } finally {
           clearTimeout(timeout);
-          pending.delete(index);
+          pending = null;
           // Dispose all DOM, canvases and component instances before the next doc.
           frame.src = 'about:blank';
           frame.remove();
         }
-      };
-      const drain = async () => {
-        if (draining) return;
-        draining = true;
-        try {
-          while (!error && downloadIndex < docs.length) {
-            if (completed.has(downloadIndex)) { downloadIndex++; continue; }
-            const item = ready.get(downloadIndex);
-            if (!item) break;
-            // Final permission check and slot completion share one request.
-            await request({ finish: downloadIndex, renew: '1' }, controller.signal);
-            if (error || released) throw error || new Error('Task cancelled.');
-            const blobUrl = URL.createObjectURL(item.blob);
-            const anchor = document.createElement('a');
-            anchor.href = blobUrl;
-            anchor.download = filenames[downloadIndex];
-            document.body.append(anchor);
-            anchor.click();
-            anchor.remove();
-            setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
-            completed.add(downloadIndex);
-            ready.delete(downloadIndex++);
-            item.resolve();
-            report(`Downloaded ${completed.size} / ${docs.length}. Preparing the remaining documents…`);
-          }
-        } catch (reason) { abort(reason); }
-        finally { draining = false; }
-      };
-      const worker = async () => {
-        try {
-          while (!error && !released) {
-            while (next < docs.length && completed.has(next)) next++;
-            if (next >= docs.length) return;
-            const index = next++;
-            report(`Downloaded ${completed.size} / ${docs.length}. Generating: ${filenames[index]}`);
-            const blob = await render(index);
-            if (error) throw error;
-            // Await ordered download before preparing another doc. At most three
-            // completed PDFs can wait in memory, even if the first doc is slow.
-            await new Promise((resolve, reject) => {
-              ready.set(index, { blob, resolve, reject });
-              void drain();
-            });
-          }
-        } catch (reason) { abort(reason); }
       };
       let ticking = false;
       const heartbeat = setInterval(async () => {
@@ -417,7 +382,22 @@
       }, 1000);
       try {
         if (Date.now() >= renewAt) await request({ renew: '1' }, controller.signal);
-        await Promise.all(Array.from({ length: docs.length > 1 ? 3 : 1 }, worker));
+        for (let index = 0; index < docs.length; index++) {
+          if (completed.has(index)) continue;
+          report(`Document ${index + 1} / ${docs.length}: Preparing ${filenames[index]}…`, 'progress', false, .03);
+          const blob = await render(index);
+          if (error || released) throw error || new Error('Task cancelled.');
+          report(`Document ${index + 1} / ${docs.length}: Preparing download…`, 'progress', false, .98);
+          await request({ finish: index, renew: '1' }, controller.signal);
+          if (error || released) throw error || new Error('Task cancelled.');
+          const blobUrl = URL.createObjectURL(blob);
+          const anchor = document.createElement('a');
+          anchor.href = blobUrl; anchor.download = filenames[index];
+          document.body.append(anchor); anchor.click(); anchor.remove();
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
+          completed.add(index);
+          report(`Downloaded ${completed.size} / ${docs.length}. Preparing the remaining documents…`);
+        }
         if (error) throw error;
         release();
         report(`Started ${completed.size} individual PDF downloads. ${warning}If files are missing, allow multiple downloads in your browser.`, 'done');
@@ -460,6 +440,7 @@
   let prepared = false;
   let finished = false;
   const send = (result) => parent.postMessage({ type: 'sps-pdf-document', index: Number(preview.dataset.pdfIndex), ...result }, location.origin);
+  const progress = (value, message) => send({ progress: value, message });
   function updateControls() { button.disabled = !prepared || busy || finished; }
   updateControls();
   let library;
@@ -502,6 +483,7 @@
     }
   };
   const makePdf = async (section) => {
+    progress(.18, 'Measuring layout and preparing text…');
     const root = document.createElement('div');
     root.className = 'pdf-document pdf-download-document';
     const copy = section.cloneNode(true);
@@ -555,6 +537,7 @@
         if (element.matches('img,svg,canvas,tr,pre,hr,.katex,.katex-display') || /^(avoid|avoid-page)$/.test(style.breakInside || style.pageBreakInside)) protectedRanges.push({ top, bottom });
       }
       const pages = SPSPdfTextLayer.paginate(text, height, pageHeight, protectedRanges, forcedBreaks);
+      progress(.25, `Rendering pages 0 / ${pages.length}…`);
       let pdf;
       for (let page = 0; page < pages.length;) {
         const last = Math.min(page + 2, pages.length);
@@ -587,7 +570,9 @@
           slice.width = slice.height = 0;
         }
         canvas.width = canvas.height = 0;
+        progress(.25 + .65 * page / pages.length, `Rendering pages ${page} / ${pages.length}…`);
       }
+      progress(.93, 'Adding searchable text and finishing PDF…');
       const mmPerPixel = size.inner.width / size.inner.px.width;
       for (const link of links) {
         const page = SPSPdfTextLayer.pageAt(pages, link.y + link.height / 2);
@@ -622,6 +607,7 @@
   const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   Promise.all([loadLibrary(), loadProvenanceFont()]).catch(() => {});
   const prepare = async () => {
+    progress(.08, 'Loading images, fonts and formulas…');
     const deadline = Date.now() + 25000;
     while (!Array.from(documentBody.querySelectorAll(".markdown-body")).every((node) => node.dataset.spsRendered === "1")) {
       if (Date.now() > deadline) throw new Error("Unable to load the layout components. Reload the preview and retry.");

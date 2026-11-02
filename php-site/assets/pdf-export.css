@@ -28,6 +28,13 @@ body.pdf-export-embedded { margin: 0 !important; padding: 0 !important; min-heig
 .pdf-export-embedded .pdf-export-panel form { margin: 18px 0 0; gap: 16px; }
 .pdf-export-panel [inert] { opacity: .65; }
 .pdf-export-panel [data-pdf-form-status] { margin: 0; line-height: 1.6; overflow-wrap: anywhere; }
+.pdf-progress { display: grid; gap: 8px; color: var(--muted, #59636e); font-size: .8125rem; }
+.pdf-progress[hidden] { display: none; }
+.pdf-progress-label { display: flex; justify-content: space-between; gap: 12px; font-variant-numeric: tabular-nums; }
+.pdf-progress progress { appearance: none; width: 100%; height: 8px; border: 0; border-radius: 99px; overflow: hidden; background: var(--surface-muted, #f3f5f7); }
+.pdf-progress progress::-webkit-progress-bar { background: var(--surface-muted, #f3f5f7); }
+.pdf-progress progress::-webkit-progress-value { background: var(--primary, #0066cc); border-radius: 99px; }
+.pdf-progress progress::-moz-progress-bar { background: var(--primary, #0066cc); border-radius: 99px; }
 @keyframes pdf-backdrop-enter { from { opacity: 0; } to { opacity: 1; } }
 @keyframes pdf-backdrop-exit { from { opacity: 1; } to { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .pdf-export-dialog, .pdf-export-dialog::backdrop { animation-duration: .001s !important; } .pdf-export-dialog > iframe { transition: none; } }

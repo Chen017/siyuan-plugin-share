@@ -316,14 +316,18 @@ class PdfExportTests:
         lease = self.pdf_lease(body)
         fields = {'csrf': csrf, 'lease': lease}
         self.assertEqual(client.request(path + '/document', {**fields, 'index': '4'})[0], 400)
-        for index in range(3):
+        response = client.request(path + '/document', {**fields, 'index': '0'})
+        self.assertEqual(response[0], 200, response[2][:200])
+        self.assertIn(b'PDF_MARKER_0', response[2])
+        self.assertEqual(client.request(path + '/document', {**fields, 'index': '1'})[0], 409)
+        self.assertEqual(self.pdf_post(client, path, csrf)[0], 429)
+        self.assertEqual(client.request(path + '/verify', {**fields, 'finish': '0'})[0], 200)
+        for index in range(1, 4):
             response = client.request(path + '/document', {**fields, 'index': str(index)})
             self.assertEqual(response[0], 200, response[2][:200])
             self.assertIn(('PDF_MARKER_' + str(index)).encode(), response[2])
-        self.assertEqual(client.request(path + '/document', {**fields, 'index': '3'})[0], 409)
-        self.assertEqual(self.pdf_post(client, path, csrf)[0], 429)
-        self.assertEqual(client.request(path + '/verify', {**fields, 'finish': '0'})[0], 200)
-        self.assertEqual(client.request(path + '/document', {**fields, 'index': '3'})[0], 200)
+            if index < 3:
+                self.assertEqual(client.request(path + '/verify', {**fields, 'finish': str(index)})[0], 200)
         self.assertEqual(client.request(path + '/verify', {**fields, 'abandon': '1'})[0], 200)
         self.assertEqual(client.request(path + '/document', {**fields, 'index': '0'})[0], 200)
         self.assertEqual(self.rows('SELECT SUM(doc_count) AS n FROM pdf_export_events')[0]['n'], 4)

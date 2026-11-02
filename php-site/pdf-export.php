@@ -404,8 +404,7 @@ function pdf_export_document(array $share, string $slug, string $visitor, string
             if (!$entry) throw new RuntimeException('无效的文档编号。', 400);
             $stmt = $pdo->prepare('SELECT SUM(active) FROM pdf_export_documents WHERE job_token = ?');
             $stmt->execute([$token]);
-            $parallel = (int)$lease['document_count'] > 1 ? 3 : 1;
-            if ((int)$entry['active'] || (int)$stmt->fetchColumn() >= $parallel) throw new RuntimeException('当前正在生成其他文档，请稍后重试。', 409);
+            if ((int)$entry['active'] || (int)$stmt->fetchColumn() >= 1) throw new RuntimeException('当前正在生成其他文档，请稍后重试。', 409);
             $pdo->prepare('UPDATE pdf_export_documents SET active = 1 WHERE job_token = ? AND doc_index = ?')->execute([$token, $index]);
             $pdo->exec('COMMIT');
             $reserved = true;
@@ -578,7 +577,7 @@ function route_pdf_export(string $slug, string $action = ''): never {
         $tickets[$ticket] = ['created' => time(), 'visitor' => $visitor, 'slug' => $slug, 'token' => '', 'cancelled' => false];
         $_SESSION['pdf_export_tickets'] = $tickets;
         $usage = htmlspecialchars(json_encode(pdf_visitor_usage($visitor)), ENT_QUOTES, 'UTF-8');
-        $content = '<main class="pdf-export-panel">' . ($dialog ? '' : '<h1>Export PDF</h1>') . '<p>Choose a scope to download each document as a separate PDF.</p>';
+        $content = '<main class="pdf-export-panel">' . ($dialog ? '' : '<h1>Export PDF</h1>') . '<p>Choose a scope to download each document as a separate PDF. Export may take a while, especially for long documents with images or formulas.</p>';
         $content .= '<div class="pdf-quota-notice" data-pdf-quota="' . $usage . '" role="status"></div>';
         $content .= '<p>Maximum ' . $limits['max_docs'] . ' documents per batch. Select large notebooks in smaller batches.</p>';
         $content .= '<form method="post" action="' . htmlspecialchars($url) . '" target="sps-pdf-worker" data-pdf-export-form' . pdf_export_worker_attributes($url, '') . '>';
@@ -595,7 +594,7 @@ function route_pdf_export(string $slug, string $action = ''): never {
         $content .= '</fieldset>';
         if (count($docs) > 2000) $content .= '<p>Only the first 2,000 documents are listed. Open other documents from the share page to export them.</p>';
         $content .= '<fieldset data-pdf-challenge hidden><legend>Security check (once per browser cookie)</legend><p>Enter the verification code to continue exporting.</p><img data-pdf-captcha-image alt="Verification code"><button class="button ghost" type="button" data-pdf-captcha-refresh>Refresh code</button><label>Verification code <input class="input" name="captcha_answer" autocomplete="off" maxlength="8"></label></fieldset>';
-        $content .= '<button class="button primary" type="submit">Export</button><p data-pdf-form-status role="status" aria-live="polite"></p></form>';
+        $content .= '<button class="button primary" type="submit">Export</button><div class="pdf-progress" data-pdf-progress hidden><div class="pdf-progress-label"><span>Estimated progress</span><span data-pdf-percent>0%</span></div><progress max="100" value="0" aria-label="Estimated export progress"></progress></div><p data-pdf-form-status role="status" aria-live="polite"></p></form>';
         $content .= '<iframe class="pdf-export-worker" name="sps-pdf-worker" data-pdf-worker title="PDF generation task" aria-hidden="true" tabindex="-1"></iframe>';
         if (!$dialog) $content .= '<a href="' . htmlspecialchars(base_path() . '/s/' . rawurlencode($slug)) . '">Back to share</a>';
         $content .= '</main>';
@@ -649,7 +648,7 @@ function route_pdf_export(string $slug, string $action = ''): never {
         $auto = ($_POST['auto_download'] ?? '') === '1' ? '1' : '0';
         $renewAfter = max(1, (int)$expires['expires_at'] - time() - (int)floor($limits['lease_seconds'] * 2 / 3));
         $content = '<div class="pdf-export-toolbar" data-pdf-preview data-pdf-job="1" data-pdf-auto="' . $auto . '" data-pdf-renew-after="' . $renewAfter . '"' . pdf_export_worker_attributes($url, $lease) . '>';
-        $content .= '<p data-pdf-status role="status">Preparing documents…</p><button class="button primary" type="button" data-pdf-download>Download PDF</button></div><script type="application/json" data-pdf-manifest>' . $manifest . '</script>';
+        $content .= '<div class="pdf-progress" data-pdf-progress hidden><div class="pdf-progress-label"><span>Estimated progress</span><span data-pdf-percent>0%</span></div><progress max="100" value="0" aria-label="Estimated export progress"></progress></div><p data-pdf-status role="status">Preparing documents…</p><button class="button primary" type="button" data-pdf-download>Download PDF</button></div><script type="application/json" data-pdf-manifest>' . $manifest . '</script>';
         $complete = true;
         render_page(count($docs) === 1 ? (string)$docs[0]['title'] : (string)$share['title'], $content, null, '', ['layout' => 'share', 'pdf_export' => true]);
     } catch (Throwable $error) {

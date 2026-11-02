@@ -50,6 +50,11 @@ const chooseScope = async (page, value) => {
     const sources = await preview.locator('[data-pdf-manifest]').evaluate((node) => JSON.parse(node.textContent).map((doc) => new URL(doc.source, location.origin).href));
     await preview.evaluate(() => {
       window.pdfLayouts = [];
+      window.maxPdfWorkers = 0;
+      window.pdfWorkerObserver = new MutationObserver(() => {
+        window.maxPdfWorkers = Math.max(window.maxPdfWorkers, document.querySelectorAll('iframe.pdf-export-worker').length);
+      });
+      window.pdfWorkerObserver.observe(document.body, { childList: true, subtree: true });
       window.pdfLayoutObserver = (event) => {
         if (event.origin !== location.origin || event.data?.type !== 'sps-pdf-document' || !event.data.blob) return;
         const doc = event.source.document;
@@ -76,8 +81,10 @@ const chooseScope = async (page, value) => {
     assert.equal(downloads.length, count, 'One download per document');
     const layouts = await preview.evaluate(() => {
       window.removeEventListener('message', window.pdfLayoutObserver);
+      window.pdfWorkerObserver.disconnect();
       return window.pdfLayouts;
     });
+    assert.equal(await preview.evaluate(() => window.maxPdfWorkers), 1, 'Only one document worker runs at a time');
     assert.equal(layouts.length, count);
     for (const layout of layouts) {
       assert.equal(layout.background, 'rgb(255, 255, 255)');
@@ -194,12 +201,14 @@ const chooseScope = async (page, value) => {
     const automaticDownloads = [];
     reader.on('download', (download) => automaticDownloads.push(download));
     await options.getByRole('button', { name: 'Export', exact: true }).click();
+    await options.locator('[data-pdf-progress]').waitFor({ state: 'visible' });
     try {
       await options.locator('[data-pdf-form-status]').filter({ hasText: 'Started 2 individual PDF downloads' }).waitFor({ timeout: 120000 });
     } catch (error) {
       throw new Error(`${await options.locator('[data-pdf-form-status]').textContent()}; scope=${await options.locator('[data-pdf-scope]').inputValue()}; ${error.message}`);
     }
     assert.equal(automaticDownloads.length, 2);
+    assert.equal(await options.locator('[data-pdf-progress] progress').getAttribute('value'), '100');
     for (let index = 0; index < automaticDownloads.length; index++) await automaticDownloads[index].saveAs(path.join(output, `dialog-auto-${index + 1}.pdf`));
     await options.locator('[data-pdf-quota]').filter({ hasText: '118 documents remaining' }).waitFor();
     await options.locator('[data-pdf-quota] summary').click();
