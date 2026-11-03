@@ -10,6 +10,14 @@
 - `scripts/package.py` 生成插件和服务器 ZIP；服务器 ZIP 不含实例配置和运行数据。`scripts/prepare-config.sh`、`backup-data.sh`、`data-snapshot.php` 和根目录 `backup-volumes.sh` 用于配置、备份与校验。Docker 镜像会压缩自有前端资源；服务器 ZIP 保留源码资源。
 - `tests/` 使用临时数据，`.test-output/` 是本地输出并被 Git 忽略。`php-site/storage/`、`php-site/uploads/` 是持久数据，不应作为清理遗留文件删除；`php-site/config.php` 是实例配置，更新时保留。
 
+### GitHub 管理员登录
+
+GitHub OAuth 使用服务端私有 JSON 文件 `/run/siyuan-share/github-oauth.json`，该文件必须从仓库和 Docker 构建目录之外只读挂载，且只允许 PHP worker 读取。JSON 字段为 `client_id`、`client_secret`、`callback_url`、`github_user_id` 和现有管理员的 `local_user_id`；后两者均为数字 ID。回调 URL 必须使用 HTTPS，路径为 `/auth/github/callback`。Client Secret、access token、OAuth code 均不能提交、写入镜像或打印到日志；外层反向代理也必须关闭回调路径的访问日志。注册 GitHub OAuth App 时不要启用回调通配符，不需要请求 repository scope。
+
+私有文件挂载并重启容器后，登录页先同时提供 GitHub 和密码登录。确认绑定的 GitHub 账号能登录既有管理员后，才将 SQLite `settings` 的 `admin_auth_mode` 设为 `github`；这会拒绝所有密码登录及密码会话，GitHub 会话仍有效。设置为 GitHub 后，即使私有文件丢失或格式错误也不会恢复密码登录；应从私有备份恢复配置。GitHub 会话在管理员被禁用、身份配置或 Secret 改变时失效；旧分享密码和插件 API key 不受此开关影响。应用没有长期保存 GitHub access token。修改前备份数据库、上传文件和私有配置，并验证恢复方式；不要把私有配置放进公开备份或构建产物。
+
+本地 OAuth 测试使用隔离的 GitHub 响应夹具：`python tests/github-auth.py --php /path/to/php`。生产启用前还须通过真实 GitHub 验证授权、反向代理日志和登录。需要恢复密码登录时，由服务器操作者离线备份后，将 `admin_auth_mode` 改为 `password`，再重启应用并检查；这会重新允许旧密码，只有在明确需要恢复时才执行。
+
 图片尺寸由 `exportDocMarkdown` 请求思源的 `imgTag` 导出：思源 3.3.0 起可将图片节点的尺寸放进 HTML `style`。服务端 Parsedown 和浏览器 Markdown 渲染都须保留正常尺寸，同时继续清理危险属性；附件路径仍须经过既有收集与重写。已有分享只有重新同步后才能获取以前未导出的尺寸，旧版思源可能只返回普通 Markdown 图片。阅读器优先使用显式宽高，并限制图片不超过容器；无尺寸图片保留原有展示规则，图片查看器仍使用原图。
 
 笔记本第一层中有子文档的节点按显示顺序循环使用 12 种低饱和配色，子树分支线、节点以及选中、按下和聚焦状态使用相应颜色；课程分组本身没有背景色。分组标题在各自范围内吸顶，第二层有子文档的节点在课程标题下方吸顶；无子文档的节点和文档分享不启用分组样式。颜色由顺序决定，插入或调整前面的分组会改变后续颜色。`tests/tree-groups.cjs` 覆盖配色、两级吸顶、点击与选中状态。

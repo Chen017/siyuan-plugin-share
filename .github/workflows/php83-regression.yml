@@ -37,6 +37,7 @@ jobs:
           python tests/docs.py
       - name: Test PHP runtime, database, HTTP APIs and Nginx rules
         run: |
+          python3 tests/github-auth.py --php "$(command -v php)"
           chrome=$(command -v google-chrome)
           NODE_PATH="$RUNNER_TEMP/browser-test/node_modules" SPS_TEST_BROWSER="$chrome" node tests/image-sizing.cjs
           SIYUAN_BROWSER_EXECUTABLE="$chrome" SIYUAN_PLAYWRIGHT_MODULE="$RUNNER_TEMP/browser-test/node_modules/playwright" node tests/pdf-math.cjs

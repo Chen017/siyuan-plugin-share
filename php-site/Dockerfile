@@ -86,7 +86,9 @@ http {
         "~^[0-9a-f]{16}$" "public, max-age=31536000, immutable";
     }
 
-    access_log /var/log/nginx/access.log;
+    # OAuth authorization codes in callback query strings must not enter access logs.
+    map $request_uri $log_access { default 1; ~^/auth/github/callback 0; }
+    access_log /var/log/nginx/access.log combined if=$log_access;
 
     include /etc/nginx/conf.d/*.conf;
 }

@@ -18,6 +18,7 @@ $config = [
     'uploads_dir' => __DIR__ . '/uploads',
     'default_storage_limit_mb' => 1024,
     'session_lifetime_days' => 30,
+    'github_oauth_config' => '/run/siyuan-share/github-oauth.json',
     'chunk_ttl_seconds' => 7200,
     'chunk_cleanup_probability' => 0.05,
     'chunk_cleanup_limit' => 20,
@@ -46,7 +47,7 @@ if ($sessionDays <= 0) {
 $sessionLifetime = $sessionDays * 86400;
 ini_set('session.gc_maxlifetime', (string)$sessionLifetime);
 ini_set('session.cookie_lifetime', (string)$sessionLifetime);
-session_set_cookie_params($sessionLifetime, '/', '', false, true);
+session_set_cookie_params(['lifetime' => $sessionLifetime, 'path' => '/', 'secure' => is_file($config['github_oauth_config']), 'httponly' => true, 'samesite' => 'Lax']);
 session_start();
 date_default_timezone_set('Asia/Shanghai');
 
@@ -54,6 +55,7 @@ require_once __DIR__ . '/vendor/Parsedown.php';
 require_once __DIR__ . '/pdf-export.php';
 require_once __DIR__ . '/legacy-cleanup.php';
 require_once __DIR__ . '/database.php';
+require_once __DIR__ . '/github-auth.php';
 require_once __DIR__ . '/storage.php';
 require_once __DIR__ . '/upload-safety.php';
 require_once __DIR__ . '/sync.php';
@@ -411,6 +413,7 @@ function render_page(string $title, string $content, ?array $user = null, string
             ['key' => 'admin-settings', 'label' => 'Site settings', 'href' => $base . '/admin#settings'],
             ['key' => 'account', 'label' => 'Password', 'href' => $base . '/account'],
         ];
+        if (github_only()) $navItems = array_values(array_filter($navItems, static fn($item) => $item['key'] !== 'account'));
         echo "<div class='app-shell app-shell--compact'><header class='admin-header'><div class='admin-header-inner'>";
         echo "<a class='admin-brand' href='{$base}/dashboard'>" . render_reader_icon('book') . "<span>{$app}</span></a>";
         echo "<nav class='app-nav' aria-label='Administration'>";
@@ -707,7 +710,7 @@ function handle_share_search(string $slug): void {
 }
 
 function current_user(): ?array {
-    if (empty($_SESSION['user_id']) || empty($_SESSION['password_hash'])) {
+    if (empty($_SESSION['user_id'])) {
         return null;
     }
     $pdo = db();
@@ -717,8 +720,9 @@ function current_user(): ?array {
     if (!$row || $row['role'] !== 'admin' || (int)$row['disabled'] === 1) {
         return null;
     }
-    $sessionHash = (string)($_SESSION['password_hash'] ?? '');
-    if ($sessionHash === '' || !hash_equals((string)$row['password_hash'], $sessionHash)) {
+    $githubSession = ($_SESSION['auth_method'] ?? '') === 'github';
+    $valid = $githubSession ? github_session_valid($row) : (!github_only() && !empty($_SESSION['password_hash']) && hash_equals((string)$row['password_hash'], (string)$_SESSION['password_hash']));
+    if (!$valid) {
         $_SESSION = [];
         session_regenerate_id(true);
         return null;

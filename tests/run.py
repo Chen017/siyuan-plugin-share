@@ -607,6 +607,12 @@ class Regression(AdminShareTests, SelectedFixTests, PdfCookieTests, PdfReleaseTe
     def test_nginx_protects_private_files(self):
         if not self.docker:
             self.skipTest('Nginx rules require the Docker image')
+        marker = 'oauth-audit-' + uuid.uuid4().hex
+        self.client.request('/auth/github/callback?audit=' + marker)
+        self.client.request('/login?audit=control-' + marker)
+        access_log = subprocess.check_output(['docker', 'exec', self.container, 'cat', '/var/log/nginx/access.log'], text=True)
+        self.assertIn('control-' + marker, access_log)
+        self.assertNotIn('callback?audit=' + marker, access_log)
         for path in ['/config.php', '/storage/app.db', '/.git/config', '/vendor/Parsedown.php']:
             self.assertIn(self.client.request(path)[0], [403, 404], path)
         # An actual readable journal-like file must not bypass a .db-only rule.

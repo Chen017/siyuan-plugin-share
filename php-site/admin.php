@@ -14,7 +14,7 @@ if ($path === '/logout' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 if ($path === '/login') {
     if ($_SERVER['REQUEST_METHOD'] === 'POST') check_csrf();
     if (current_user()) redirect('/dashboard');
-    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && !github_only()) {
         $stmt = db()->prepare('SELECT * FROM users WHERE username = ? AND role = "admin" AND disabled = 0 LIMIT 1');
         $stmt->execute([trim((string)($_POST['username'] ?? ''))]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -23,6 +23,7 @@ if ($path === '/login') {
             redirect('/login');
         }
         session_regenerate_id(true);
+        unset($_SESSION['auth_method'], $_SESSION['github_session']);
         $_SESSION['user_id'] = $user['id'];
         $_SESSION['password_hash'] = $user['password_hash'];
         redirect((int)$user['must_change_password'] === 1 ? '/account' : '/dashboard');
@@ -30,14 +31,25 @@ if ($path === '/login') {
     $content = '<div class="auth-card"><h1>Sign in</h1><p class="auth-description">Manage your shared notes.</p>';
     if ($error = flash('error')) $content .= '<p class="flash error" role="alert">' . htmlspecialchars($error) . '</p>';
     if ($info = flash('info')) $content .= '<p class="flash" role="status">' . htmlspecialchars($info) . '</p>';
-    $content .= '<form method="post" class="auth-form">' . render_hidden_inputs(['csrf' => csrf_token()]);
-    $content .= '<label>Username<input class="auth-input" name="username" autocomplete="username" required></label>';
-    $content .= '<label>Password<input class="auth-input" type="password" name="password" autocomplete="current-password" required></label>';
-    $content .= '<button class="button primary w-full" type="submit">Sign in</button></form></div>';
+    if (github_oauth_config()) $content .= '<a class="button primary w-full" href="' . base_path() . '/auth/github">Sign in with GitHub</a>';
+    if (!github_only()) {
+        $content .= '<form method="post" class="auth-form">' . render_hidden_inputs(['csrf' => csrf_token()]);
+        $content .= '<label>Username<input class="auth-input" name="username" autocomplete="username" required></label>';
+        $content .= '<label>Password<input class="auth-input" type="password" name="password" autocomplete="current-password" required></label>';
+        $content .= '<button class="button primary w-full" type="submit">Sign in</button></form>';
+    } elseif (!github_oauth_config()) {
+        $content .= '<p class="flash error">GitHub sign-in is unavailable. Contact the site administrator.</p>';
+    }
+    $content .= '</div>';
     render_page('Sign in', $content, null, '', ['layout' => 'auth']);
 }
 
+if ($path === '/auth/github' || $path === '/auth/github/callback') {
+    handle_github_auth($path);
+}
+
 if ($path === '/account') {
+    if (github_only()) redirect('/dashboard');
     $user = require_admin(true);
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         check_csrf();
