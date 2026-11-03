@@ -17,6 +17,20 @@ const textContrast = node => {
  const page=await context.newPage(), base=new URL(shareUrl).origin;
  const settle=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
  const noOverflow=async p=>assert(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'No page horizontal overflow');
+ const chooseScope=async(options,name)=>{
+  await options.getByRole('combobox',{name:'Export scope',exact:true}).click();
+  await options.getByRole('option',{name,exact:true}).click();
+ };
+ const fitPdf=async()=>{
+  await page.waitForFunction(()=>{
+   const modal=document.querySelector('.pdf-export-dialog'),doc=modal?.querySelector('iframe')?.contentDocument;
+   const content=doc?.querySelector('.pdf-export-content'),scroll=doc?.querySelector('.pdf-export-scroll'),footer=doc?.querySelector('.pdf-export-footer');
+   if(!content||!footer)return false;
+   const style=doc.defaultView.getComputedStyle(scroll),height=content.getBoundingClientRect().height+parseFloat(style.paddingTop)+parseFloat(style.paddingBottom)+footer.getBoundingClientRect().height;
+   return Math.abs(parseFloat(modal.style.getPropertyValue('--pdf-content-height'))-height)<2;
+  });
+  await page.locator('.pdf-export-dialog').evaluate(n=>Promise.all(n.getAnimations().map(a=>a.finished.catch(()=>{}))));
+ };
  try {
   await page.goto(shareUrl);
   assert(await page.locator('[data-reader-show-tree]').evaluate(n=>n.classList.contains('primary')));
@@ -39,6 +53,15 @@ const textContrast = node => {
   const panelMotion=await page.locator('dialog.pdf-export-dialog').evaluate(node=>({opacity:getComputedStyle(node).opacity,frames:node.getAnimations().filter(a=>!a.effect.pseudoElement).flatMap(a=>a.effect.getKeyframes())}));
   assert.equal(Number(panelMotion.opacity),1,'Panel text stays opaque during presentation');
   assert(panelMotion.frames.every(frame=>!('opacity' in frame)),'Panel motion does not fade text into background');
+  const animatedOptions=page.frameLocator('[data-pdf-dialog-frame]');
+  await animatedOptions.locator('[data-pdf-export-form][data-export-state]').waitFor();await fitPdf();
+  await animatedOptions.locator('[data-pdf-selection]').evaluate(n=>{const filler=document.createElement('p');filler.textContent='Document selection '.repeat(200);n.append(filler);});
+  await chooseScope(animatedOptions,'Select documents');
+  await page.waitForFunction(()=>document.querySelector('.pdf-export-dialog').getAnimations().some(a=>a.transitionProperty==='height'));
+  await fitPdf();
+  await chooseScope(animatedOptions,'Single document');
+  await page.waitForFunction(()=>document.querySelector('.pdf-export-dialog').getAnimations().some(a=>a.transitionProperty==='height'));
+  await fitPdf();
   await page.getByRole('button',{name:'Close export dialog',exact:true}).click();await page.locator('dialog.pdf-export-dialog').waitFor({state:'hidden'});
   for(const colorScheme of ['light','dark']) for(const width of [320,390,768,1280]) {
    await page.emulateMedia({colorScheme,reducedMotion:'reduce'});await page.setViewportSize({width,height:844});await settle();
@@ -54,12 +77,19 @@ const textContrast = node => {
    await page.locator('[data-pdf-export-link]').click();
    const modal=page.locator('dialog.pdf-export-dialog');await modal.waitFor();
    const options=page.frameLocator('[data-pdf-dialog-frame]');await options.locator('[data-pdf-export-form][data-export-state]').waitFor();
+   await fitPdf();
+   const compactHeight=(await modal.boundingBox()).height;
+   const blank=await options.locator('.pdf-export-scroll').evaluate(n=>n.clientHeight-n.querySelector('.pdf-export-content').getBoundingClientRect().height-parseFloat(getComputedStyle(n).paddingTop)-parseFloat(getComputedStyle(n).paddingBottom));
+   assert(blank<=3,`Single document should not reserve list space: ${blank}`);
+   await page.screenshot({path:path.join(output,`ui-pdf-single-${colorScheme}-${width}.png`),animations:'disabled'});
    assert(await modal.evaluate(textContrast)>=4.5, `${colorScheme}/${width} PDF panel text contrast`);
    assert(await options.getByRole('combobox',{name:'Export scope',exact:true}).evaluate(textContrast)>=4.5, `${colorScheme}/${width} export control text contrast`);
-   await options.locator('.pdf-export-scroll').evaluate(node=>{
+   await options.locator('[data-pdf-selection]').evaluate(node=>{
     const filler=document.createElement('div');filler.dataset.layoutFixture='';
     filler.textContent='A long document selection needs one main scroll owner. '.repeat(150);node.append(filler);
    });
+   await chooseScope(options,'Select documents');await fitPdf();
+   assert((await modal.boundingBox()).height>compactHeight+20,'Document list expands the dialog');
    const geometry=await options.locator('.pdf-export-panel').evaluate(node=>{
     const scroll=node.querySelector('.pdf-export-scroll'), footer=node.querySelector('.pdf-export-footer'), field=node.querySelector('[data-pdf-selection]');
     return {scrollable:scroll.scrollHeight>scroll.clientHeight,rootOverflow:document.documentElement.scrollHeight>innerHeight+1,footerBottom:footer.getBoundingClientRect().bottom,height:innerHeight,listOverflow:getComputedStyle(field).overflowY};
@@ -68,6 +98,9 @@ const textContrast = node => {
    assert(geometry.footerBottom<=geometry.height+1,JSON.stringify(geometry));assert.equal(geometry.listOverflow,'visible');
    const bounds=await modal.boundingBox();assert(bounds.x>=-1 && bounds.x+bounds.width<=width+1);
    await page.screenshot({path:path.join(output,`ui-pdf-${colorScheme}-${width}.png`),animations:'disabled'});
+   await chooseScope(options,'Single document');await fitPdf();
+   assert(Math.abs((await modal.boundingBox()).height-compactHeight)<3,'Returning to single document shrinks the dialog');
+   assert.equal(await modal.evaluate(n=>getComputedStyle(n).transitionDuration),'0s','Reduced motion disables resizing animation');
    await page.getByRole('button',{name:'Close export dialog',exact:true}).click();await modal.waitFor({state:'hidden'});
    await page.screenshot({path:path.join(output,`ui-reader-${colorScheme}-${width}.png`),animations:'disabled'});
   }

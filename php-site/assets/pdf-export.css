@@ -104,16 +104,16 @@ body.layout-share.pdf-export-preview .hljs :is(.hljs-comment, .hljs-quote) { col
 body.layout-share.pdf-export-preview .hljs :is(.hljs-title, .hljs-section) { color: #6639ba; }
 
 /* One scroll owner inside the frame; header and actions remain available. */
-.pdf-export-dialog { height: min(660px, calc(100dvh - 32px)); }
+.pdf-export-dialog { height: min(calc(var(--pdf-content-height, 120px) + var(--pdf-header-height, 73px)), 660px, calc(100dvh - 32px)); transition: height var(--motion-change, 200ms) var(--ease-present, ease-out); }
 .pdf-export-dialog[open] { display: flex; flex-direction: column; }
-.pdf-export-dialog > iframe { flex: 1 1 0; min-height: 0; height: auto !important; }
+.pdf-export-dialog > iframe { flex: 1 1 auto; min-height: 0; height: auto !important; }
 .pdf-dialog-header { flex: none; }
 body.layout-share.pdf-export-embedded { height: 100dvh; overflow: hidden; }
 body.layout-share.pdf-export-embedded .share-page { height: 100%; min-height: 0; }
 .pdf-export-embedded .reader-mobile-bar { display: none !important; }
 .pdf-export-embedded .pdf-export-panel { height: 100%; padding: 0; }
 .pdf-export-embedded .pdf-export-panel form { display: flex; flex-direction: column; height: 100%; min-height: 0; margin: 0; gap: 0; }
-.pdf-export-scroll { display: grid; align-content: start; gap: 16px; }
+.pdf-export-content { display: grid; align-content: start; gap: 16px; }
 .pdf-export-embedded .pdf-export-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 20px 24px; }
 .pdf-export-footer { display: grid; gap: 10px; padding-top: 16px; }
 .pdf-export-footer > button { justify-self: start; min-width: 140px; }
@@ -125,7 +125,7 @@ body.layout-share.pdf-export-embedded .share-page { height: 100%; min-height: 0;
 [data-pdf-selected-count] { color: var(--muted); font-size: .875rem; }
 [data-pdf-selected-count].is-invalid { color: var(--danger); }
 @media(max-width:600px) {
-  .pdf-export-dialog { height: min(740px, calc(100dvh - 12px)); }
+  .pdf-export-dialog { --pdf-header-height: 69px; height: min(calc(var(--pdf-content-height, 120px) + var(--pdf-header-height) + env(safe-area-inset-bottom)), 740px, calc(100dvh - 12px)); }
   .pdf-export-embedded .pdf-export-scroll { padding: 16px 20px; }
   .pdf-export-embedded .pdf-export-footer { padding: 12px 20px max(12px, env(safe-area-inset-bottom)); }
   .pdf-export-footer > button { width: 100%; }
@@ -134,6 +134,7 @@ body.layout-share.pdf-export-embedded .share-page { height: 100%; min-height: 0;
 @keyframes pdf-panel-in { from { transform: translateY(6px); } to { transform: translateY(0); } }
 @keyframes pdf-panel-out { from { transform: translateY(0); } to { transform: translateY(6px); } }
 
-.pdf-export-scroll > p, .pdf-export-limits p { margin: 0; }
+.pdf-export-content > p, .pdf-export-limits p { margin: 0; }
+@media (prefers-reduced-motion: reduce) { .pdf-export-dialog { transition: none !important; } }
 .pdf-export-limits { display: grid; gap: 6px; }
 .pdf-export-limits details { margin-top: 6px; }

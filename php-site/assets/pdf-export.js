@@ -76,7 +76,10 @@
         if (message.data?.type === 'sps-pdf-dialog-close') { closeDialog(); return; }
         if (message.data?.type !== 'sps-pdf-dialog-size') return;
         const height = Number(message.data.height);
-        if (Number.isFinite(height)) dialogFrame.style.height = `${Math.max(180, Math.min(height, innerHeight - 130))}px`;
+        if (Number.isFinite(height) && height > 0) {
+          dialog.style.setProperty('--pdf-header-height', `${Math.ceil(dialog.querySelector('header').getBoundingClientRect().height) + 2}px`);
+          dialog.style.setProperty('--pdf-content-height', `${Math.ceil(height)}px`);
+        }
       });
       document.body.append(dialog);
     }
@@ -84,6 +87,7 @@
     const url = new URL(link.href);
     url.searchParams.set('dialog', '1');
     dialogFrame.hidden = true;
+    dialog.style.removeProperty('--pdf-content-height');
     dialogFrame.src = url.href;
     dialog.querySelector('.pdf-dialog-loading').hidden = false;
     dialog.querySelector('.pdf-dialog-loading').textContent = 'Loading export options…';
@@ -205,8 +209,20 @@
       if (message.origin === location.origin && message.source === parent && message.data?.type === 'sps-pdf-cancel') cancelTask();
     });
     if (window.parent !== window) {
-      const resize = () => window.parent.postMessage({ type: 'sps-pdf-dialog-size', height: document.querySelector('.pdf-export-panel').getBoundingClientRect().height + 2 }, location.origin);
-      new ResizeObserver(resize).observe(document.querySelector('.pdf-export-panel'));
+      // Measure intrinsic content, not the viewport-sized panel: otherwise a
+      // previously expanded dialog can never shrink again.
+      const content = document.querySelector('.pdf-export-content');
+      const scroll = document.querySelector('.pdf-export-scroll');
+      const footer = document.querySelector('.pdf-export-footer');
+      const resize = () => {
+        const style = getComputedStyle(scroll);
+        const height = content.getBoundingClientRect().height + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + footer.getBoundingClientRect().height;
+        window.parent.postMessage({ type: 'sps-pdf-dialog-size', height }, location.origin);
+      };
+      const observer = new ResizeObserver(resize);
+      observer.observe(content);
+      observer.observe(footer);
+      window.addEventListener('resize', resize);
       resize();
       document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !event.defaultPrevented) window.parent.postMessage({ type: 'sps-pdf-dialog-close' }, location.origin); });
     }

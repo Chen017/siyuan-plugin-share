@@ -595,7 +595,7 @@ function route_pdf_export(string $slug, string $action = ''): never {
         $usage = htmlspecialchars(json_encode(pdf_visitor_usage($visitor)), ENT_QUOTES, 'UTF-8');
         $docLabels = pdf_export_document_labels($docs);
         $content = '<main class="pdf-export-panel">' . ($dialog ? '' : '<h1>Export PDF</h1>');
-        $content .= '<form method="post" action="' . htmlspecialchars($url) . '" target="sps-pdf-worker" data-pdf-export-form data-max-docs="' . $limits['max_docs'] . '"' . pdf_export_worker_attributes($url, '') . '><div class="pdf-export-scroll">';
+        $content .= '<form method="post" action="' . htmlspecialchars($url) . '" target="sps-pdf-worker" data-pdf-export-form data-max-docs="' . $limits['max_docs'] . '"' . pdf_export_worker_attributes($url, '') . '><div class="pdf-export-scroll"><div class="pdf-export-content">';
         $content .= '<p>Choose the documents to download as individual PDFs. Large documents may take longer.</p>';
         $content .= '<div class="pdf-export-limits" role="group" aria-label="Export limits"><div class="pdf-quota-notice" data-pdf-quota="' . $usage . '" role="status"></div>';
         $content .= '<p class="field-hint">Maximum ' . $limits['max_docs'] . ' documents per batch.</p></div>';
@@ -612,7 +612,7 @@ function route_pdf_export(string $slug, string $action = ''): never {
         $content .= '</fieldset>';
         if (count($docs) > 2000) $content .= '<p>Only the first 2,000 documents are listed. Open other documents from the share page to export them.</p>';
         $content .= '<fieldset data-pdf-challenge hidden><legend>Security check (once per browser cookie)</legend><p>Enter the verification code to continue exporting.</p><img data-pdf-captcha-image alt="Verification code"><button class="button ghost" type="button" data-pdf-captcha-refresh>Refresh code</button><label>Verification code <input class="input" name="captcha_answer" autocomplete="off" maxlength="8"></label></fieldset>';
-        $content .= '</div><div class="pdf-export-footer"><p data-pdf-selected-count role="status" aria-live="polite" hidden></p><button class="button primary" type="submit" disabled>Export</button><div class="pdf-progress" data-pdf-progress hidden><div class="pdf-progress-label"><span>Estimated progress</span><span data-pdf-percent>0%</span></div><progress max="100" value="0" aria-label="Estimated export progress"></progress></div><p data-pdf-form-status role="status" aria-live="polite"></p></div></form>';
+        $content .= '</div></div><div class="pdf-export-footer"><p data-pdf-selected-count role="status" aria-live="polite" hidden></p><button class="button primary" type="submit" disabled>Export</button><div class="pdf-progress" data-pdf-progress hidden><div class="pdf-progress-label"><span>Estimated progress</span><span data-pdf-percent>0%</span></div><progress max="100" value="0" aria-label="Estimated export progress"></progress></div><p data-pdf-form-status role="status" aria-live="polite"></p></div></form>';
         $content .= '<iframe class="pdf-export-worker" name="sps-pdf-worker" data-pdf-worker title="PDF generation task" aria-hidden="true" tabindex="-1"></iframe>';
         if (!$dialog) $content .= '<a href="' . htmlspecialchars(base_path() . '/s/' . rawurlencode($slug)) . '">Back to share</a>';
         $content .= '</main>';

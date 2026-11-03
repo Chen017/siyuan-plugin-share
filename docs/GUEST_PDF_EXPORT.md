@@ -76,3 +76,5 @@ PHP 只整理经过授权和资源检查的文档，PDF 由访客浏览器生成
 python tests/run.py --php /path/to/php 运行隔离后端回归，--browser 增加真实浏览器的独立文件下载、白底排版、任务互斥和验证码 UI 检查。--docker 使用已构建镜像执行实际 Nginx、PHP-FPM、并发、迁移及持久化检查。所有测试使用临时账号、数据库和附件，不修改生产文档。
 
 PDF 组件固定为 html2pdf.js 0.14.0，版本、哈希及许可见 php-site/assets/vendor/PDF_DEPENDENCIES.md。项目 push main 会触发构建部署；功能分支可先手动运行两套回归，全部通过再合并。
+
+导出弹窗按实际内容自适应高度：单篇模式不预留多选列表空白，切换范围、筛选、配额详情或状态变化时平滑展开/收缩；达到桌面/移动端高度上限后，仅内容区滚动，底部操作保持可见。减少动态效果设置下直接调整高度。`tests/ui-refinement-browser.cjs` 通过既有 `tests/run.py --browser` 入口和 PHP GitHub Actions 验证紧凑高度、展开/收缩、单一滚动区域及减少动态效果。
