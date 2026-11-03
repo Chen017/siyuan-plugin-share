@@ -62,7 +62,13 @@ docker compose ps
 
 默认 Compose 监听 `127.0.0.1:8081`；将 HTTPS 反向代理指向该地址并保留 Host 请求头，在后台 **Site settings** 中配置公网地址。全新安装时，在 `docker compose logs web` 中查找 `SIYUAN_INITIAL_ADMIN_PASSWORD`，以 **admin** 登录并先修改密码。日志包含初始凭据，请妥善保护。
 
+目前的 [Note 后台](https://note.etalib.space/login) 使用 GitHub 登录，并绑定唯一的管理员 GitHub 账号；该实例已停用后台密码登录。项目仍保留新安装默认使用密码的兼容流程，GitHub 登录需要为每个实例单独配置 OAuth App 和服务器私有配置，详见[维护指南](docs/MAINTENANCE.md#github-管理员登录)。不要把 Client Secret 写入仓库或镜像。
+
+思源插件的连接密钥与后台登录独立；持有它可以操作同步 API，应像密码一样保护。分享文档单独设置的访问密码也不受后台登录方式影响。
+
 更新时保留 `php-site/storage/`、`php-site/uploads/` 和 `php-site/config.php`；已有管理员密码及 API key 不会被重置。需要手动创建经过校验的备份时，可运行 `bash backup-volumes.sh siyuan-share-web "$PWD/backups"`，并妥善保管生成目录及 `VERIFIED` 标记；新备份验证失败时应保留旧备份。若遵循只保留最新一份的策略，在新备份验证成功后手动删除旧备份；脚本不会自动清理。详见[维护指南](docs/MAINTENANCE.md)及[上传与迁移保护](docs/UPLOAD_SAFETY.md)。
+
+GitHub OAuth 私有配置位于上述项目目录之外，备份脚本不包含它；需要另行安全保存，并在恢复后检查认证模式和只读挂载。
 
 ### 开发与验证
 

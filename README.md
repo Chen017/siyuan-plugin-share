@@ -62,7 +62,13 @@ docker compose ps
 
 The supplied Compose configuration listens on `127.0.0.1:8081`; point an HTTPS reverse proxy at it and preserve the Host header. Configure the public URL in **Site settings**. On a fresh installation, find `SIYUAN_INITIAL_ADMIN_PASSWORD` in `docker compose logs web`, sign in as **admin**, and change the password before using the backend. Keep the logs private.
 
+The hosted [Note dashboard](https://note.etalib.space/login) uses GitHub sign-in bound to one administrator account; password login is disabled for that instance. The project retains password login for fresh installations. GitHub sign-in requires an OAuth App and private server configuration for each instance; see the [maintenance guide](docs/MAINTENANCE.md#github-管理员登录). Never commit the Client Secret or include it in an image.
+
+The SiYuan plugin connection key is separate from dashboard sign-in and permits access to the synchronization API; protect it like a password. Passwords set on individual shared documents are also independent of dashboard authentication.
+
 Preserve `php-site/storage/`, `php-site/uploads/` and `php-site/config.php` when updating. Existing administrator passwords and API keys are not reset. To create an optional verified manual backup, run `bash backup-volumes.sh siyuan-share-web "$PWD/backups"`; keep the resulting directory and its `VERIFIED` marker private. Retain the previous backup if verification fails. After a successful verification, manually remove older backups if following the single-backup retention policy; the script does not remove them automatically. See the [maintenance guide](docs/MAINTENANCE.md) and [upload and migration safeguards](docs/UPLOAD_SAFETY.md).
+
+The private GitHub OAuth configuration lives outside the project directory and is not included by that backup script. Store it separately and securely, and verify the authentication mode and read-only mount after restoring.
 
 ### Develop & verify
 
