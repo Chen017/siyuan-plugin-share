@@ -4659,6 +4659,134 @@ class SiYuanSharePlugin extends Plugin {
     await this.setDocBlockCountCache(shareKey, docMap);
   }
 
+  alignScopeDocsWithRemoteSnapshot(scopeDocs, remoteSnapshot) {
+    const scope = Array.isArray(scopeDocs) ? scopeDocs : [];
+    const remoteList = Array.isArray(remoteSnapshot?.docs) ? remoteSnapshot.docs : [];
+    if (!scope.length || !remoteList.length) return scope;
+
+    const remoteMap = new Map();
+    remoteList.forEach((row) => {
+      const docId = String(row?.docId || "").trim();
+      if (!isValidDocId(docId)) return;
+      remoteMap.set(docId, row);
+    });
+
+    const groupsByParent = new Map();
+    scope.forEach((doc, scopeIndex) => {
+      const parentId = String(doc?.parentId || "").trim();
+      if (!groupsByParent.has(parentId)) {
+        groupsByParent.set(parentId, []);
+      }
+      groupsByParent.get(parentId).push({doc, scopeIndex});
+    });
+
+    const alignedDocs = new Array(scope.length);
+
+    groupsByParent.forEach((siblingItems) => {
+      const existingRemoteIndexes = [];
+      const isExisting = new Array(siblingItems.length).fill(false);
+
+      siblingItems.forEach((item, i) => {
+        const docId = String(item.doc?.docId || "").trim();
+        const remote = remoteMap.get(docId);
+        if (remote) {
+          const remoteParent = String(remote?.parentId || remote?.parent_id || "").trim();
+          const localParent = String(item.doc?.parentId || "").trim();
+          if (remoteParent === localParent) {
+            const rIndex = Number(remote?.sortIndex ?? remote?.sort_index);
+            if (Number.isFinite(rIndex)) {
+              existingRemoteIndexes.push({
+                localPos: i,
+                remoteSortIndex: rIndex,
+                remoteSortOrder: Number(remote?.sortOrder ?? remote?.sort_order ?? 0),
+              });
+              isExisting[i] = true;
+            }
+          }
+        }
+      });
+
+      let monotonic = true;
+      for (let k = 1; k < existingRemoteIndexes.length; k += 1) {
+        if (existingRemoteIndexes[k].remoteSortIndex <= existingRemoteIndexes[k - 1].remoteSortIndex) {
+          monotonic = false;
+          break;
+        }
+      }
+
+      if (monotonic && existingRemoteIndexes.length > 0) {
+        const assignedSortIndex = new Array(siblingItems.length);
+        const assignedSortOrder = new Array(siblingItems.length);
+
+        existingRemoteIndexes.forEach((item) => {
+          assignedSortIndex[item.localPos] = item.remoteSortIndex;
+          assignedSortOrder[item.localPos] = item.remoteSortOrder;
+        });
+
+        let leftIdx = -1;
+        for (let i = 0; i < siblingItems.length; i += 1) {
+          if (isExisting[i]) {
+            leftIdx = i;
+            continue;
+          }
+          let rightIdx = -1;
+          for (let j = i + 1; j < siblingItems.length; j += 1) {
+            if (isExisting[j]) {
+              rightIdx = j;
+              break;
+            }
+          }
+
+          let prevVal, nextVal;
+          if (leftIdx >= 0) prevVal = assignedSortIndex[leftIdx];
+          if (rightIdx >= 0) nextVal = assignedSortIndex[rightIdx];
+
+          const spanEnd = rightIdx >= 0 ? rightIdx : siblingItems.length;
+          const count = spanEnd - (leftIdx >= 0 ? leftIdx + 1 : 0);
+          const offset = i - (leftIdx >= 0 ? leftIdx + 1 : 0) + 1;
+
+          if (prevVal !== undefined && nextVal !== undefined) {
+            const step = (nextVal - prevVal) / (count + 1);
+            assignedSortIndex[i] = normalizeSortIndexForHash(prevVal + step * offset);
+            const prevOrder = assignedSortOrder[leftIdx] || 0;
+            const nextOrder = assignedSortOrder[rightIdx] || 0;
+            const orderStep = (nextOrder - prevOrder) / (count + 1);
+            assignedSortOrder[i] = Math.max(0, Math.floor(prevOrder + orderStep * offset));
+          } else if (prevVal !== undefined) {
+            assignedSortIndex[i] = normalizeSortIndexForHash(prevVal + offset);
+            const prevOrder = assignedSortOrder[leftIdx] || 0;
+            assignedSortOrder[i] = Math.max(0, Math.floor(prevOrder + offset));
+          } else if (nextVal !== undefined) {
+            assignedSortIndex[i] = normalizeSortIndexForHash(nextVal - (count - offset + 1));
+            const nextOrder = assignedSortOrder[rightIdx] || 0;
+            assignedSortOrder[i] = Math.max(0, Math.floor(nextOrder - (count - offset + 1)));
+          } else {
+            assignedSortIndex[i] = i;
+            assignedSortOrder[i] = i;
+          }
+        }
+
+        siblingItems.forEach((item, i) => {
+          alignedDocs[item.scopeIndex] = {
+            ...item.doc,
+            sortIndex: assignedSortIndex[i],
+            sortOrder: assignedSortOrder[i],
+          };
+        });
+      } else {
+        siblingItems.forEach((item, i) => {
+          alignedDocs[item.scopeIndex] = {
+            ...item.doc,
+            sortIndex: Number.isFinite(Number(item.doc?.sortIndex)) ? Number(item.doc.sortIndex) : i,
+            sortOrder: Number.isFinite(Number(item.doc?.sortOrder)) ? Number(item.doc.sortOrder) : item.scopeIndex,
+          };
+        });
+      }
+    });
+
+    return alignedDocs;
+  }
+
   collectStructChangedDocIds(scopeDocs, remoteSnapshot) {
     const localList = Array.isArray(scopeDocs) ? scopeDocs : [];
     const remoteList = Array.isArray(remoteSnapshot?.docs) ? remoteSnapshot.docs : [];
@@ -4678,9 +4806,7 @@ class SiYuanSharePlugin extends Plugin {
         changed.add(docId);
         return;
       }
-      const localSortOrder = Math.max(0, Math.floor(Number(doc?.sortOrder) || index));
-      const remoteSortOrder = Math.max(0, Math.floor(Number(remote?.sortOrder) || 0));
-      let different = localSortOrder !== remoteSortOrder;
+      let different = false;
       if (
         !different &&
         Object.prototype.hasOwnProperty.call(remote, "title") &&
@@ -4712,6 +4838,13 @@ class SiYuanSharePlugin extends Plugin {
         const localSortIndex = normalizeSortIndexForHash(doc?.sortIndex ?? 0);
         const remoteSortIndex = normalizeSortIndexForHash(remote?.sortIndex ?? remote?.sort_index ?? 0);
         if (localSortIndex !== remoteSortIndex) {
+          different = true;
+        }
+      }
+      if (!different && !hasParentField && !hasSortIndexField) {
+        const localSortOrder = Math.max(0, Math.floor(Number(doc?.sortOrder) || index));
+        const remoteSortOrder = Math.max(0, Math.floor(Number(remote?.sortOrder) || 0));
+        if (localSortOrder !== remoteSortOrder) {
           different = true;
         }
       }
@@ -6411,8 +6544,7 @@ class SiYuanSharePlugin extends Plugin {
         nextTitle !== prevTitle ||
         nextIcon !== prevIcon ||
         nextParentId !== prevParentId ||
-        nextSortIndex !== prevSortIndex ||
-        nextSortOrder !== prevSortOrder
+        nextSortIndex !== prevSortIndex
       ) {
         changed.add(docId);
       }
@@ -8549,6 +8681,9 @@ class SiYuanSharePlugin extends Plugin {
         selectedExcludedDocIds = filtered.selectedDocIds;
         if (!scopeDocs.length) throw new Error(t("siyuanShare.error.noDocsToShare"));
       }
+      if (useIncremental && remoteSnapshot) {
+        scopeDocs = this.alignScopeDocsWithRemoteSnapshot(scopeDocs, remoteSnapshot);
+      }
       let candidateDocIds = scopeDocs.map((doc) => String(doc?.docId || "").trim());
       const pendingMigrationDocs = existingShare?.id ? this.pendingImageSizeMigrationDocs(existingShare.id) : null;
       if (useIncremental && (!this.needsImageSizeMigration(existingShare.id) || pendingMigrationDocs !== null)) {
@@ -8988,6 +9123,9 @@ class SiYuanSharePlugin extends Plugin {
             throw err;
           }
         }
+      }
+      if (useIncremental && remoteSnapshot) {
+        scopeDocs = this.alignScopeDocsWithRemoteSnapshot(scopeDocs, remoteSnapshot);
       }
       let candidateDocIds = scopeDocs.map((doc) => String(doc?.docId || "").trim());
       const pendingMigrationDocs = existingShare?.id ? this.pendingImageSizeMigrationDocs(existingShare.id) : null;

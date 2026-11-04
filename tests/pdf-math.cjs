@@ -6,10 +6,10 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
 (async () => {
   const browser = await chromium.launch({ executablePath: process.env.SIYUAN_BROWSER_EXECUTABLE || undefined, headless: true });
   try {
-    const page = await browser.newPage({ viewport: { width: 1000, height: 2600 }, deviceScaleFactor: 1 });
+    const page = await browser.newPage({ viewport: { width: 1000, height: 3200 }, deviceScaleFactor: 1 });
     const asset = (name) => pathToFileURL(path.resolve(__dirname, '../php-site/assets', name)).href;
     await page.goto(pathToFileURL(path.resolve(__dirname, '../php-site/assets/vendor/katex.min.css')).href);
-    await page.setContent(`<!doctype html><base href="${asset('')}/"><link rel="stylesheet" href="vendor/katex.min.css"><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="pdf-export.css"><body class="layout-share pdf-export-preview"><div id="fixture" class="pdf-document pdf-download-document"><div class="markdown-body"></div></div></body>`);
+    await page.setContent(`<!doctype html><base href="${asset('')}/"><link rel="stylesheet" href="vendor/github-markdown.min.css"><link rel="stylesheet" href="vendor/katex.min.css"><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="pdf-export.css"><body class="layout-share pdf-export-preview"><div id="fixture" class="pdf-document pdf-download-document"><div class="markdown-body"></div></div></body>`);
     await page.addScriptTag({ url: asset('vendor/katex.min.js') });
     await page.addScriptTag({ url: asset('vendor/html2pdf.bundle.min.js') });
     await page.addScriptTag({ url: asset('pdf-text-layer.js') });
@@ -22,6 +22,9 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
       String.raw`\color{red}{\left(\frac{x}{y}\right)} + \color{blue}{\sqrt{\frac{a}{b}}}`,
       String.raw`\begin{cases}x^2 & x>0\\-x & x\leq0\end{cases} + \sum_{i=0}^{n}\frac{1}{i!}`,
       String.raw`\left\lVert\begin{matrix}a\\b\\c\\d\\e\end{matrix}\right\rVert\quad\int_0^1\frac{dx}{1+x^2}`,
+      String.raw`\vec{u}_0 = u_0' \sqrt{1 - \sin^2 \alpha} \hat{y} = \sqrt{\frac{u_0'^2 - v^2}{1 + x_k^2}}\hat{y}`,
+      String.raw`x_{1,2} = \frac{-b_k \pm \sqrt{b_k^2 - 4a_k c_k}}{2a_k}`,
+      String.raw`\sum_{i=1}^{n} \frac{\sqrt{x_i^2 + y_i^2}}{z_{i,j}} = \sqrt[3]{\frac{a_1 + a_2}{b_1 - b_2}}`,
     ];
     await page.evaluate(async (values) => {
       const body = document.querySelector('.markdown-body');
@@ -37,7 +40,9 @@ const { chromium } = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright
     const referenceNode = page.locator('#fixture').first();
     const bounds = await referenceNode.evaluate((element) => {
       const root = element.getBoundingClientRect();
-      return Array.from(element.querySelectorAll('.katex svg'), (svg) => { const r = svg.getBoundingClientRect(); return { x: r.x-root.x, y: r.y-root.y, w:r.width, h:r.height }; });
+      const svgs = Array.from(element.querySelectorAll('.katex svg'), (svg) => { const r = svg.getBoundingClientRect(); return { x: r.x-root.x, y: r.y-root.y, w:r.width, h:r.height }; });
+      const sqrts = Array.from(element.querySelectorAll('.katex .sqrt'), (node) => { const r = node.getBoundingClientRect(); return { x: r.x-root.x, y: r.y-root.y, w:r.width, h:r.height }; });
+      return [...svgs, ...sqrts];
     });
     assert.ok(bounds.length >= 20, `Expected broad SVG coverage, got ${bounds.length}`);
     const reference = await referenceNode.screenshot();

@@ -10,7 +10,7 @@ const {chromium} = require(process.env.SIYUAN_PLAYWRIGHT_MODULE || 'playwright')
   const page=await browser.newPage({viewport:{width:1100,height:2400},deviceScaleFactor:2});
   const asset=name=>pathToFileURL(path.resolve(__dirname,'../php-site/assets',name)).href;
   await page.goto(asset('style.css'));
-  await page.setContent(`<!doctype html><base href="${asset('')}/"><link rel="stylesheet" href="vendor/katex.min.css"><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="pdf-export.css"><body class="layout-share pdf-export-preview"><div id="fixture" class="pdf-document pdf-download-document"><div class="markdown-body"></div></div></body>`);
+  await page.setContent(`<!doctype html><base href="${asset('')}/"><link rel="stylesheet" href="vendor/github-markdown.min.css"><link rel="stylesheet" href="vendor/katex.min.css"><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="pdf-export.css"><body class="layout-share pdf-export-preview"><div id="fixture" class="pdf-document pdf-download-document"><div class="markdown-body"></div></div></body>`);
   for(const name of ['vendor/katex.min.js','vendor/html2pdf.bundle.min.js','pdf-text-layer.js'])await page.addScriptTag({url:asset(name)});
   const sources=[
    String.raw`\begin{cases}e_1'(t)=\kappa(t)e_2(t),\\e_2'(t)=-\kappa(t)e_1(t)+\tau(t)e_3(t),\\e_3'(t)=-\tau(t)e_2(t).\end{cases}`,

@@ -79,7 +79,9 @@
       copy.querySelectorAll('path').forEach((path) => { path.style.stroke = 'none'; });
       const image = document.createElement('img');
       image.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(copy));
-      image.style.cssText = `position:${style.position};display:${style.display};border:0;border-radius:0;`;
+      image.style.cssText = `position:${style.position};display:${style.display};border:0;border-radius:0;background:transparent !important;background-color:transparent !important;`;
+      image.style.setProperty('background', 'transparent', 'important');
+      image.style.setProperty('background-color', 'transparent', 'important');
       image.style.setProperty('width', `${rect.width}px`, 'important');
       image.style.setProperty('height', `${rect.height}px`, 'important');
       image.style.setProperty('max-width', 'none', 'important');

@@ -64,7 +64,7 @@ function host({ mobile = false, locale = 'en_US', stored = {}, exportMarkdown = 
     },
   };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'index.js'), 'utf8') +
-    '\n;globalThis.testHelpers = {withRetry};', sandbox, { filename: 'index.js' });
+    '\n;globalThis.testHelpers = {withRetry, buildDocMetaHashInput};', sandbox, { filename: 'index.js' });
   const plugin = new module.exports();
   // Background networking and real editor observation belong to the host integration.
   for (const name of ['bindDocTreeLater', 'refreshCurrentDocContext', 'startBackgroundSync', 'refreshAutoUpdateLoop']) {
@@ -379,5 +379,102 @@ function host({ mobile = false, locale = 'en_US', stored = {}, exportMarkdown = 
     assert.deepEqual(plain(wrongSite.plugin.shares), [], 'Shares from an unrelated site are not adopted');
     assert.equal(wrongSite.plugin.settings.sites.length, 1);
   } finally { wrongSite.close(); }
+
+  {
+    // Regression test: Inserting a new document into a notebook must not trigger a ripple effect
+    // on sibling/subsequent documents' sortOrder, which previously caused mass re-exports and false updated counts.
+    const fixture = host({ mobile: true });
+    try {
+      const { plugin } = fixture;
+      const buildMeta = fixture.sandbox.testHelpers.buildDocMetaHashInput;
+      const hash = (text) => createHash('sha256').update(text).digest('hex');
+      const docIds = ['aaaaaaa', 'bbbbbbb', 'ccccccc', 'ddddddd', 'eeeeeee'].map((s) => '20261027000000-' + s);
+      const remoteDocs = docIds.map((id, index) => {
+        const metaInput = buildMeta({
+          title: 'Doc ' + index,
+          icon: '',
+          parentId: '',
+          sortOrder: index,
+          sortIndex: index,
+        });
+        return {
+          docId: id,
+          title: 'Doc ' + index,
+          icon: '',
+          parentId: '',
+          sortOrder: index,
+          sortIndex: index,
+          contentHash: hash('content-' + index),
+          metaHash: hash(metaInput),
+        };
+      });
+      const remoteSnapshot = { docs: remoteDocs, assets: [] };
+
+      // Simulate a local notebook scan where a new document is inserted at position 1,
+      // shifting subsequent preorder sortOrders by +1.
+      const newDocId = '20261027000000-fffffff';
+      const rawLocalDocs = [
+        { docId: docIds[0], title: 'Doc 0', icon: '', parentId: '', sortOrder: 0, sortIndex: 0 },
+        { docId: newDocId, title: 'New Doc', icon: '', parentId: '', sortOrder: 1, sortIndex: 1 },
+        { docId: docIds[1], title: 'Doc 1', icon: '', parentId: '', sortOrder: 2, sortIndex: 2 },
+        { docId: docIds[2], title: 'Doc 2', icon: '', parentId: '', sortOrder: 3, sortIndex: 3 },
+        { docId: docIds[3], title: 'Doc 3', icon: '', parentId: '', sortOrder: 4, sortIndex: 4 },
+        { docId: docIds[4], title: 'Doc 4', icon: '', parentId: '', sortOrder: 5, sortIndex: 5 },
+      ];
+
+      // Step 1: Alignment must preserve existing remote sortIndex/sortOrder
+      const aligned = plugin.alignScopeDocsWithRemoteSnapshot(rawLocalDocs, remoteSnapshot);
+      const alignedMap = new Map(aligned.map((d) => [d.docId, d]));
+      for (let i = 0; i < docIds.length; i++) {
+        const existing = alignedMap.get(docIds[i]);
+        assert.equal(existing.sortOrder, i, `Doc ${docIds[i]} sortOrder must be preserved`);
+        assert.equal(existing.sortIndex, i, `Doc ${docIds[i]} sortIndex must be preserved`);
+      }
+
+      // Step 2: Structural change detection must only detect the new document,
+      // NOT untouched subsequent siblings.
+      const structChanged = plugin.collectStructChangedDocIds(aligned, remoteSnapshot);
+      assert.deepEqual(plain(structChanged), [newDocId], 'Only the newly inserted doc should be marked structurally changed');
+
+      // Step 3: Incremental plan with 1 new doc and 1 modified doc (docIds[2])
+      const exportedDocs = [
+        {
+          docId: newDocId,
+          title: 'New Doc',
+          icon: '',
+          parentId: '',
+          sortOrder: alignedMap.get(newDocId).sortOrder,
+          sortIndex: alignedMap.get(newDocId).sortIndex,
+          markdown: 'New Content',
+          contentHash: hash('New Content'),
+          metaHash: hash(buildMeta(alignedMap.get(newDocId))),
+        },
+        {
+          docId: docIds[2],
+          title: 'Doc 2',
+          icon: '',
+          parentId: '',
+          sortOrder: alignedMap.get(docIds[2]).sortOrder,
+          sortIndex: alignedMap.get(docIds[2]).sortIndex,
+          markdown: 'Edited Content',
+          contentHash: hash('Edited Content'),
+          metaHash: hash(buildMeta(alignedMap.get(docIds[2]))),
+        },
+      ];
+
+      const plan = await plugin.buildScopedIncrementalPlan({
+        scopeDocs: aligned,
+        exportedDocs,
+        remoteSnapshot,
+        assetEntries: [],
+      });
+
+      assert.equal(plan.summary.totalDocs, 6, 'Total docs is 6 (5 existing + 1 added)');
+      assert.equal(plan.summary.addedDocs, 1, 'Only 1 doc should be marked as added');
+      assert.equal(plan.summary.updatedDocs, 1, 'Only the actually edited doc (docIds[2]) should be updated, not the untouched siblings');
+      assert.equal(plan.summary.changedDocs, 2, 'Exactly 2 docs changed in total');
+      assert.deepEqual(plain(plan.uploadDocs.map((d) => d.docId)), [newDocId, docIds[2]], 'Only added and modified docs are uploaded');
+    } finally { fixture.close(); }
+  }
   console.log('Plugin passed: desktop/mobile lifecycle, settings migration, scoped incremental sync, API payloads, retries and cancellation.');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

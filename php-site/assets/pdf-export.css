@@ -53,6 +53,8 @@ body.pdf-export-embedded { margin: 0 !important; padding: 0 !important; min-heig
 .pdf-document .markdown-source { display: none !important; }
 .pdf-document .markdown-body { background: white; color: #1f2328; }
 .pdf-document .markdown-body img { max-width: 100%; }
+.pdf-document .katex img,
+.markdown-body .katex img { background: transparent !important; background-color: transparent !important; }
 .pdf-document .markdown-body pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .pdf-document .markdown-body table { max-width: 100%; }
 .pdf-download-document { width: 182mm !important; max-width: none !important; padding: 0 !important; margin: 0 !important; background: white; }
