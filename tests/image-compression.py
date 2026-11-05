@@ -1,6 +1,7 @@
 """Exercise actual image encoders, publication, worker lifecycle and snapshots."""
 import argparse
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -27,7 +28,7 @@ with tempfile.TemporaryDirectory(prefix='siyuan-image-runtime-') as directory:
     shutil.copy(ROOT / 'scripts/data-snapshot.php', work / 'data-snapshot.php')
 
     def php(arguments, check=True):
-        command = [args.php] if args.php else ['docker', 'run', '--rm', '--network', 'none', '-v', f'{work}:/fixture', '--entrypoint', 'php', args.docker]
+        command = [args.php] if args.php else ['docker', 'run', '--rm', '--network', 'none', *(['--user', f'{os.getuid()}:{os.getgid()}'] if os.name == 'posix' else []), '-v', f'{work}:/fixture', '--entrypoint', 'php', args.docker]
         result = subprocess.run([*command, *arguments], capture_output=True, text=True, timeout=45)
         if check and result.returncode:
             raise AssertionError(result.stdout + result.stderr)
