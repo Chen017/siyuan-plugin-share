@@ -3,7 +3,10 @@ declare(strict_types=1);
 
 /** New bytes never overwrite a published file. Only committed DB references publish them. */
 final class ShareFileWrite {
-    private bool $active = true;
+    private static array $activeWrites = [];
+    private static bool $shutdownRegistered = false;
+    private bool $active = false;
+    private bool $hasPendingImages = false;
     private array $directories = [];
     private array $previousFiles = [];
     private string $generation;
@@ -12,8 +15,29 @@ final class ShareFileWrite {
     public function __construct(private PDO $pdo) {
         $this->generation = bin2hex(random_bytes(16));
         $pdo->exec('BEGIN IMMEDIATE');
+        $this->active = true;
         $this->generationLock = lock_upload_session($this->generation);
-        register_shutdown_function(fn() => $this->rollback());
+        self::$activeWrites[spl_object_id($this)] = WeakReference::create($this);
+        if (!self::$shutdownRegistered) {
+            register_shutdown_function(static function (): void {
+                foreach (self::$activeWrites as $reference) $reference->get()?->rollback();
+            });
+            self::$shutdownRegistered = true;
+        }
+    }
+
+    public function __destruct() {
+        if ($this->active) $this->rollback();
+    }
+
+    private function releaseGenerationLock(): void {
+        if (is_resource($this->generationLock)) fclose($this->generationLock);
+        $this->generationLock = null;
+        unset(self::$activeWrites[spl_object_id($this)]);
+    }
+
+    public function rememberFile(string $path): void {
+        $this->previousFiles[] = $path;
     }
 
     public function rememberShare(int $shareId): void {
@@ -39,22 +63,28 @@ final class ShareFileWrite {
             || $hash === false || hash_file('sha256', $target) !== $hash) {
             throw new RuntimeException('Attachment write failed');
         }
+        if (is_compressible_image_path($path)) $this->hasPendingImages = true;
         return $directory . '/' . $path;
     }
 
     public function commit(): void {
         $this->pdo->exec('COMMIT');
         $this->active = false;
+        $this->releaseGenerationLock();
         // Failure to reclaim space after commit must never turn a committed upload into a retry.
         try { remove_unreferenced_asset_files($this->previousFiles); }
         catch (Throwable $error) { error_log('Attachment cleanup deferred: ' . $error->getMessage()); }
+        if ($this->hasPendingImages) schedule_image_compression_after_response();
     }
 
     public function rollback(): void {
         if (!$this->active) return;
         $this->active = false;
         try { $this->pdo->exec('ROLLBACK'); }
-        finally { foreach (array_keys($this->directories) as $directory) remove_dir($directory); }
+        finally {
+            foreach (array_keys($this->directories) as $directory) remove_dir($directory);
+            $this->releaseGenerationLock();
+        }
     }
 }
 

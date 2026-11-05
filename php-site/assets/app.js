@@ -3142,6 +3142,52 @@
     }});
   };
 
+  const initImageCompression = () => {
+    const section = document.querySelector('#image-compression[data-status-url]');
+    if (!section) return;
+    const connection = section.querySelector('#image-compression-connection');
+    const progress = section.querySelector('#bg-task-progress-bar');
+    const text = section.querySelector('#bg-task-progress-text');
+    let timer, active = true;
+    const poll = async () => {
+      if (!active) return;
+      if (document.hidden) { timer = setTimeout(poll, 3000); return; }
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      try {
+        const response = await fetch(section.dataset.statusUrl, {
+          credentials: 'same-origin', cache: 'no-store', signal: controller.signal,
+          headers: {Accept: 'application/json'},
+        });
+        if (!response.ok) throw new Error('Request failed');
+        const {data} = await response.json();
+        const task = data?.background_task;
+        if (!task) throw new Error('Invalid status');
+        connection.textContent = '';
+        progress.max = Math.max(1, task.total);
+        progress.value = task.checked;
+        text.textContent = `Reviewed ${task.checked} / ${task.total} · ${data.pending_images} pending`;
+        for (const [id, value] of Object.entries({total: data.total_images, compressed: data.compressed_images, pending: data.pending_images, saved: `${data.saved_bytes.toLocaleString()} bytes`})) {
+          section.querySelector(`#img-stat-${id}`).textContent = value;
+        }
+        if (task.status !== 'running') {
+          active = false;
+          text.textContent = task.status === 'completed' ? 'Optimization review completed.'
+            : (task.status === 'stopped' ? 'Optimization stopped safely.' : 'Optimization needs attention.');
+          connection.textContent = 'Reload this page to review the result or start another task.';
+          section.querySelector('button').disabled = true;
+        }
+      } catch {
+        connection.textContent = 'Progress is temporarily unavailable. Optimization continues on the server; retrying…';
+      } finally {
+        clearTimeout(timeout);
+        if (active) timer = setTimeout(poll, 3000);
+      }
+    };
+    window.addEventListener('pagehide', () => { active = false; clearTimeout(timer); });
+    timer = setTimeout(poll, 3000);
+  };
+
   const initUnsavedEdits = () => {
     if (!document.body.classList.contains('layout-app')) return;
     const forms = [...document.querySelectorAll('form.settings-form')];
@@ -5697,6 +5743,7 @@ const initImageViewer = () => {
     button.setAttribute('aria-pressed', String(visible));
     button.textContent = visible ? 'Hide password' : 'Show password';
   });
+  initImageCompression();
   initUnsavedEdits();
   if (document.querySelector("form[data-confirm-message]")) initFormConfirm();
 

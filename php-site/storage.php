@@ -302,16 +302,6 @@ function handle_asset_uploads(int $shareId, array $entries, ShareFileWrite $writ
             $computed = @hash_file('sha256', $targetFile);
             $assetHash = normalize_hash_hex($computed ?: '');
         }
-        $origSizeBytes = $actualSize;
-        $compressedAt = null;
-        if (is_file($targetFile) && is_compressible_image_path($assetPath)) {
-            $comp = compress_image_file($targetFile);
-            if ($comp['status'] === 'compressed' || $comp['status'] === 'optimal') {
-                $actualSize = (int)$comp['compressed_size'];
-                $origSizeBytes = (int)$comp['original_size'];
-                $compressedAt = now();
-            }
-        }
         $total += $actualSize;
         $stmt = $pdo->prepare('INSERT OR REPLACE INTO share_assets (share_id, doc_id, asset_path, file_path, size_bytes, asset_hash, original_size_bytes, compressed_at, created_at)
             VALUES (:share_id, :doc_id, :asset_path, :file_path, :size_bytes, :asset_hash, :original_size_bytes, :compressed_at, :created_at)');
@@ -322,8 +312,8 @@ function handle_asset_uploads(int $shareId, array $entries, ShareFileWrite $writ
             ':file_path' => $filePath,
             ':size_bytes' => $actualSize,
             ':asset_hash' => $assetHash !== '' ? $assetHash : null,
-            ':original_size_bytes' => $origSizeBytes,
-            ':compressed_at' => $compressedAt,
+            ':original_size_bytes' => $actualSize,
+            ':compressed_at' => null,
             ':created_at' => now(),
         ]);
     }

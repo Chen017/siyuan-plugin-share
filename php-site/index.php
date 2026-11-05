@@ -846,7 +846,7 @@ function find_share_asset_row(int $shareId, string $assetPath): ?array {
     return $row ?: null;
 }
 
-if (defined('SIYUAN_CLI_BOOTSTRAP_ONLY')) {
+if (PHP_SAPI === 'cli' && defined('SIYUAN_CLI_BOOTSTRAP_ONLY')) {
     return;
 }
 

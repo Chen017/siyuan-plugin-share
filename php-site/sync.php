@@ -1085,33 +1085,6 @@ function handle_api(string $path): void {
                 }
             }
 
-            $assetFiles = [];
-            $processedAssets = [];
-            foreach ($manifestEntries as $entry) {
-                $stagedRel = $fileWrite->stage($stagingDir . '/' . $entry['path'], $shareId, $entry['path']);
-                $assetFiles[$entry['path']] = $stagedRel;
-                $fullPath = $config['uploads_dir'] . '/' . $stagedRel;
-                $origSize = (int)$entry['size'];
-                $finalSize = $origSize;
-                $origSizeBytes = $origSize;
-                $compressedAt = null;
-                if (is_file($fullPath) && is_compressible_image_path($entry['path'])) {
-                    $comp = compress_image_file($fullPath);
-                    if ($comp['status'] === 'compressed' || $comp['status'] === 'optimal') {
-                        $finalSize = (int)$comp['compressed_size'];
-                        $origSizeBytes = (int)$comp['original_size'];
-                        $compressedAt = now();
-                    }
-                }
-                $processedAssets[$entry['path']] = [
-                    'doc_id' => $entry['docId'] !== '' ? $entry['docId'] : null,
-                    'file_path' => $stagedRel,
-                    'size_bytes' => $finalSize,
-                    'original_size_bytes' => $origSizeBytes,
-                    'compressed_at' => $compressedAt,
-                    'asset_hash' => normalize_hash_hex($entry['hash'] ?? ''),
-                ];
-            }
             if ($uploadMode === 'full') {
                 $insertDoc = $pdo->prepare('INSERT INTO share_docs (share_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, content_hash, meta_hash, created_at, updated_at)
                     VALUES (:share_id, :doc_id, :title, :icon, :hpath, :parent_id, :sort_index, :markdown, :sort_order, :size_bytes, :content_hash, :meta_hash, :created_at, :updated_at)');
@@ -1143,25 +1116,6 @@ function handle_api(string $path): void {
                     ]);
                     unset($docMarkdown);
                 }
-                if (!empty($manifestEntries)) {
-                    $assetStmt = $pdo->prepare('INSERT OR REPLACE INTO share_assets (share_id, doc_id, asset_path, file_path, size_bytes, asset_hash, original_size_bytes, compressed_at, created_at)
-                        VALUES (:share_id, :doc_id, :asset_path, :file_path, :size_bytes, :asset_hash, :original_size_bytes, :compressed_at, :created_at)');
-                    foreach ($manifestEntries as $entry) {
-                        $p = $processedAssets[$entry['path']];
-                        $assetStmt->execute([
-                            ':share_id' => $shareId,
-                            ':doc_id' => $p['doc_id'],
-                            ':asset_path' => $entry['path'],
-                            ':file_path' => $p['file_path'],
-                            ':size_bytes' => $p['size_bytes'],
-                            ':asset_hash' => $p['asset_hash'],
-                            ':original_size_bytes' => $p['original_size_bytes'],
-                            ':compressed_at' => $p['compressed_at'],
-                            ':created_at' => now(),
-                        ]);
-                    }
-                }
-                recalculate_share_size($shareId);
             } else {
                 if (!empty($deletedDocIds)) {
                     $placeholders = implode(',', array_fill(0, count($deletedDocIds), '?'));
@@ -1228,26 +1182,26 @@ function handle_api(string $path): void {
                     $deleteAsset->execute($params);
                 }
 
-                if (!empty($manifestEntries)) {
-                    $assetStmt = $pdo->prepare('INSERT OR REPLACE INTO share_assets (share_id, doc_id, asset_path, file_path, size_bytes, asset_hash, original_size_bytes, compressed_at, created_at)
-                        VALUES (:share_id, :doc_id, :asset_path, :file_path, :size_bytes, :asset_hash, :original_size_bytes, :compressed_at, :created_at)');
-                    foreach ($manifestEntries as $entry) {
-                        $p = $processedAssets[$entry['path']];
-                        $assetStmt->execute([
-                            ':share_id' => $shareId,
-                            ':doc_id' => $p['doc_id'],
-                            ':asset_path' => $entry['path'],
-                            ':file_path' => $p['file_path'],
-                            ':size_bytes' => $p['size_bytes'],
-                            ':asset_hash' => $p['asset_hash'],
-                            ':original_size_bytes' => $p['original_size_bytes'],
-                            ':compressed_at' => $p['compressed_at'],
-                            ':created_at' => now(),
-                        ]);
-                    }
-                }
-                recalculate_share_size($shareId);
             }
+
+            if (!empty($manifestEntries)) {
+                $assetStmt = $pdo->prepare('INSERT OR REPLACE INTO share_assets (share_id, doc_id, asset_path, file_path, size_bytes, asset_hash, original_size_bytes, compressed_at, created_at)
+                    VALUES (:share_id, :doc_id, :asset_path, :file_path, :size_bytes, :asset_hash, :original_size_bytes, NULL, :created_at)');
+                foreach ($manifestEntries as $entry) {
+                    $filePath = $fileWrite->stage($stagingDir . '/' . $entry['path'], $shareId, $entry['path']);
+                    $assetStmt->execute([
+                        ':share_id' => $shareId,
+                        ':doc_id' => $entry['docId'] !== '' ? $entry['docId'] : null,
+                        ':asset_path' => $entry['path'],
+                        ':file_path' => $filePath,
+                        ':size_bytes' => (int)$entry['size'],
+                        ':asset_hash' => normalize_hash_hex($entry['hash'] ?? ''),
+                        ':original_size_bytes' => (int)$entry['size'],
+                        ':created_at' => now(),
+                    ]);
+                }
+            }
+            recalculate_share_size($shareId);
 
             $pdo->prepare('DELETE FROM share_upload_docs WHERE upload_id = :upload_id')->execute([':upload_id' => $uploadId]);
             $pdo->prepare('DELETE FROM share_uploads WHERE upload_id = :upload_id')->execute([':upload_id' => $uploadId]);

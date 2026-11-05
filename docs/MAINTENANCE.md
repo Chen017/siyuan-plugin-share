@@ -1,6 +1,6 @@
 # 工程维护指南
 
-本文面向开发者及后续维护本项目的 AI Agent。用户安装、配置和手动备份步骤以根目录 README 为准；PDF 行为详见 [PDF 文档](GUEST_PDF_EXPORT.md)，上传和迁移约束详见 [上传保护](UPLOAD_SAFETY.md)，界面决策详见 [界面记录](UI_REFINEMENT.md)。修改实现时同步检查这些文档。不要把历史兼容或保护代码当作无用代码直接删除。
+本文面向开发者及后续维护本项目的 AI Agent。用户安装、配置和手动备份步骤以根目录 README 为准；PDF 行为详见 [PDF 文档](GUEST_PDF_EXPORT.md)，上传和迁移约束详见 [上传保护](UPLOAD_SAFETY.md)，界面决策详见 [界面记录](UI_REFINEMENT.md)。修改实现时同步检查这些文档。文档描述当前约束和操作入口；阶段性验证数字、交付待办和旧分支状态留在提交、CI 或审核报告中，不持续追加到维护指南。不要把历史兼容或保护代码当作无用代码直接删除。
 
 ## 结构与边界
 
@@ -18,7 +18,7 @@ GitHub OAuth 使用服务端私有 JSON 文件 `/run/siyuan-share/github-oauth.j
 
 本地 OAuth 测试使用隔离的 GitHub 响应夹具：`python tests/github-auth.py --php /path/to/php`。生产启用前还须通过真实 GitHub 验证授权、反向代理日志和登录。需要恢复密码登录时，由服务器操作者离线备份后，将 `admin_auth_mode` 改为 `password`，再重启应用并检查；这会重新允许旧密码，只有在明确需要恢复时才执行。
 
-安全边界：旧管理员密码哈希及兼容登录代码仍然存在；`admin_auth_mode` 缺失、为空或为 `password` 时会重新允许密码登录。恢复旧数据库或回滚旧代码后应核对认证状态，当前部署的核心数据快照并不包含该设置。OAuth 私有文件不在常规备份中，应另行安全保存。插件 API key 独立于 GitHub 登录，可调用同步接口并修改或删除分享；不要把它视为只读凭据。
+安全边界：旧管理员密码哈希及兼容登录代码仍然存在；`admin_auth_mode` 缺失、为空或为 `password` 时会重新允许密码登录。部署的核心数据快照包含 `admin_auth_mode`；恢复旧数据库或回滚旧代码后仍应核对认证状态和私有配置挂载。OAuth 私有文件不在常规备份中，应另行安全保存。插件 API key 独立于 GitHub 登录，可调用同步接口并修改或删除分享；不要把它视为只读凭据。
 
 站点会话使用 30 天 Cookie 和 PHP 垃圾回收配置，但没有严格的服务端绝对有效期。撤销 GitHub 授权或修改 GitHub 密码不会自动撤销已经建立的站点会话；更换 OAuth Client Secret 并同步更新私有配置会使现有 GitHub 会话失效。普通退出只终止当前会话。
 
@@ -32,13 +32,15 @@ GitHub OAuth 使用服务端私有 JSON 文件 `/run/siyuan-share/github-oauth.j
 
 深色主题为普通 SVG 图片及查看器提供浅色底，浅色主题的 SVG 查看器和两种主题的 SVG 缩略图使用白底；不改写 SVG 颜色或文件，也不作用于表情；透明底白色线条的 SVG 可能需要单独调整。`tests/image-sizing.cjs` 覆盖主题、尺寸和查看器。
 
-### 服务端图片感知无损压缩
+### 服务端图片优化
 
-为了大幅提升网页端图片加载速度并节省服务器存储，服务端集成了基于开源工具链的感知无损压缩（类似 TinyPNG）：
-- **工具链**：Docker 镜像内嵌 `pngquant`（TinyPNG 同款调色板量化引擎）、`jpegoptim`（JPEG 元数据清除与优化）、`libwebp-tools` 以及 PHP GD 扩展（含 WebP 支持）。未安装 CLI 时自动回退至 GD 处理。
-- **执行时机**：新图片上传落盘后自动执行压缩。当且仅当压缩后文件体积严格小于原文件时（`--skip-if-larger`），以原子方式替换目标文件并更新实际占用的 `size_bytes`；若压缩失败或体积未变小，则安全回退并保留原文件。
-- **增量同步兼容**：`share_assets.asset_hash` 严格保留思源客户端未压缩前的原始哈希。思源插件发起增量更新比对远端快照时，哈希依然一致，彻底避免了因服务端压缩导致客户端在下次同步时重复上传已有图片。
-- **后台一键检查与完全脱机压缩**：在管理后台提供“Image compression”面板，实时展示已压缩图片数、未压缩图片数、累计节省空间及工具链运行状态；支持一键启动后台完全脱机压缩（启动后可立即退出网页，服务端持续异步处理至全部完成，并提供实时进度与暂停机制），同时支持单次批次手动压缩，自动重新计算分享大小与用户配额。
+- **上传与发布**：上传先按原始字节完成校验、配额检查和文件代际提交，响应结束后启动后台优化；压缩不占用上传事务的 SQLite 写锁。首次提交后大小可能暂时仍为原始值，优化成功后再更新附件、分享和用户实际占用。客户端原始 `asset_hash` 始终保留。
+- **格式与质量**：普通静态 PNG 优先使用 `pngquant --quality=75-90`，这是有损调色板量化，不能保证每张图肉眼无差异；缺少工具或量化失败时可用 GD 无损重编码。JPEG 使用保留元数据的 `jpegoptim` 无损优化，WebP 使用 `cwebp -lossless -exact -metadata all`。不再用 GD 对 JPEG/WebP 进行反复有损重编码。Docker 安装三种 CLI 工具和 GD/WebP 支持；非 Docker 安装缺少安全编码器时保留原文件，任务报错并允许重试。
+- **保护边界**：格式须与扩展名匹配；APNG、动画 WebP、带需保护的 PNG 色彩/方向元数据、超出 1600 万像素或可用 PHP 内存预算的图片保持原样并标为已检查。编码器每张图限时 20 秒，输出必须保持格式、宽高且严格更小。像素上限是资源保护值，不能替代进程或容器内存限制。
+- **历史附件与回滚**：只压缩副本，之后在 `ShareFileWrite` 事务中重查原记录和文件哈希，使用新代际发布；并发同步导致的过期记录直接跳过。更新附件大小与分享、用户配额一并提交；SQL 失败保留旧附件。只回收被替换且已无引用的文件。
+- **后台任务**：管理页仅提供启动/停止操作，关闭网页后继续；任务 ID、状态文件锁和持有至进程退出的 worker 文件锁防止重复执行。停止请求由 worker 在当前图片处理完后执行，不向可重用的 PID 发信号；已失去 worker 锁的任务显示失败。每张图更新进度，每轮游标前进，缺失/失败图片每轮最多尝试一次，留待下轮重试；运行期间新提交的图片也会纳入。`Smaller images` 只统计确实变小的图片，保留原样的图片计入已检查，不称为已压缩。
+- **维护入口**：`php scripts/compress-images.php /path/to/php-site --limit=20` 使用同一套任务锁及处理循环，`--limit` 范围 1–1000；退出码 1 表示未全部处理成功或已有任务。它直接使用真实应用入口，不依赖测试生成的 `bootstrap.php`。工具只允许可信本机操作者使用。
+- **界面规范**：面板复用现有 `card`、`settings-form`、按钮及语义颜色，保持纯英文；进度用具名 `progress` 与 live status，轮询不重载整页，不丢弃其他设置的未保存输入。连接异常有可见反馈。
 
 ## 开发、测试与构建
 
@@ -50,6 +52,7 @@ npm install --prefix "$PWD/.test-output/reader-test" --no-save --ignore-scripts 
 python -m pip install pypdfium2==5.14.0
 export NODE_PATH="$PWD/.test-output/reader-test/node_modules"
 python tests/run.py --php /path/to/php-8.3
+python tests/image-compression.py --php /path/to/php-8.3
 for test in plugin frontend reader-ui pdf-ui controls footnotes; do node "tests/$test.cjs"; done
 node tests/pdf-text-layer.cjs .test-output/pdf-selection
 python tests/pdf-text-layer.py .test-output/pdf-selection
@@ -62,7 +65,17 @@ python tests/browser-ui.py --browser /path/to/chromium
 NODE_PATH="$PWD/.test-output/reader-test/node_modules" node tests/render-security.cjs
 ```
 
-在 Python 虚拟环境中安装 PDFium 可避免更改全局环境；在 Windows PowerShell 设置 `NODE_PATH` 使用 `$env:NODE_PATH = '<绝对路径>'`。PHP CLI 测试需要可用的本机回环端口。若 Windows 临时路径含 `#!` 导致 PHP 配置解析失败，可将 `TEMP` 和 `TMP` 指向项目内普通路径，再重新运行。未提供 `--browser` 时，真实 PDF 浏览器下载测试会跳过；按 README 指定 Playwright 和浏览器后加 `--browser`。`--php` 不验证 Nginx；真实容器检查如下：
+在 Python 虚拟环境中安装 PDFium 可避免更改全局环境；在 Windows PowerShell 设置 `NODE_PATH` 使用 `$env:NODE_PATH = '<绝对路径>'`。PHP CLI 测试需要可用的本机回环端口。若 Windows 临时路径含 `#!` 导致 PHP 配置解析失败，可将 `TEMP` 和 `TMP` 指向项目内普通路径，再重新运行。未提供 `--browser` 时，真实 PDF 浏览器下载测试会跳过。需要组合 UI/PDF 验证时，安装与 PHP CI 相同的独立 Playwright，并指定本机 Chromium：
+
+```sh
+npm install --prefix "$PWD/.test-output/browser-test" --no-save --ignore-scripts playwright@1.56.1
+export SIYUAN_PLAYWRIGHT_MODULE="$PWD/.test-output/browser-test/node_modules/playwright"
+export SIYUAN_BROWSER_EXECUTABLE=/path/to/chromium
+export SIYUAN_CHROMIUM_EXECUTABLE="$SIYUAN_BROWSER_EXECUTABLE"
+python tests/run.py --php /path/to/php-8.3 --browser
+```
+
+PowerShell 同样使用 `$env:变量名` 设置这些绝对路径。`--php` 不验证 Nginx；容器模式见下方命令。
 
 设置 `SIYUAN_CHROMIUM_EXECUTABLE` 为 Chromium 可执行文件路径后运行 PHP 回归，可额外使用真实浏览器验证实际 SVG 附件的图片展示和直接打开时的脚本隔离。`tests/browser-ui.py` 不传 `--svg-url` 时检查六级标题、320px 宽度和 PDF 样式；无需 Playwright。PHP runner 可用 `--test test_方法名` 只运行指定用例，参数可以重复；交付前仍应运行完整回归。
 
@@ -73,13 +86,14 @@ NODE_PATH="$PWD/.test-output/reader-test/node_modules" node tests/render-securit
 ```sh
 docker build --pull --no-cache -f php-site/Dockerfile -t siyuan-share:php83-test .
 python tests/run.py --docker siyuan-share:php83-test
+python tests/image-compression.py --docker siyuan-share:php83-test
 bash -n scripts/*.sh backup-volumes.sh tests/backup-fixture.sh
 python tests/deploy-guard.py
 bash tests/backup-fixture.sh siyuan-share:php83-test
 python scripts/package.py --output .test-output/package --version test
 ```
 
-容器测试检查 Nginx/FPM、权限、健康状态和重启；备份夹具使用一次性数据。`tests/package.py` 检查 ZIP 完整性、PHP 包含关系、权限和隐私边界；仅打包成功不代表真实浏览器或思源客户端集成已经验证。图表、PDF、布局或客户端生命周期变化应运行对应专项及必要的真实浏览器/思源验证。
+容器测试检查 Nginx/FPM、权限、健康状态和重启；备份夹具使用一次性数据。`tests/image-compression.py` 调用真实 PHP、GD/可用 CLI、一次性 SQLite 与文件，覆盖代际提交、失败回滚、哈希和配额、任务停止与重试、命令行入口及部署快照；本机模式还验证独立进程竞争与脱离请求的后台启动。Docker 模式验证镜像中的 CLI；真实 HTTP 启动与明暗主题 UI 接入既有 `tests/run.py --browser`。`tests/package.py` 检查 ZIP 完整性、PHP 包含关系、权限和隐私边界；仅打包成功不代表真实浏览器或思源客户端集成已经验证。图表、PDF、布局或客户端生命周期变化应运行对应专项及必要的真实浏览器/思源验证。
 
 ## CI、部署与发布
 
@@ -92,7 +106,7 @@ python scripts/package.py --output .test-output/package --version test
 
 PR 的两套回归与合并后的部署回归分别验证 PR 提交和实际 main 提交；不要简单删除后者。普通分支推送不自动测试，需要提前验证时可手动运行两套工作流；正式部署仍会完整测试。PHP 构建保留 `--pull --no-cache`，以覆盖新拉取的基础镜像及系统包。基础 PHP 镜像已带 mbstring、PDO 和 PDO SQLite，构建时先验证扩展可用，只编译缺失的 GD 和 zip；基础镜像变化时不得直接删除验证。CSS 压缩通过 `scripts/minify-css.cjs` 调用 clean-css，与原 CLI 使用同一引擎，避免额外的文件匹配与监听依赖。CI 和 VPS 各自在不同机器构建镜像：共享镜像需要额外存储、传输和权限，当前没有为此增加复杂度。CI 下载缓存不是依赖锁文件；npm 直接依赖版本已固定，传递依赖仍可能变化。
 
-部署需要仓库 secrets `HOST`、`PORT`、`USERNAME`、`SSH_KEY`，以及远端工作流中指定的仓库、Docker 和锁文件路径。普通部署保留已保存的 PDF 设置；手动选项才会修改对应设置。现有操作者策略不保留自动回滚镜像或持久数据备份：部署仅暂停写入并比对临时指纹、SQLite 完整性及外键。手动备份流程与保留策略见 README；生产恢复时须结合对应数据、配置和镜像，不能假设仅回退镜像可撤销迁移。
+部署需要仓库 secrets `HOST`、`PORT`、`USERNAME`、`SSH_KEY`，以及远端工作流中指定的仓库、Docker 和锁文件路径。普通部署保留已保存的 PDF 设置；手动选项才会修改对应设置。现有操作者策略不保留自动回滚镜像或持久数据备份：部署仅暂停写入并比对临时指纹、SQLite 完整性及外键。核心快照固定附件/文档列以允许新增压缩字段；完整备份快照仍验证全部现有列，包含压缩元数据。手动备份流程与保留策略见 README；生产恢复时须结合对应数据、配置和镜像，不能假设仅回退镜像可撤销迁移。
 
 自动发布比较最新正式 Release 的 Tag 与部署提交的插件代码、清单、语言、图标、许可、打包脚本和共享 controls 文件；仅文档或服务器变更不会触发。以源码 `plugin.json` 的主、次版本为系列，在该系列已有纯数字 Tag 之后分配补丁版本，写入 ZIP 内的 `plugin.json`，不改源码清单。若缺少最新 Release/Tag、查询失败，或当前提交已有待处理 Tag，流程会停止并要求检查，避免误发或重复发布。首次自动发布要求已有可解析的正式 Release。
 
@@ -127,12 +141,8 @@ PR 的两套回归与合并后的部署回归分别验证 PR 提交和实际 mai
 - Nginx 已明确拒绝 `storage/`，但与其他镜像层调整一样，仍需在真实容器中执行对应回归；不要只凭 PHP CLI 测试认定 Nginx 规则已验证。
 - Mermaid 10.9.8 预打包文件内含 DOMPurify 3.4.2，后续版本有安全公告。部分公告需要 `IN_PLACE` 等特定使用条件，目前尚未完成对所有内嵌调用路径的适用性评估，不能宣称无风险；来源、版本和哈希见 `php-site/assets/vendor/RENDERER_DEPENDENCIES.md`。
 
-## 公开地址与本轮 UI 验收
+## 公开地址与界面验证
 
-网站界面使用英文和 SiYuan Share 站名；读取配置时只归一化两个旧默认中文名称，其他自定义名称保留。网站翻译不改变思源插件本身的语言包或笔记内容。
+公开分享地址使用 Site settings 的 `site_base_url`。普通部署不改写该值，也不信任未经配置的转发请求头。需要显式配置为 `https://note.etalib.space` 时，选择部署工作流的 `apply_public_url`；`scripts/configure-public-url.php` 只更新该地址，保留其他设置，拒绝 HTTP、凭据、查询和 fragment。对应行为测试在 `tests/admin_ui.py`。
 
-公开分享地址仍使用 Site settings 的 site_base_url。部署工作流的 apply_public_url 选项是本次操作者明确选择的更新：通过 scripts/configure-public-url.php 只写入 https://note.etalib.space，保留其他设置，拒绝 HTTP、凭据、查询和 fragment。普通部署不改写地址，不信任未经配置的转发请求头。该脚本的行为测试属于 admin_ui，通过 tests/run.py 和 PHP Actions 执行。
-
-新增 tests/pdf-ui.cjs 已接入 frontend-regression.yml；tests/ui-refinement-browser.cjs 由 PDF 浏览器用例调用，PHP Actions 的 --browser 会执行。界面修改仍需重建 reader-style.css，共享 controls.* 由现有打包器装入插件 resources；本轮没有独立复制或分叉控件实现。终验结果和实机未验证项见 UI_REFINEMENT_DELIVERY.md。
-
-Edge 的原生 downloads-hub 可能以空 Page URL 出现在 Playwright 中。PDF 无新增应用标签页检查使用浏览器级 CDP 目标列表，只排除同上下文中真实 edge:// 或 chrome:// 内部目标；未知空白页仍计入，不能通过忽略空 URL 来规避断言。
+网站语言、主题、动效、焦点和未保存编辑等当前规范统一见 [界面指南](UI_REFINEMENT.md)。`tests/pdf-ui.cjs` 通过 frontend Actions 执行；真实组合验收 `tests/ui-refinement-browser.cjs` 由 PHP Actions 的 `tests/run.py --browser` 调用。共享样式改动后运行 `node scripts/build-reader-css.cjs`，插件打包继续使用服务端同一份 `controls.*`。实机与辅助技术验证边界也在界面指南中记录。

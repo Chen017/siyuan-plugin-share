@@ -1,744 +1,508 @@
 <?php
 declare(strict_types=1);
 
-/**
- * Image compression engine for SiYuan Share.
- * Provides perceptually lossless compression (TinyPNG-like) for PNG, JPEG, and WebP using:
- * 1. CLI tools: pngquant (quantization for PNG) and jpegoptim (lossless/near-lossless optimization for JPEG).
- * 2. PHP GD fallback: Native palette quantization, PNG recompression, and JPEG quality tuning.
- */
-
+// Published attachments are optimized through ShareFileWrite; only unpublished copies
+// may be replaced in place. Client hashes always describe the original upload.
 function image_compression_supported_extensions(): array {
     return ['png', 'jpg', 'jpeg', 'webp'];
 }
 
 function is_compressible_image_path(string $path): bool {
-    $path = trim(str_replace('\\', '/', $path));
-    $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
-    return in_array($ext, image_compression_supported_extensions(), true);
+    return in_array(strtolower(pathinfo(str_replace('\\', '/', $path), PATHINFO_EXTENSION)), image_compression_supported_extensions(), true);
+}
+
+function image_compression_filter(): string {
+    return "(LOWER(SUBSTR(asset_path, -4)) IN ('.png', '.jpg') OR LOWER(SUBSTR(asset_path, -5)) IN ('.jpeg', '.webp'))";
 }
 
 function image_compression_tools_status(): array {
     static $status = null;
-    if ($status !== null) {
-        return $status;
+    if ($status !== null) return $status;
+    $status = [];
+    foreach (['pngquant' => '--version', 'jpegoptim' => '--version', 'cwebp' => '-version'] as $tool => $flag) {
+        $out = [];
+        $code = 1;
+        if (function_exists('exec')) @exec($tool . ' ' . $flag . ' 2>&1', $out, $code);
+        $status[$tool] = ['available' => $code === 0 && !empty($out[0]) && function_exists('proc_open'), 'version' => $code === 0 ? trim((string)($out[0] ?? '')) : ''];
     }
-
-    $hasPngquant = false;
-    $pngquantVersion = '';
-    $hasJpegoptim = false;
-    $jpegoptimVersion = '';
-    $hasCwebp = false;
-    $cwebpVersion = '';
-
-    if (function_exists('exec')) {
-        $out = [];
-        $code = 0;
-        @exec('pngquant --version 2>&1', $out, $code);
-        if ($code === 0 && !empty($out[0])) {
-            $hasPngquant = true;
-            $pngquantVersion = trim((string)$out[0]);
-        }
-
-        $out = [];
-        $code = 0;
-        @exec('jpegoptim --version 2>&1', $out, $code);
-        if ($code === 0 && !empty($out[0])) {
-            $hasJpegoptim = true;
-            $jpegoptimVersion = trim((string)$out[0]);
-        }
-
-        $out = [];
-        $code = 0;
-        @exec('cwebp -version 2>&1', $out, $code);
-        if ($code === 0 && !empty($out[0])) {
-            $hasCwebp = true;
-            $cwebpVersion = trim((string)$out[0]);
-        }
-    }
-
-    $gdLoaded = extension_loaded('gd');
-    $gdInfo = $gdLoaded && function_exists('gd_info') ? gd_info() : [];
-    $hasGdPng = !empty($gdInfo['PNG Support']);
-    $hasGdJpeg = !empty($gdInfo['JPEG Support']) || !empty($gdInfo['JPG Support']);
-    $hasGdWebp = !empty($gdInfo['WebP Support']);
-
-    $status = [
-        'pngquant' => [
-            'available' => $hasPngquant,
-            'version' => $pngquantVersion,
-        ],
-        'jpegoptim' => [
-            'available' => $hasJpegoptim,
-            'version' => $jpegoptimVersion,
-        ],
-        'cwebp' => [
-            'available' => $hasCwebp,
-            'version' => $cwebpVersion,
-        ],
-        'gd' => [
-            'available' => $gdLoaded,
-            'png' => $hasGdPng,
-            'jpeg' => $hasGdJpeg,
-            'webp' => $hasGdWebp,
-        ],
-    ];
+    $info = extension_loaded('gd') && function_exists('gd_info') ? gd_info() : [];
+    $status['gd'] = ['available' => !empty($info), 'png' => !empty($info['PNG Support']),
+        'jpeg' => !empty($info['JPEG Support']), 'webp' => !empty($info['WebP Support'])];
     return $status;
 }
 
-/**
- * Safely compress an image file on disk in place.
- * Returns an array with details:
- * [
- *   'status' => 'compressed' | 'optimal' | 'skipped' | 'failed',
- *   'original_size' => int,
- *   'compressed_size' => int,
- *   'saved_bytes' => int,
- *   'tool' => string,
- *   'error' => ?string,
- * ]
- */
-function compress_image_file(string $filePath): array {
-    if (!is_file($filePath) || !is_readable($filePath) || !is_writable($filePath)) {
-        return [
-            'status' => 'failed',
-            'original_size' => 0,
-            'compressed_size' => 0,
-            'saved_bytes' => 0,
-            'tool' => 'none',
-            'error' => 'File is not readable or writable',
-        ];
-    }
+/** No shell interpretation, no unbounded child output, and a deadline per image. */
+function run_image_compression_tool(array $arguments, float $timeout = 20.0): bool {
+    if (!function_exists('proc_open')) return false;
+    $null = PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
+    $process = @proc_open($arguments, [0 => ['file', $null, 'r'], 1 => ['file', $null, 'w'], 2 => ['file', $null, 'w']], $pipes, null, null, ['bypass_shell' => true]);
+    if (!is_resource($process)) return false;
+    $deadline = microtime(true) + $timeout;
+    do {
+        $state = proc_get_status($process);
+        if (!$state['running']) {
+            $code = $state['exitcode'];
+            proc_close($process);
+            return $code === 0;
+        }
+        if (microtime(true) >= $deadline) {
+            proc_terminate($process, 9);
+            proc_close($process);
+            return false;
+        }
+        usleep(10000);
+    } while (true);
+}
 
-    $ext = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
-    if (!is_compressible_image_path($filePath)) {
-        $size = (int)filesize($filePath);
-        return [
-            'status' => 'skipped',
-            'original_size' => $size,
-            'compressed_size' => $size,
-            'saved_bytes' => 0,
-            'tool' => 'none',
-            'error' => null,
-        ];
-    }
-
-    $origSize = (int)filesize($filePath);
-    if ($origSize <= 0) {
-        return [
-            'status' => 'skipped',
-            'original_size' => 0,
-            'compressed_size' => 0,
-            'saved_bytes' => 0,
-            'tool' => 'none',
-            'error' => null,
-        ];
-    }
-
-    $dir = dirname($filePath);
-    $tmpOutput = $dir . '/.comp_' . bin2hex(random_bytes(8)) . '.' . $ext;
-    $tools = image_compression_tools_status();
-    $usedTool = 'none';
-    $compressed = false;
-
+/** Skip animation and metadata that a raster fallback cannot preserve. */
+function image_compression_png_is_plain(string $path): bool {
+    $stream = @fopen($path, 'rb');
+    if ($stream === false) return false;
     try {
-        if ($ext === 'png') {
-            if ($tools['pngquant']['available']) {
-                // pngquant: TinyPNG equivalent quantization algorithm.
-                // --quality=75-90: High-fidelity visual quality range.
-                // --skip-if-larger: Do not write output if it exceeds input size.
-                // --strip: Remove optional metadata chunks.
-                $cmd = 'pngquant --quality=75-90 --skip-if-larger --strip --force --output ' . escapeshellarg($tmpOutput) . ' ' . escapeshellarg($filePath) . ' 2>&1';
-                $out = [];
-                $code = 0;
-                @exec($cmd, $out, $code);
-                if ($code === 0 && is_file($tmpOutput)) {
-                    $newSize = (int)filesize($tmpOutput);
-                    if ($newSize > 0 && $newSize < $origSize) {
-                        $usedTool = 'pngquant';
-                        $compressed = true;
-                    }
-                }
-            }
-
-            // Fallback to PHP GD if pngquant was not available or did not produce smaller output
-            if (!$compressed && $tools['gd']['available'] && $tools['gd']['png'] && function_exists('imagecreatefrompng') && function_exists('imagepng')) {
-                $im = @imagecreatefrompng($filePath);
-                if ($im !== false) {
-                    imagealphablending($im, false);
-                    imagesavealpha($im, true);
-                    if (@imagepng($im, $tmpOutput, 9)) {
-                        $newSize = (int)filesize($tmpOutput);
-                        if ($newSize > 0 && $newSize < $origSize) {
-                            $usedTool = 'gd';
-                            $compressed = true;
-                        }
-                    }
-                    imagedestroy($im);
-                }
-            }
-        } elseif ($ext === 'jpg' || $ext === 'jpeg') {
-            if ($tools['jpegoptim']['available']) {
-                if (@copy($filePath, $tmpOutput)) {
-                    $cmd = 'jpegoptim --strip-all -m85 ' . escapeshellarg($tmpOutput) . ' 2>&1';
-                    $out = [];
-                    $code = 0;
-                    @exec($cmd, $out, $code);
-                    if ($code === 0 && is_file($tmpOutput)) {
-                        $newSize = (int)filesize($tmpOutput);
-                        if ($newSize > 0 && $newSize < $origSize) {
-                            $usedTool = 'jpegoptim';
-                            $compressed = true;
-                        }
-                    }
-                }
-            }
-
-            // Fallback to PHP GD
-            if (!$compressed && $tools['gd']['available'] && $tools['gd']['jpeg'] && function_exists('imagecreatefromjpeg') && function_exists('imagejpeg')) {
-                $im = @imagecreatefromjpeg($filePath);
-                if ($im !== false) {
-                    if (@imagejpeg($im, $tmpOutput, 85)) {
-                        $newSize = (int)filesize($tmpOutput);
-                        if ($newSize > 0 && $newSize < $origSize) {
-                            $usedTool = 'gd';
-                            $compressed = true;
-                        }
-                    }
-                    imagedestroy($im);
-                }
-            }
-        } elseif ($ext === 'webp') {
-            if ($tools['cwebp']['available']) {
-                $cmd = 'cwebp -q 85 ' . escapeshellarg($filePath) . ' -o ' . escapeshellarg($tmpOutput) . ' 2>&1';
-                $out = [];
-                $code = 0;
-                @exec($cmd, $out, $code);
-                if ($code === 0 && is_file($tmpOutput)) {
-                    $newSize = (int)filesize($tmpOutput);
-                    if ($newSize > 0 && $newSize < $origSize) {
-                        $usedTool = 'cwebp';
-                        $compressed = true;
-                    }
-                }
-            }
-
-            if (!$compressed && $tools['gd']['available'] && $tools['gd']['webp'] && function_exists('imagecreatefromwebp') && function_exists('imagewebp')) {
-                $im = @imagecreatefromwebp($filePath);
-                if ($im !== false) {
-                    imagealphablending($im, false);
-                    imagesavealpha($im, true);
-                    if (@imagewebp($im, $tmpOutput, 85)) {
-                        $newSize = (int)filesize($tmpOutput);
-                        if ($newSize > 0 && $newSize < $origSize) {
-                            $usedTool = 'gd';
-                            $compressed = true;
-                        }
-                    }
-                    imagedestroy($im);
-                }
-            }
+        if (fread($stream, 8) !== "\x89PNG\r\n\x1a\n") return false;
+        $size = (int)filesize($path);
+        for ($n = 0; $n < 10000 && ftell($stream) + 12 <= $size; $n++) {
+            $header = fread($stream, 8);
+            if (strlen($header) !== 8) return false;
+            $length = unpack('N', substr($header, 0, 4))[1];
+            $type = substr($header, 4, 4);
+            if (in_array($type, ['acTL', 'eXIf', 'iCCP', 'cHRM', 'gAMA', 'sRGB'], true)) return false;
+            if ($length > $size - ftell($stream) - 4) return false;
+            if ($type === 'IEND') return true;
+            if (fseek($stream, $length + 4, SEEK_CUR) !== 0) return false;
         }
+        return false;
+    } finally { fclose($stream); }
+}
 
-        if ($compressed && is_file($tmpOutput)) {
-            $finalSize = (int)filesize($tmpOutput);
-            if ($finalSize > 0 && $finalSize < $origSize) {
-                if (!@rename($tmpOutput, $filePath)) {
-                    @unlink($tmpOutput);
-                    return [
-                        'status' => 'failed',
-                        'original_size' => $origSize,
-                        'compressed_size' => $origSize,
-                        'saved_bytes' => 0,
-                        'tool' => $usedTool,
-                        'error' => 'Failed to replace file with compressed version',
-                    ];
-                }
-                return [
-                    'status' => 'compressed',
-                    'original_size' => $origSize,
-                    'compressed_size' => $finalSize,
-                    'saved_bytes' => $origSize - $finalSize,
-                    'tool' => $usedTool,
-                    'error' => null,
-                ];
-            }
+function image_compression_webp_is_static(string $path): bool {
+    $stream = @fopen($path, 'rb');
+    if ($stream === false) return false;
+    try {
+        $header = fread($stream, 12);
+        if (strlen($header) !== 12 || substr($header, 0, 4) !== 'RIFF' || substr($header, 8, 4) !== 'WEBP') return false;
+        $size = (int)filesize($path);
+        for ($n = 0; $n < 10000 && ftell($stream) + 8 <= $size; $n++) {
+            $chunk = fread($stream, 8);
+            if (strlen($chunk) !== 8) return false;
+            $type = substr($chunk, 0, 4);
+            $length = unpack('V', substr($chunk, 4, 4))[1];
+            if ($length > $size - ftell($stream)) return false;
+            if ($type === 'ANIM' || $type === 'ANMF') return false;
+            if (fseek($stream, $length + ($length % 2), SEEK_CUR) !== 0) return false;
         }
-    } catch (Throwable $e) {
-        if (is_file($tmpOutput)) {
-            @unlink($tmpOutput);
-        }
-        return [
-            'status' => 'failed',
-            'original_size' => $origSize,
-            'compressed_size' => $origSize,
-            'saved_bytes' => 0,
-            'tool' => $usedTool,
-            'error' => $e->getMessage(),
-        ];
-    } finally {
-        if (is_file($tmpOutput)) {
-            @unlink($tmpOutput);
-        }
+        return true;
+    } finally { fclose($stream); }
+}
+
+function compress_image_file(string $filePath): array {
+    clearstatcache(true, $filePath);
+    $size = is_file($filePath) ? (int)filesize($filePath) : 0;
+    $result = ['status' => 'skipped', 'original_size' => $size, 'compressed_size' => $size,
+        'saved_bytes' => 0, 'tool' => 'none', 'error' => null];
+    if (!is_file($filePath) || !is_readable($filePath) || !is_writable($filePath)) {
+        return array_replace($result, ['status' => 'failed', 'error' => 'File is not readable or writable']);
     }
-
-    return [
-        'status' => 'optimal',
-        'original_size' => $origSize,
-        'compressed_size' => $origSize,
-        'saved_bytes' => 0,
-        'tool' => $usedTool,
-        'error' => null,
-    ];
+    if ($size <= 0 || !is_compressible_image_path($filePath)) return $result;
+    $ext = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
+    $info = @getimagesize($filePath);
+    $expected = ['png' => IMAGETYPE_PNG, 'jpg' => IMAGETYPE_JPEG, 'jpeg' => IMAGETYPE_JPEG, 'webp' => IMAGETYPE_WEBP];
+    if (!$info || $info[2] !== $expected[$ext]) return $result;
+    // Bound decoded memory before CLI/GD allocation (including copies and encoder work).
+    $pixels = (float)$info[0] * (float)$info[1];
+    $memoryLimit = ini_parse_quantity(ini_get('memory_limit'));
+    if ($pixels <= 0 || $pixels > 16000000 || ($memoryLimit > 0 && $pixels * 12 + memory_get_usage(true) + 16777216 > $memoryLimit)) return $result;
+    if ($ext === 'png' && !image_compression_png_is_plain($filePath)) return $result;
+    if ($ext === 'webp' && !image_compression_webp_is_static($filePath)) return $result;
+    $tmp = dirname($filePath) . '/.comp_' . bin2hex(random_bytes(8)) . '.' . $ext;
+    $tools = image_compression_tools_status();
+    $attempted = false;
+    try {
+        $ok = false;
+        if ($ext === 'png' && $tools['pngquant']['available']) {
+            $attempted = true;
+            $result['tool'] = 'pngquant';
+            // pngquant is lossy; the quality threshold is not a proof of visual identity.
+            $ok = run_image_compression_tool(['pngquant', '--quality=75-90', '--skip-if-larger', '--force', '--output', $tmp, '--', $filePath]);
+        } elseif (($ext === 'jpg' || $ext === 'jpeg') && $tools['jpegoptim']['available']) {
+            $attempted = true;
+            $result['tool'] = 'jpegoptim';
+            // Lossless optimization keeps EXIF orientation and ICC profiles.
+            $ok = copy($filePath, $tmp) && run_image_compression_tool(['jpegoptim', $tmp]);
+        } elseif ($ext === 'webp' && $tools['cwebp']['available']) {
+            $attempted = true;
+            $result['tool'] = 'cwebp';
+            $ok = run_image_compression_tool(['cwebp', '-lossless', '-exact', '-metadata', 'all', '-o', $tmp, $filePath]);
+        }
+        if (!$ok && $ext === 'png' && $tools['gd']['png']) {
+            $attempted = true;
+            $result['tool'] = 'gd';
+            $image = @imagecreatefrompng($filePath);
+            if ($image !== false) {
+                try {
+                    imagealphablending($image, false);
+                    imagesavealpha($image, true);
+                    $ok = @imagepng($image, $tmp, 9);
+                } finally { imagedestroy($image); }
+            }
+        }
+        clearstatcache(true, $tmp);
+        if ($ok && is_file($tmp) && ($newSize = (int)filesize($tmp)) > 0 && $newSize < $size) {
+            $outputInfo = @getimagesize($tmp);
+            if (!$outputInfo || array_slice($outputInfo, 0, 3) !== array_slice($info, 0, 3)) {
+                return array_replace($result, ['status' => 'failed', 'error' => 'Invalid optimizer output']);
+            }
+            if (!@rename($tmp, $filePath)) throw new RuntimeException('Unable to replace staged image');
+            return array_replace($result, ['status' => 'compressed', 'compressed_size' => $newSize, 'saved_bytes' => $size - $newSize]);
+        }
+        // Without an encoder this remains pending and can be retried after installing tools.
+        return array_replace($result, ['status' => $ok ? 'optimal' : 'failed',
+            'error' => !$attempted ? 'No safe encoder is available for this format' : ($ok ? null : 'Encoder failed or timed out')]);
+    } catch (Throwable $error) {
+        return array_replace($result, ['status' => 'failed', 'error' => $error->getMessage()]);
+    } finally { if (is_file($tmp)) @unlink($tmp); }
 }
 
 function optimize_share_asset_row(PDO $pdo, array $assetRow, bool $force = false): array {
     global $config;
-    if (!$force && !empty($assetRow['compressed_at'])) {
-        return ['status' => 'already_compressed', 'saved_bytes' => 0];
+    if (!$force && !empty($assetRow['compressed_at'])) return ['status' => 'already_compressed', 'saved_bytes' => 0];
+    $root = realpath($config['uploads_dir']);
+    $source = $root === false ? false : realpath($root . '/' . ($assetRow['file_path'] ?? ''));
+    if ($source === false || !str_starts_with($source, $root . DIRECTORY_SEPARATOR) || !is_file($source)) {
+        return ['status' => 'failed', 'saved_bytes' => 0, 'error' => 'Attachment is missing or outside uploads'];
     }
-    $filePath = (string)($assetRow['file_path'] ?? '');
-    if ($filePath === '') {
-        return ['status' => 'missing_file', 'saved_bytes' => 0];
-    }
-    $uploadsDir = rtrim((string)($config['uploads_dir'] ?? (__DIR__ . '/uploads')), '/\\');
-    $fullPath = $uploadsDir . '/' . ltrim($filePath, '/\\');
-    if (!is_file($fullPath)) {
-        return ['status' => 'missing_file', 'saved_bytes' => 0];
-    }
+    $scratch = $root . '/staging/image-compression-' . bin2hex(random_bytes(16));
+    $write = null;
+    try {
+        require_upload_space((int)filesize($source) * 2);
+        ensure_dir($scratch);
+        $copy = $scratch . '/' . basename($source);
+        $sourceHash = hash_file('sha256', $source);
+        if (!@copy($source, $copy) || hash_file('sha256', $copy) !== $sourceHash) throw new RuntimeException('Unable to copy attachment');
+        $res = compress_image_file($copy);
+        if ($res['status'] === 'failed') return $res;
+        // Compression runs before the short SQLite write transaction. Recheck the row
+        // after taking the existing publication lock so a concurrent sync always wins.
+        $write = new ShareFileWrite($pdo);
+        $stmt = $pdo->prepare('SELECT * FROM share_assets WHERE id = ?');
+        $stmt->execute([(int)$assetRow['id']]);
+        $current = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$current || $current['file_path'] !== $assetRow['file_path'] || (!$force && !empty($current['compressed_at']))
+            || !is_file($source) || hash_file('sha256', $source) !== $sourceHash) {
+            $write->rollback();
+            return ['status' => 'stale', 'saved_bytes' => 0];
+        }
+        $original = (int)$current['original_size_bytes'] ?: (int)$res['original_size'];
+        $filePath = $current['file_path'];
+        if ($res['status'] === 'compressed') {
+            $write->rememberFile($current['file_path']);
+            $filePath = $write->stage($copy, (int)$current['share_id'], $current['asset_path']);
+        }
+        $pdo->prepare('UPDATE share_assets SET file_path = ?, size_bytes = ?, original_size_bytes = ?, compressed_at = ? WHERE id = ?')
+            ->execute([$filePath, $res['compressed_size'], $original, now(), $current['id']]);
+        if ($res['status'] === 'compressed') {
+            recalculate_share_size((int)$current['share_id']);
+            $owner = $pdo->prepare('SELECT user_id FROM shares WHERE id = ?');
+            $owner->execute([$current['share_id']]);
+            recalculate_user_storage((int)$owner->fetchColumn());
+        }
+        $write->commit();
+        return $res;
+    } catch (Throwable $error) {
+        if ($write !== null) $write->rollback();
+        return ['status' => 'failed', 'saved_bytes' => 0, 'error' => $error->getMessage()];
+    } finally { if (is_dir($scratch)) remove_dir($scratch); }
+}
 
-    $assetPath = (string)($assetRow['asset_path'] ?? '');
-    if (!is_compressible_image_path($assetPath)) {
-        $stmt = $pdo->prepare('UPDATE share_assets SET compressed_at = :at, original_size_bytes = :orig WHERE id = :id');
-        $stmt->execute([
-            ':at' => now(),
-            ':orig' => (int)($assetRow['size_bytes'] ?? 0),
-            ':id' => (int)$assetRow['id'],
-        ]);
-        return ['status' => 'skipped', 'saved_bytes' => 0];
+/** A cursor advances even on failure. Each job reviews its initial ID range once. */
+function batch_compress_pending_images(PDO $pdo, int $limit = 100, int $afterId = 0, int $maxId = PHP_INT_MAX, ?callable $onAsset = null): array {
+    $stmt = $pdo->prepare('SELECT * FROM share_assets WHERE compressed_at IS NULL AND ' . image_compression_filter() . ' AND id > :after AND id <= :max ORDER BY id LIMIT :limit');
+    $stmt->bindValue(':after', $afterId, PDO::PARAM_INT);
+    $stmt->bindValue(':max', $maxId, PDO::PARAM_INT);
+    $stmt->bindValue(':limit', max(1, min(1000, $limit)), PDO::PARAM_INT);
+    $stmt->execute();
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $res = ['checked' => 0, 'compressed' => 0, 'optimal' => 0, 'failed' => 0, 'skipped' => 0, 'saved_bytes' => 0, 'last_id' => $afterId];
+    foreach ($rows as $row) {
+        $item = optimize_share_asset_row($pdo, $row);
+        $res['checked']++;
+        $res['last_id'] = (int)$row['id'];
+        $key = in_array($item['status'], ['compressed', 'optimal', 'failed'], true) ? $item['status'] : 'skipped';
+        $res[$key]++;
+        $res['saved_bytes'] += (int)$item['saved_bytes'];
+        if ($onAsset !== null && !$onAsset($res)) break;
     }
-
-    $res = compress_image_file($fullPath);
-    $orig = (int)($assetRow['original_size_bytes'] ?? 0);
-    if ($orig <= 0) {
-        $orig = (int)($res['original_size'] ?? $assetRow['size_bytes'] ?? 0);
-    }
-
-    if ($res['status'] === 'compressed') {
-        $stmt = $pdo->prepare('UPDATE share_assets SET size_bytes = :size, original_size_bytes = :orig, compressed_at = :at WHERE id = :id');
-        $stmt->execute([
-            ':size' => (int)$res['compressed_size'],
-            ':orig' => $orig,
-            ':at' => now(),
-            ':id' => (int)$assetRow['id'],
-        ]);
-    } elseif ($res['status'] === 'optimal') {
-        $stmt = $pdo->prepare('UPDATE share_assets SET original_size_bytes = :orig, compressed_at = :at WHERE id = :id');
-        $stmt->execute([
-            ':orig' => $orig,
-            ':at' => now(),
-            ':id' => (int)$assetRow['id'],
-        ]);
-    }
+    $res['remaining_pending'] = count_pending_images($pdo);
     return $res;
 }
 
-function batch_compress_pending_images(PDO $pdo, int $limit = 100): array {
-    $stmt = $pdo->prepare('SELECT id, share_id, doc_id, asset_path, file_path, size_bytes, original_size_bytes, compressed_at
-        FROM share_assets
-        WHERE compressed_at IS NULL
-        ORDER BY id ASC
-        LIMIT :limit');
-    $stmt->bindValue(':limit', max(1, $limit), PDO::PARAM_INT);
-    $stmt->execute();
-    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    $checked = 0;
-    $compressed = 0;
-    $optimal = 0;
-    $failed = 0;
-    $skipped = 0;
-    $savedBytes = 0;
-    $affectedShares = [];
-
-    foreach ($rows as $row) {
-        $checked++;
-        $res = optimize_share_asset_row($pdo, $row);
-        $status = $res['status'] ?? '';
-        if ($status === 'compressed') {
-            $compressed++;
-            $savedBytes += (int)($res['saved_bytes'] ?? 0);
-            $affectedShares[(int)$row['share_id']] = true;
-        } elseif ($status === 'optimal') {
-            $optimal++;
-        } elseif ($status === 'skipped') {
-            $skipped++;
-        } else {
-            $failed++;
-        }
-    }
-
-    if (!empty($affectedShares)) {
-        $userStmt = $pdo->prepare('SELECT DISTINCT user_id FROM shares WHERE id = ?');
-        foreach (array_keys($affectedShares) as $shareId) {
-            recalculate_share_size((int)$shareId);
-            $userStmt->execute([$shareId]);
-            $uid = (int)$userStmt->fetchColumn();
-            if ($uid > 0) {
-                recalculate_user_storage($uid);
-            }
-        }
-    }
-
-    $imageFilter = " (LOWER(SUBSTR(asset_path, -4)) IN ('.png', '.jpg', '.gif') OR LOWER(SUBSTR(asset_path, -5)) IN ('.jpeg', '.webp'))";
-    $pendingStmt = $pdo->query("SELECT COUNT(*) FROM share_assets WHERE compressed_at IS NULL AND {$imageFilter}");
-    $remaining = (int)($pendingStmt ? $pendingStmt->fetchColumn() : 0);
-
-    return [
-        'checked' => $checked,
-        'compressed' => $compressed,
-        'optimal' => $optimal,
-        'failed' => $failed,
-        'skipped' => $skipped,
-        'saved_bytes' => $savedBytes,
-        'remaining_pending' => $remaining,
-    ];
+function count_pending_images(PDO $pdo): int {
+    return (int)$pdo->query('SELECT COUNT(*) FROM share_assets WHERE compressed_at IS NULL AND ' . image_compression_filter())->fetchColumn();
 }
 
 function get_image_compression_stats(PDO $pdo): array {
-    $imageFilter = " (LOWER(SUBSTR(asset_path, -4)) IN ('.png', '.jpg', '.gif') OR LOWER(SUBSTR(asset_path, -5)) IN ('.jpeg', '.webp'))";
-
-    $totalStmt = $pdo->query("SELECT COUNT(*) FROM share_assets WHERE {$imageFilter}");
-    $totalCount = (int)($totalStmt ? $totalStmt->fetchColumn() : 0);
-
-    $compStmt = $pdo->query("SELECT COUNT(*) AS cnt,
-            COALESCE(SUM(CASE WHEN original_size_bytes > 0 THEN original_size_bytes ELSE size_bytes END), 0) AS total_orig,
-            COALESCE(SUM(size_bytes), 0) AS total_curr
-        FROM share_assets
-        WHERE compressed_at IS NOT NULL AND {$imageFilter}");
-    $compRow = $compStmt ? $compStmt->fetch(PDO::FETCH_ASSOC) : [];
-    $compressedCount = (int)($compRow['cnt'] ?? 0);
-    $totalOriginal = (int)($compRow['total_orig'] ?? 0);
-    $totalCurrent = (int)($compRow['total_curr'] ?? 0);
-    $savedBytes = max(0, $totalOriginal - $totalCurrent);
-
-    $pendingStmt = $pdo->query("SELECT COUNT(*) FROM share_assets WHERE compressed_at IS NULL AND {$imageFilter}");
-    $pendingCount = (int)($pendingStmt ? $pendingStmt->fetchColumn() : 0);
-
-    return [
-        'total_images' => $totalCount,
-        'compressed_images' => $compressedCount,
-        'pending_images' => $pendingCount,
-        'saved_bytes' => $savedBytes,
-        'total_original_bytes' => $totalOriginal,
-        'total_current_bytes' => $totalCurrent,
-        'tools' => image_compression_tools_status(),
-    ];
+    $filter = image_compression_filter();
+    $row = $pdo->query("SELECT COUNT(*) AS total,
+        COALESCE(SUM(compressed_at IS NOT NULL), 0) AS reviewed,
+        COALESCE(SUM(compressed_at IS NOT NULL AND original_size_bytes > size_bytes), 0) AS compressed,
+        COALESCE(SUM(CASE WHEN original_size_bytes > 0 THEN original_size_bytes ELSE size_bytes END), 0) AS original,
+        COALESCE(SUM(size_bytes), 0) AS current FROM share_assets WHERE {$filter}")->fetch(PDO::FETCH_ASSOC);
+    return ['total_images' => (int)$row['total'], 'processed_images' => (int)$row['reviewed'],
+        'compressed_images' => (int)$row['compressed'], 'pending_images' => (int)$row['total'] - (int)$row['reviewed'],
+        'saved_bytes' => max(0, (int)$row['original'] - (int)$row['current']),
+        'total_original_bytes' => (int)$row['original'], 'total_current_bytes' => (int)$row['current'],
+        'tools' => image_compression_tools_status()];
 }
 
 function image_compression_task_file(): string {
     global $config;
-    $storageDir = isset($config['db_path']) ? dirname((string)$config['db_path']) : (__DIR__ . '/storage');
-    if (!is_dir($storageDir)) {
-        @mkdir($storageDir, 0775, true);
+    $directory = dirname($config['db_path']);
+    ensure_dir($directory);
+    return $directory . '/image-compression-task.json';
+}
+
+function image_compression_worker_lock() {
+    $lock = fopen(dirname(image_compression_task_file()) . '/image-compression-worker.lock', 'c');
+    if ($lock === false) throw new RuntimeException('Unable to open compression worker lock');
+    if (!flock($lock, LOCK_EX | LOCK_NB)) { fclose($lock); return false; }
+    return $lock;
+}
+
+function image_compression_default_task(): array {
+    return ['status' => 'idle', 'job_id' => '', 'pid' => 0, 'started_at' => null, 'updated_at' => null, 'completed_at' => null,
+        'total' => 0, 'checked' => 0, 'compressed' => 0, 'optimal' => 0, 'skipped' => 0, 'failed' => 0,
+        'saved_bytes' => 0, 'remaining' => 0, 'last_id' => 0, 'max_id' => 0, 'stop_requested' => false, 'error' => null];
+}
+
+/** All control and heartbeat updates share one lock and preserve stop requests. */
+function update_image_compression_task(callable $change): array {
+    $file = image_compression_task_file();
+    $lock = fopen($file . '.lock', 'c');
+    if ($lock === false) throw new RuntimeException('Unable to open compression status lock');
+    $tmp = null;
+    try {
+        if (!flock($lock, LOCK_EX)) throw new RuntimeException('Unable to lock compression status');
+        $data = is_file($file) ? json_decode((string)file_get_contents($file), true) : [];
+        $task = array_replace(image_compression_default_task(), is_array($data) ? $data : []);
+        $updated = $change($task);
+        if ($updated !== $task) {
+            $tmp = $file . '.' . bin2hex(random_bytes(6)) . '.tmp';
+            if (file_put_contents($tmp, json_encode($updated, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)) === false || !rename($tmp, $file)) {
+                throw new RuntimeException('Unable to save compression status');
+            }
+        }
+        return $updated;
+    } finally {
+        if ($tmp !== null && is_file($tmp)) @unlink($tmp);
+        fclose($lock);
     }
-    return $storageDir . '/image-compression-task.json';
 }
 
 function get_background_compression_status(): array {
-    $file = image_compression_task_file();
-    $default = [
-        'status' => 'idle',
-        'pid' => 0,
-        'started_at' => null,
-        'updated_at' => null,
-        'completed_at' => null,
-        'total' => 0,
-        'checked' => 0,
-        'compressed' => 0,
-        'optimal' => 0,
-        'skipped' => 0,
-        'failed' => 0,
-        'saved_bytes' => 0,
-        'remaining' => 0,
-        'stop_requested' => false,
-        'error' => null,
-    ];
-
-    if (!is_file($file)) {
-        return $default;
-    }
-
-    $raw = @file_get_contents($file);
-    if (!is_string($raw) || trim($raw) === '') {
-        return $default;
-    }
-
-    $data = json_decode($raw, true);
-    if (!is_array($data)) {
-        return $default;
-    }
-
-    $status = array_merge($default, $data);
-
-    // Stale task recovery: if marked 'running' but no heartbeat for > 120s or PID is dead
-    if ($status['status'] === 'running') {
-        $now = time();
-        $updatedAt = (int)($status['updated_at'] ?? 0);
-        $pid = (int)($status['pid'] ?? 0);
-
-        $isDead = false;
-        if ($updatedAt > 0 && ($now - $updatedAt) > 120) {
-            $isDead = true;
-        } elseif ($pid > 0 && function_exists('posix_kill')) {
-            if (!@posix_kill($pid, 0)) {
-                $isDead = true;
+    return update_image_compression_task(function (array $task): array {
+        if ($task['status'] !== 'running') return $task;
+        $lock = image_compression_worker_lock();
+        if ($lock !== false) {
+            fclose($lock);
+            if ((int)$task['pid'] > 0 || time() - (int)$task['started_at'] > 30) {
+                $task['status'] = 'failed';
+                $task['error'] = 'The worker stopped. Pending images can be retried.';
+                $task['updated_at'] = time();
             }
         }
-
-        if ($isDead) {
-            $status['status'] = 'stopped';
-            $status['error'] = 'Process stopped unexpectedly or heartbeat timed out.';
-            set_background_compression_status($status);
-        }
-    }
-
-    return $status;
+        return $task;
+    });
 }
 
-function set_background_compression_status(array $data): void {
-    $file = image_compression_task_file();
-    $tmp = $file . '.' . bin2hex(random_bytes(6)) . '.tmp';
-    @file_put_contents($tmp, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
-    @rename($tmp, $file);
+/** Upload publication stays fast: encoding begins only after commit and response. */
+function schedule_image_compression_after_response(): void {
+    if (PHP_SAPI === 'cli' || defined('SIYUAN_CLI_BOOTSTRAP_ONLY')) return;
+    static $scheduled = false;
+    if ($scheduled) return;
+    $scheduled = true;
+    register_shutdown_function(function (): void {
+        if (function_exists('fastcgi_finish_request')) fastcgi_finish_request();
+        try { start_background_compression_job(); }
+        catch (Throwable $error) { error_log('Image optimization deferred: ' . $error->getMessage()); }
+    });
+}
+
+function create_image_compression_job(): array {
+    get_background_compression_status();
+    $id = bin2hex(random_bytes(16));
+    $pendingCount = count_pending_images(db());
+    $task = update_image_compression_task(function (array $task) use ($id, $pendingCount): array {
+        if ($task['status'] === 'running' || $pendingCount === 0) return $task;
+        $lock = image_compression_worker_lock();
+        if ($lock === false) return $task;
+        fclose($lock);
+        $pending = db()->query('SELECT COUNT(*) AS total, COALESCE(MAX(id), 0) AS max_id FROM share_assets WHERE compressed_at IS NULL AND ' . image_compression_filter())->fetch(PDO::FETCH_ASSOC);
+        return array_replace(image_compression_default_task(), ['status' => 'running', 'job_id' => $id,
+            'started_at' => time(), 'updated_at' => time(), 'total' => (int)$pending['total'], 'remaining' => (int)$pending['total'],
+            'max_id' => (int)$pending['max_id']]);
+    });
+    if ($task['job_id'] !== $id) return ['success' => false, 'message' => $pendingCount === 0 ? 'No pending images to optimize.' : 'A background optimization task is already running.', 'data' => $task];
+    return ['success' => true, 'data' => $task];
 }
 
 function start_background_compression_job(): array {
-    $task = get_background_compression_status();
-    if ($task['status'] === 'running') {
-        return [
-            'success' => false,
-            'message' => 'A background compression task is already running (PID ' . ($task['pid'] ?: '?') . ').',
-            'data' => $task,
-        ];
+    if (!function_exists('exec') || !function_exists('proc_open')) return ['success' => false, 'message' => 'Background execution is unavailable on this server.'];
+    $created = create_image_compression_job();
+    // A finishing worker publishes terminal state just before releasing its lease.
+    for ($n = 0; !$created['success'] && ($created['data']['status'] ?? 'running') !== 'running' && count_pending_images(db()) > 0 && $n < 5; $n++) {
+        usleep(20000);
+        $created = create_image_compression_job();
     }
-
-    $pdo = db();
-    $stats = get_image_compression_stats($pdo);
-    if ($stats['pending_images'] === 0) {
-        return [
-            'success' => false,
-            'message' => 'All images are already compressed. Nothing to do.',
-            'data' => $task,
-        ];
-    }
-
-    $initial = [
-        'status' => 'running',
-        'pid' => 0,
-        'started_at' => time(),
-        'updated_at' => time(),
-        'completed_at' => null,
-        'total' => $stats['pending_images'],
-        'checked' => 0,
-        'compressed' => 0,
-        'optimal' => 0,
-        'skipped' => 0,
-        'failed' => 0,
-        'saved_bytes' => 0,
-        'remaining' => $stats['pending_images'],
-        'stop_requested' => false,
-        'error' => null,
-    ];
-    set_background_compression_status($initial);
-
-    // Identify PHP CLI executable
-    $phpBin = PHP_BINARY;
-    if (str_contains(strtolower($phpBin), 'fpm') || !is_executable($phpBin)) {
-        if (is_executable('/usr/local/bin/php')) {
-            $phpBin = '/usr/local/bin/php';
-        } elseif (is_executable('/usr/bin/php')) {
-            $phpBin = '/usr/bin/php';
-        } else {
-            $phpBin = 'php';
-        }
-    }
-
-    $scriptPath = __DIR__ . '/background-compress.php';
-    $logPath = dirname(image_compression_task_file()) . '/image-compression.log';
-
-    if (stripos(PHP_OS, 'WIN') === 0) {
-        $cmd = 'start /B ' . escapeshellarg($phpBin) . ' ' . escapeshellarg($scriptPath) . ' > ' . escapeshellarg($logPath) . ' 2>&1';
-        @pclose(@popen($cmd, 'r'));
+    if (!$created['success']) return $created;
+    $id = $created['data']['job_id'];
+    $php = PHP_BINARY;
+    if (str_contains(strtolower($php), 'fpm')) $php = is_executable('/usr/local/bin/php') ? '/usr/local/bin/php' : '/usr/bin/php';
+    $script = __DIR__ . '/background-compress.php';
+    $log = dirname(image_compression_task_file()) . '/image-compression.log';
+    if (PHP_OS_FAMILY === 'Windows') {
+        // cmd start requires a separate empty window title. /B keeps the process hidden.
+        $cmd = 'start "" /B ' . escapeshellarg($php) . ' ' . escapeshellarg($script) . ' ' . escapeshellarg($id) . ' > ' . escapeshellarg($log) . ' 2>&1';
+        $handle = @popen($cmd, 'r');
+        if (is_resource($handle)) pclose($handle);
     } else {
-        $cmd = sprintf('%s %s > %s 2>&1 &', escapeshellarg($phpBin), escapeshellarg($scriptPath), escapeshellarg($logPath));
-        @exec($cmd);
+        @exec(escapeshellarg($php) . ' ' . escapeshellarg($script) . ' ' . escapeshellarg($id) . ' > ' . escapeshellarg($log) . ' 2>&1 &');
     }
-
-    usleep(80000); // 80ms to allow script to write PID
-    $task = get_background_compression_status();
-
-    return [
-        'success' => true,
-        'message' => 'Background image optimization started! You can close or navigate away from this page; optimization will continue until all images are compressed.',
-        'data' => $task,
-    ];
+    // Confirm the worker acknowledged this job; do not report a failed spawn as success.
+    for ($n = 0; $n < 100; $n++) {
+        usleep(20000);
+        $task = get_background_compression_status();
+        if ((int)$task['pid'] > 0 || $task['status'] !== 'running') break;
+    }
+    if ((int)$task['pid'] === 0) {
+        $task = update_image_compression_task(function (array $task) use ($id): array {
+            if ($task['job_id'] === $id && (int)$task['pid'] === 0) {
+                $task['status'] = 'failed';
+                $task['error'] = 'Unable to start the background worker. Check the private server log.';
+            }
+            return $task;
+        });
+    }
+    $success = (int)$task['pid'] > 0;
+    return ['success' => $success, 'message' => $success ? 'Background image optimization started. You can leave this page.' : (string)$task['error'], 'data' => $task];
 }
 
 function request_stop_background_compression(): array {
-    $task = get_background_compression_status();
-    if ($task['status'] !== 'running') {
-        return [
-            'success' => false,
-            'message' => 'No background compression task is currently running.',
-        ];
-    }
+    $task = update_image_compression_task(function (array $task): array {
+        if ($task['status'] === 'running') $task['stop_requested'] = true;
+        return $task;
+    });
+    return ['success' => $task['status'] === 'running', 'message' => $task['status'] === 'running'
+        ? 'Stop requested. The worker will finish its current image safely.' : 'No background optimization task is running.'];
+}
 
-    $task['stop_requested'] = true;
-    set_background_compression_status($task);
-
-    $pid = (int)($task['pid'] ?? 0);
-    if ($pid > 0 && function_exists('posix_kill')) {
-        @posix_kill($pid, 15); // SIGTERM
-    }
-
-    return [
-        'success' => true,
-        'message' => 'Stop signal sent. The background process will stop after finishing its current batch.',
-    ];
+/** Shared worker for HTTP and CLI. The OS lock, never a reusable PID, owns the job. */
+function run_background_compression_job(string $id, int $limit = 20): int {
+    $lock = image_compression_worker_lock();
+    if ($lock === false) return 1;
+    try {
+        $task = update_image_compression_task(function (array $task) use ($id): array {
+            if ($task['job_id'] === $id && $task['status'] === 'running') {
+                $task['pid'] = getmypid();
+                $task['updated_at'] = time();
+            }
+            return $task;
+        });
+        if ($task['job_id'] !== $id || $task['status'] !== 'running') return 1;
+        while (true) {
+            if ($task['stop_requested']) {
+                update_image_compression_task(function (array $current) use ($id): array {
+                    if ($current['job_id'] === $id) $current['status'] = 'stopped';
+                    return $current;
+                });
+                return 0;
+            }
+            $base = $task;
+            $res = batch_compress_pending_images(db(), $limit, (int)$task['last_id'], (int)$task['max_id'], function (array $progress) use ($id, $base): bool {
+                // Exact remaining counts are refreshed per batch and by status polls.
+                $remaining = max(0, (int)$base['remaining'] - $progress['compressed'] - $progress['optimal'] - $progress['skipped']);
+                $task = update_image_compression_task(function (array $task) use ($id, $base, $progress, $remaining): array {
+                    if ($task['job_id'] !== $id) throw new RuntimeException('Compression job was replaced');
+                    foreach (['checked', 'compressed', 'optimal', 'skipped', 'failed', 'saved_bytes'] as $key) $task[$key] = (int)$base[$key] + $progress[$key];
+                    $task['last_id'] = $progress['last_id'];
+                    $task['remaining'] = $remaining;
+                    $task['updated_at'] = time();
+                    return $task;
+                });
+                return !$task['stop_requested'];
+            });
+            $task = update_image_compression_task(function (array $task) use ($id, $res): array {
+                if ($task['job_id'] !== $id) throw new RuntimeException('Compression job was replaced');
+                $task['remaining'] = $res['remaining_pending'];
+                if ($task['stop_requested']) $task['status'] = 'stopped';
+                elseif ($res['checked'] === 0) {
+                    // Uploads committed during the job are reviewed too; failures at
+                    // earlier IDs stay pending until a new, explicitly bounded retry.
+                    $next = db()->prepare('SELECT COUNT(*) AS total, COALESCE(MAX(id), 0) AS max_id FROM share_assets WHERE compressed_at IS NULL AND ' . image_compression_filter() . ' AND id > ?');
+                    $next->execute([(int)$task['max_id']]);
+                    $pending = $next->fetch(PDO::FETCH_ASSOC);
+                    if ((int)$pending['total'] > 0) {
+                        $task['total'] += (int)$pending['total'];
+                        $task['max_id'] = (int)$pending['max_id'];
+                        $task['updated_at'] = time();
+                        return $task;
+                    }
+                    $task['status'] = $task['failed'] > 0 ? 'failed' : 'completed';
+                    $task['completed_at'] = time();
+                    if ($task['failed'] > 0) $task['error'] = 'Some images could not be optimized. Check files and encoders, then retry.';
+                }
+                $task['updated_at'] = time();
+                return $task;
+            });
+            if ($task['status'] !== 'running') return $task['status'] === 'failed' ? 1 : 0;
+        }
+    } catch (Throwable $error) {
+        update_image_compression_task(function (array $task) use ($id, $error): array {
+            if ($task['job_id'] === $id) {
+                $task['status'] = 'failed';
+                $task['error'] = $error->getMessage();
+                $task['updated_at'] = time();
+            }
+            return $task;
+        });
+        return 1;
+    } finally { fclose($lock); }
 }
 
 function render_image_compression_admin_section(): string {
-    $pdo = db();
-    $stats = get_image_compression_stats($pdo);
-    $tools = $stats['tools'];
+    $stats = get_image_compression_stats(db());
     $task = get_background_compression_status();
-
-    $toolsList = [];
-    if ($tools['pngquant']['available']) {
-        $toolsList[] = '<span class="status-badge" style="display:inline-block; padding:3px 8px; border-radius:4px; font-size:0.75rem; background:#e8f5e9; color:#2e7d32; border:1px solid #c8e6c9;" title="' . htmlspecialchars($tools['pngquant']['version']) . '">✓ pngquant (TinyPNG engine)</span>';
-    } else {
-        $toolsList[] = '<span class="status-badge" style="display:inline-block; padding:3px 8px; border-radius:4px; font-size:0.75rem; background:#f5f5f5; color:#757575; border:1px solid #e0e0e0;" title="CLI binary not detected in PATH">pngquant (not installed)</span>';
+    $base = htmlspecialchars(base_path(), ENT_QUOTES, 'UTF-8');
+    $statusUrl = $task['status'] === 'running' ? ' data-status-url="' . htmlspecialchars(base_path() . '/admin/images/status', ENT_QUOTES, 'UTF-8') . '"' : '';
+    $html = '<section class="card settings-section" id="image-compression" aria-labelledby="image-compression-heading"' . $statusUrl . '>';
+    $html .= '<h2 id="image-compression-heading">Image compression</h2><p class="muted">New uploads are optimized automatically. Review existing PNG, JPEG and WebP images in the background; you can leave this page after starting.</p>';
+    $html .= '<p class="field-hint">PNG optimization may change colors slightly. Animated images and images requiring special color or orientation handling are preserved. Images are replaced only when the result is smaller.</p>';
+    $html .= '<dl class="image-compression-stats">';
+    foreach (['total' => ['Total images', $stats['total_images']], 'compressed' => ['Smaller images', $stats['compressed_images']],
+        'pending' => ['Pending review', $stats['pending_images']], 'saved' => ['Space saved', format_bytes((float)$stats['saved_bytes'])]] as $id => [$label, $value]) {
+        $html .= '<div><dt>' . $label . '</dt><dd id="img-stat-' . $id . '">' . htmlspecialchars((string)$value) . '</dd></div>';
     }
-    if ($tools['jpegoptim']['available']) {
-        $toolsList[] = '<span class="status-badge" style="display:inline-block; padding:3px 8px; border-radius:4px; font-size:0.75rem; background:#e8f5e9; color:#2e7d32; border:1px solid #c8e6c9;" title="' . htmlspecialchars($tools['jpegoptim']['version']) . '">✓ jpegoptim</span>';
-    } else {
-        $toolsList[] = '<span class="status-badge" style="display:inline-block; padding:3px 8px; border-radius:4px; font-size:0.75rem; background:#f5f5f5; color:#757575; border:1px solid #e0e0e0;" title="CLI binary not detected in PATH">jpegoptim (not installed)</span>';
-    }
-    if ($tools['gd']['available']) {
-        $toolsList[] = '<span class="status-badge" style="display:inline-block; padding:3px 8px; border-radius:4px; font-size:0.75rem; background:#e8f5e9; color:#2e7d32; border:1px solid #c8e6c9;">✓ PHP GD fallback</span>';
-    }
-
-    $base = base_path();
-    $savedFormatted = format_bytes((float)$stats['saved_bytes']);
-
-    $html = '<section class="card settings-section" id="image-compression">';
-    $html .= '<h2>Image compression</h2>';
-    $html .= '<p class="muted">Perceptually lossless image compression (TinyPNG-like pngquant, jpegoptim & GD fallback). New uploads are compressed automatically; use background optimization to compress all existing or historical images in a single run.</p>';
-
-    $html .= '<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin: 16px 0;">';
-    $html .= '<div style="padding:12px; background:var(--panel-bg, #f8f9fa); border:1px solid var(--border, #eee); border-radius:8px;">';
-    $html .= '<span style="font-size:0.75rem; color:var(--muted); display:block;">Total images</span>';
-    $html .= '<strong id="img-stat-total" style="font-size:1.35rem; font-variant-numeric:tabular-nums;">' . $stats['total_images'] . '</strong>';
-    $html .= '</div>';
-
-    $html .= '<div style="padding:12px; background:var(--panel-bg, #f8f9fa); border:1px solid var(--border, #eee); border-radius:8px;">';
-    $html .= '<span style="font-size:0.75rem; color:var(--muted); display:block;">Compressed</span>';
-    $html .= '<strong id="img-stat-compressed" style="font-size:1.35rem; font-variant-numeric:tabular-nums; color:#2e7d32;">' . $stats['compressed_images'] . '</strong>';
-    $html .= '</div>';
-
-    $html .= '<div style="padding:12px; background:var(--panel-bg, #f8f9fa); border:1px solid var(--border, #eee); border-radius:8px;">';
-    $html .= '<span style="font-size:0.75rem; color:var(--muted); display:block;">Pending / uncompressed</span>';
-    $html .= '<strong id="img-stat-pending" style="font-size:1.35rem; font-variant-numeric:tabular-nums; color:' . ($stats['pending_images'] > 0 ? '#e65100' : 'inherit') . ';">' . $stats['pending_images'] . '</strong>';
-    $html .= '</div>';
-
-    $html .= '<div style="padding:12px; background:var(--panel-bg, #f8f9fa); border:1px solid var(--border, #eee); border-radius:8px;">';
-    $html .= '<span style="font-size:0.75rem; color:var(--muted); display:block;">Space saved</span>';
-    $html .= '<strong id="img-stat-saved" style="font-size:1.35rem; font-variant-numeric:tabular-nums; color:#1976d2;">' . $savedFormatted . '</strong>';
-    $html .= '</div>';
-    $html .= '</div>';
-
-    $html .= '<div style="margin: 12px 0; display:flex; gap:8px; flex-wrap:wrap;">' . implode(' ', $toolsList) . '</div>';
-
-    // Background Task Status Banner
+    $html .= '</dl><details><summary>Optimization support</summary><p class="muted">';
+    $tools = [];
+    foreach (['pngquant', 'jpegoptim', 'cwebp'] as $name) $tools[] = $name . ': ' . ($stats['tools'][$name]['available'] ? 'available' : 'unavailable');
+    $tools[] = 'PNG fallback: ' . ($stats['tools']['gd']['png'] ? 'available' : 'unavailable');
+    $html .= htmlspecialchars(implode(' · ', $tools)) . '</p></details>';
     if ($task['status'] === 'running') {
-        $pct = $task['total'] > 0 ? round(($task['checked'] / $task['total']) * 100) : 0;
-        $html .= '<div class="notice" style="margin: 16px 0; padding:16px; background:#e3f2fd; border:1px solid #90caf9; border-radius:8px; color:#0d47a1;">';
-        $html .= '<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">';
-        $html .= '<strong>Background optimization in progress</strong>';
-        if (!empty($task['pid'])) {
-            $html .= '<small style="opacity:0.8;">PID: ' . htmlspecialchars((string)$task['pid']) . '</small>';
-        }
-        $html .= '</div>';
-        $html .= '<progress id="bg-task-progress-bar" value="' . (int)$task['checked'] . '" max="' . max(1, (int)$task['total']) . '" style="width:100%; height:12px; margin: 10px 0; border-radius:4px;"></progress>';
-        $html .= '<p id="bg-task-progress-text" style="margin:4px 0 8px; font-size:0.875rem;">Processed ' . (int)$task['checked'] . ' / ' . (int)$task['total'] . ' (' . $pct . '%) · ' . (int)$task['remaining'] . ' remaining</p>';
-        $html .= '<p style="font-size:0.82rem; margin:0 0 12px; opacity:0.85;">This task is running detached in the background on the server. You can safely close your browser or navigate away from this page; optimization will continue until complete.</p>';
-        $html .= '<form method="post" action="' . $base . '/admin/images/compress-stop" style="display:inline-block; margin:0;">';
-        $html .= render_hidden_inputs(['csrf' => csrf_token()]);
-        $html .= '<button class="button danger" type="submit">Stop background task</button>';
-        $html .= '</form>';
-        $html .= '</div>';
-
-        // Auto-refresh script for live progress updates while the page is open
-        $html .= '<script>
-(function() {
-    var checkInterval = setInterval(function() {
-        fetch("' . $base . '/admin/images/status", { credentials: "same-origin", headers: { "Accept": "application/json" } })
-        .then(function(r) { return r.json(); })
-        .then(function(res) {
-            var data = res.data || res;
-            var task = data.background_task;
-            if (!task) return;
-            var bar = document.getElementById("bg-task-progress-bar");
-            var txt = document.getElementById("bg-task-progress-text");
-            var pendingEl = document.getElementById("img-stat-pending");
-            var compEl = document.getElementById("img-stat-compressed");
-            var savedEl = document.getElementById("img-stat-saved");
-            if (bar && task.total > 0) {
-                bar.value = task.checked || 0;
-                bar.max = task.total;
-            }
-            if (txt) {
-                var pct = task.total > 0 ? Math.round((task.checked / task.total) * 100) : 0;
-                txt.textContent = "Processed " + (task.checked || 0) + " / " + task.total + " (" + pct + "%) · " + (task.remaining || 0) + " remaining";
-            }
-            if (pendingEl && typeof task.remaining === "number") pendingEl.textContent = task.remaining;
-            if (compEl && typeof data.compressed_images === "number") compEl.textContent = data.compressed_images;
-            if (task.status !== "running") {
-                clearInterval(checkInterval);
-                window.location.reload();
-            }
-        }).catch(function() {});
-    }, 3000);
-})();
-</script>';
+        $html .= '<div class="image-compression-status"><p><strong>Background optimization in progress</strong></p>';
+        $html .= '<progress id="bg-task-progress-bar" aria-label="Images reviewed" value="' . (int)$task['checked'] . '" max="' . max(1, (int)$task['total']) . '"></progress>';
+        $html .= '<p id="bg-task-progress-text" role="status" aria-live="polite">Reviewed ' . (int)$task['checked'] . ' / ' . (int)$task['total'] . ' · ' . (int)$task['remaining'] . ' pending</p>';
+        $html .= '<form class="inline-form" method="post" action="' . $base . '/admin/images/compress-stop">' . render_hidden_inputs(['csrf' => csrf_token()]);
+        $html .= '<button class="button" type="submit"' . ($task['stop_requested'] ? ' disabled' : '') . '>' . ($task['stop_requested'] ? 'Stopping after current image…' : 'Stop optimization') . '</button></form></div>';
     } elseif ($task['status'] === 'completed') {
-        $html .= '<div style="margin:16px 0; padding:12px; background:#e8f5e9; border:1px solid #c8e6c9; border-radius:8px; color:#2e7d32; font-size:0.875rem;">';
-        $html .= '✓ Background optimization completed. All ' . (int)$task['checked'] . ' images processed. Space saved: ' . format_bytes((float)$task['saved_bytes']) . '.';
-        $html .= '</div>';
+        $html .= '<p role="status">Optimization review completed. Reviewed ' . (int)$task['checked'] . ' images; ' . (int)$task['compressed'] . ' became smaller. Space saved: ' . format_bytes((float)$task['saved_bytes']) . '.</p>';
     } elseif ($task['status'] === 'stopped') {
-        $html .= '<div style="margin:16px 0; padding:12px; background:#fff3e0; border:1px solid #ffe0b2; border-radius:8px; color:#e65100; font-size:0.875rem;">';
-        $html .= '⏸ Background optimization stopped. ' . (int)$task['remaining'] . ' images remaining.';
-        $html .= '</div>';
+        $html .= '<p role="status">Optimization stopped safely. ' . (int)$stats['pending_images'] . ' images are pending review.</p>';
     } elseif ($task['status'] === 'failed') {
-        $html .= '<div style="margin:16px 0; padding:12px; background:#ffebee; border:1px solid #ffcdd2; border-radius:8px; color:#b71c1c; font-size:0.875rem;">';
-        $html .= '⚠ Background optimization stopped with error: ' . htmlspecialchars((string)($task['error'] ?? 'Unknown error'));
-        $html .= '</div>';
+        $html .= '<p role="status">Optimization needs attention. ' . htmlspecialchars((string)$task['error']) . '</p>';
     }
-
     if ($task['status'] !== 'running') {
-        $hasPending = $stats['pending_images'] > 0;
-        $html .= '<form class="settings-form" method="post" action="' . $base . '/admin/images/compress" style="margin-top:16px;">';
-        $html .= render_hidden_inputs(['csrf' => csrf_token()]);
-        $btnLabel = $hasPending
-            ? ('Compress ' . $stats['pending_images'] . ' pending image' . ($stats['pending_images'] > 1 ? 's' : '') . ' in background')
-            : 'All images are optimal';
-        $html .= '<button class="button primary" type="submit" style="background:#2e7d32; border-color:#2e7d32; font-weight:600;"' . ($hasPending ? '' : ' disabled') . '>' . htmlspecialchars($btnLabel) . '</button>';
-        $html .= '<p class="muted" style="margin:4px 0 0; font-size:0.8rem;">Runs asynchronously in the background on the server. You can safely close or navigate away from this page immediately after starting.</p>';
-        $html .= '</form>';
+        $html .= '<form class="settings-form" method="post" action="' . $base . '/admin/images/compress">' . render_hidden_inputs(['csrf' => csrf_token()]);
+        $html .= '<button class="button primary" type="submit"' . ($stats['pending_images'] === 0 ? ' disabled' : '') . '>' . ($stats['pending_images'] > 0 ? 'Optimize pending images' : 'No images pending review') . '</button></form>';
     }
-
-    $html .= '</section>';
-
+    $html .= '<p id="image-compression-connection" class="field-hint" role="status"></p></section>';
     return $html;
 }

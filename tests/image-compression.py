@@ -1,143 +1,92 @@
-"""Unit and integration checks for image compression (TinyPNG-like optimization)."""
+"""Exercise actual image encoders, publication, worker lifecycle and snapshots."""
+import argparse
+import json
 from pathlib import Path
-import re
-import sqlite3
+import shutil
+import subprocess
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
+parser = argparse.ArgumentParser(description=__doc__)
+mode = parser.add_mutually_exclusive_group(required=True)
+mode.add_argument('--php', help='PHP CLI with GD and PDO SQLite')
+mode.add_argument('--docker', help='Built application image, including CLI encoders')
+args = parser.parse_args()
+with tempfile.TemporaryDirectory(prefix='siyuan-image-runtime-') as directory:
+    work = Path(directory)
+    app = work / 'app'
+    shutil.copytree(ROOT / 'php-site', app, ignore=shutil.ignore_patterns('config.php', 'storage', 'uploads'))
+    (app / 'storage').mkdir()
+    (app / 'uploads').mkdir()
+    runtime = '/fixture/app' if args.docker else app.as_posix()
+    config = "<?php return ['db_path'=>" + json.dumps(runtime + '/storage/app.db') + ", 'uploads_dir'=>" + json.dumps(runtime + '/uploads') + "];"
+    (app / 'config.php').write_text(config, encoding='utf-8')
+    shutil.copy(ROOT / 'tests/image-compression.php', work / 'checks.php')
+    shutil.copy(ROOT / 'scripts/compress-images.php', work / 'compress-images.php')
+    shutil.copy(ROOT / 'scripts/data-snapshot.php', work / 'data-snapshot.php')
 
+    def php(arguments, check=True):
+        command = [args.php] if args.php else ['docker', 'run', '--rm', '--network', 'none', '-v', f'{work}:/fixture', '--entrypoint', 'php', args.docker]
+        result = subprocess.run([*command, *arguments], capture_output=True, text=True, timeout=45)
+        if check and result.returncode:
+            raise AssertionError(result.stdout + result.stderr)
+        if 'Warning:' in result.stdout + result.stderr or 'Fatal error:' in result.stdout + result.stderr:
+            raise AssertionError(result.stdout + result.stderr)
+        return result
 
-def test_dockerfile_dependencies():
-    dockerfile = (ROOT / 'php-site/Dockerfile').read_text(encoding='utf-8')
-    for pkg in ['pngquant', 'jpegoptim', 'libwebp', 'libwebp-tools']:
-        assert pkg in dockerfile, f'Missing package {pkg} in Dockerfile'
-    assert '--with-webp' in dockerfile, 'Missing --with-webp in docker-php-ext-configure gd'
-    print('Dockerfile dependencies check passed.')
+    mount = '/fixture' if args.docker else work.as_posix()
+    index = runtime + '/index.php'
+    result = php([mount + '/checks.php', index])
+    print(result.stdout.strip())
+    bootstrap = "ini_set('session.save_path',dirname($argv[1]).'/storage'); define('SIYUAN_CLI_BOOTSTRAP_ONLY',true); require $argv[1]; session_write_close(); "
+    if args.php:
+        barrier = time.time() + 1
+        racing = bootstrap + 'while(microtime(true)<(float)$argv[2]) usleep(1000); echo json_encode(create_image_compression_job());'
+        workers = [subprocess.Popen([args.php, '-r', racing, index, str(barrier)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(6)]
+        try:
+            results = []
+            for worker in workers:
+                stdout, stderr = worker.communicate(timeout=10)
+                assert worker.returncode == 0, stderr
+                results.append(json.loads(stdout))
+            assert sum(item['success'] for item in results) == 1, results
+        finally:
+            for worker in workers:
+                if worker.poll() is None:
+                    worker.kill()
+                worker.communicate(timeout=5)
+        php(['-r', bootstrap + '$task=get_background_compression_status(); request_stop_background_compression(); exit(run_background_compression_job($task["job_id"]));', index])
+        print('Six simultaneous starts produce exactly one reserved task.')
+    code = bootstrap + "echo json_encode(start_background_compression_job(), JSON_THROW_ON_ERROR);"
+    # Keep one container alive for detached children; docker run would reap them.
+    if args.php:
+        created = json.loads(php(['-r', code, index]).stdout)
+        assert created['success'], created
+        deadline = time.monotonic() + 8
+        while True:
+            task = json.loads(php(['-r', bootstrap + 'echo json_encode(get_background_compression_status());', index]).stdout)
+            if task['status'] != 'running':
+                break
+            assert time.monotonic() < deadline, task
+            time.sleep(0.05)
+        assert task['status'] == 'failed' and task['checked'] == 1, task
+        print('Detached worker starts, acknowledges its job and exits on a missing attachment.')
 
+    result = php([mount + '/compress-images.php', runtime, '--limit=1'], check=False)
+    assert result.returncode == 1, result.stdout + result.stderr
+    task = json.loads(result.stdout)
+    assert task['status'] == 'failed' and task['checked'] == 1, task
+    print('Production CLI works without a test-generated bootstrap and reports incomplete work.')
 
-def test_database_schema_and_migration():
-    with tempfile.TemporaryDirectory(prefix='siyuan-test-img-') as td:
-        db_path = Path(td) / 'test.db'
-        conn = sqlite3.connect(str(db_path))
-        cur = conn.cursor()
-
-        # Create base share_assets table like old version
-        cur.execute('''CREATE TABLE share_assets (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            share_id INTEGER NOT NULL,
-            doc_id TEXT,
-            asset_path TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            size_bytes INTEGER NOT NULL DEFAULT 0,
-            asset_hash TEXT,
-            created_at TEXT NOT NULL
-        )''')
-
-        # Run migration logic (simulated ensure_column)
-        cur.execute("PRAGMA table_info(share_assets)")
-        cols = {row[1] for row in cur.fetchall()}
-        assert 'compressed_at' not in cols
-        assert 'original_size_bytes' not in cols
-
-        # Add columns
-        cur.execute("ALTER TABLE share_assets ADD COLUMN compressed_at TEXT")
-        cur.execute("ALTER TABLE share_assets ADD COLUMN original_size_bytes INTEGER NOT NULL DEFAULT 0")
-
-        cur.execute("PRAGMA table_info(share_assets)")
-        new_cols = {row[1] for row in cur.fetchall()}
-        assert 'compressed_at' in new_cols
-        assert 'original_size_bytes' in new_cols
-        conn.close()
-    print('Database migration test passed.')
-
-
-def test_compression_stats_queries():
-    with tempfile.TemporaryDirectory(prefix='siyuan-test-img-') as td:
-        db_path = Path(td) / 'test.db'
-        conn = sqlite3.connect(str(db_path))
-        cur = conn.cursor()
-
-        cur.execute('''CREATE TABLE share_assets (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            share_id INTEGER NOT NULL,
-            doc_id TEXT,
-            asset_path TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            size_bytes INTEGER NOT NULL DEFAULT 0,
-            asset_hash TEXT,
-            compressed_at TEXT,
-            original_size_bytes INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL
-        )''')
-
-        # Insert test data:
-        # 1. Compressed PNG: orig 1000, curr 300
-        cur.execute("INSERT INTO share_assets (share_id, asset_path, file_path, size_bytes, original_size_bytes, compressed_at, created_at) VALUES (1, 'assets/pic1.png', 'shares/1/v1/pic1.png', 300, 1000, '2026-11-05 12:00:00', '2026-11-05 11:00:00')")
-        # 2. Uncompressed JPG: orig 0, curr 2000
-        cur.execute("INSERT INTO share_assets (share_id, asset_path, file_path, size_bytes, original_size_bytes, compressed_at, created_at) VALUES (1, 'assets/pic2.jpg', 'shares/1/v1/pic2.jpg', 2000, 0, NULL, '2026-11-05 11:00:00')")
-        # 3. Non-image TXT file: orig 0, curr 500, compressed_at set to skip
-        cur.execute("INSERT INTO share_assets (share_id, asset_path, file_path, size_bytes, original_size_bytes, compressed_at, created_at) VALUES (1, 'assets/note.txt', 'shares/1/v1/note.txt', 500, 500, '2026-11-05 12:00:00', '2026-11-05 11:00:00')")
-        conn.commit()
-
-        # Query stats using the exact filter in image-compression.php
-        image_filter = " (LOWER(SUBSTR(asset_path, -4)) IN ('.png', '.jpg', '.gif') OR LOWER(SUBSTR(asset_path, -5)) IN ('.jpeg', '.webp'))"
-        cur.execute(f"SELECT COUNT(*) FROM share_assets WHERE {image_filter}")
-        total_images = cur.fetchone()[0]
-        assert total_images == 2, f'Expected 2 images, got {total_images}'
-
-        cur.execute(f"SELECT COUNT(*) FROM share_assets WHERE compressed_at IS NULL AND {image_filter}")
-        pending_images = cur.fetchone()[0]
-        assert pending_images == 1, f'Expected 1 pending image, got {pending_images}'
-
-        cur.execute(f"""SELECT COUNT(*),
-            COALESCE(SUM(CASE WHEN original_size_bytes > 0 THEN original_size_bytes ELSE size_bytes END), 0) AS total_orig,
-            COALESCE(SUM(size_bytes), 0) AS total_curr
-        FROM share_assets
-        WHERE compressed_at IS NOT NULL AND {image_filter}""")
-        comp_count, total_orig, total_curr = cur.fetchone()
-        assert comp_count == 1
-        assert total_orig == 1000
-        assert total_curr == 300
-        assert total_orig - total_curr == 700  # 700 bytes saved
-        conn.close()
-    print('Compression stats queries test passed.')
-
-
-def test_php_code_integrity():
-    files = [
-        ROOT / 'php-site/image-compression.php',
-        ROOT / 'php-site/background-compress.php',
-        ROOT / 'php-site/database.php',
-        ROOT / 'php-site/sync.php',
-        ROOT / 'php-site/storage.php',
-        ROOT / 'php-site/admin.php',
-        ROOT / 'php-site/index.php',
-    ]
-    for f in files:
-        assert f.is_file(), f'File not found: {f}'
-        content = f.read_text(encoding='utf-8')
-        assert 'declare(strict_types=1);' in content, f'Missing strict_types in {f.name}'
-    
-    # Check that image-compression functions are referenced properly
-    sync_code = (ROOT / 'php-site/sync.php').read_text(encoding='utf-8')
-    assert 'compress_image_file' in sync_code
-    assert 'is_compressible_image_path' in sync_code
-
-    storage_code = (ROOT / 'php-site/storage.php').read_text(encoding='utf-8')
-    assert 'compress_image_file' in storage_code
-    assert 'is_compressible_image_path' in storage_code
-
-    admin_code = (ROOT / 'php-site/admin.php').read_text(encoding='utf-8')
-    assert '/admin/images/compress' in admin_code
-    assert '/admin/images/compress-stop' in admin_code
-    assert '/admin/images/status' in admin_code
-    assert 'render_image_compression_admin_section' in admin_code
-    print('PHP code integrity check passed.')
-
-
-if __name__ == '__main__':
-    test_dockerfile_dependencies()
-    test_database_schema_and_migration()
-    test_compression_stats_queries()
-    test_php_code_integrity()
-    print('All image compression checks passed!')
+    db = runtime + '/storage/app.db'
+    def snapshot(core=False):
+        return json.loads(php([mount + '/data-snapshot.php', db, *(['--core-only'] if core else [])]).stdout)
+    before, core_before = snapshot(), snapshot(True)
+    php(['-r', bootstrap + "db()->exec(\"UPDATE share_assets SET original_size_bytes=original_size_bytes+1, compressed_at='changed'\");", index])
+    assert snapshot()['fingerprints']['share_assets'] != before['fingerprints']['share_assets']
+    assert snapshot(True) == core_before, 'Compression metadata must not break migration fingerprints'
+    php(['-r', bootstrap + "db()->exec(\"INSERT OR REPLACE INTO settings(key,value,updated_at) VALUES('admin_auth_mode','github','fixture')\");", index])
+    assert snapshot(True)['fingerprints']['settings'] != core_before['fingerprints']['settings']
+    print('Full snapshots verify compression metadata; core snapshots tolerate new columns and protect authentication mode.')
+print('All image compression runtime checks passed.')

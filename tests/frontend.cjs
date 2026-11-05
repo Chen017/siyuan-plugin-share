@@ -86,6 +86,33 @@ async function page(raw, {failMermaid = false, slowGraphviz = false} = {}) {
 }
 
 (async () => {
+  const compression = new JSDOM(`<body class="layout-app"><form class="settings-form"><input name="draft" value="saved"></form><section id="image-compression" data-status-url="/admin/images/status"><progress id="bg-task-progress-bar"></progress><p id="bg-task-progress-text"></p><p id="image-compression-connection"></p><span id="img-stat-total"></span><span id="img-stat-compressed"></span><span id="img-stat-pending"></span><span id="img-stat-saved"></span><button>Stop optimization</button></section></body>`, {url:'https://reader.test/admin',runScripts:'outside-only',pretendToBeVisual:true});
+  try {
+    const w = compression.window, polls = [], nativeTimeout = w.setTimeout.bind(w);
+    w.setTimeout = (callback, delay, ...args) => delay === 3000 ? (polls.push(callback), 0) : nativeTimeout(callback, delay, ...args);
+    let requests = 0, release;
+    w.fetch = async (_url, options) => {
+      requests++;
+      assert.equal(options.cache,'no-store');
+      return new Promise(resolve => {release=resolve;});
+    };
+    w.eval(app);
+    const draft=w.document.querySelector('[name=draft]');draft.value='unsaved draft';draft.focus();
+    assert.equal(polls.length,1);polls.shift()();assert.equal(requests,1);assert.equal(polls.length,0,'A slow request cannot overlap another poll');
+    const status = state => ({ok:true,json:async()=>({data:{total_images:2,compressed_images:1,pending_images:1,saved_bytes:100,background_task:{status:state,total:2,checked:1}}})});
+    release(status('running'));
+    await waitFor(()=>polls.length===1,'running compression progress');
+    assert(w.document.querySelector('#bg-task-progress-text').textContent.includes('Reviewed 1 / 2'));
+    assert.equal(w.document.querySelector('#img-stat-saved').textContent,'100 bytes');
+    w.fetch=async()=>{throw new Error('offline');};polls.shift()();
+    await waitFor(()=>polls.length===1,'compression retry after network error');
+    assert(w.document.querySelector('#image-compression-connection').textContent.includes('temporarily unavailable'));
+    w.fetch=async()=>status('completed');polls.shift()();
+    await waitFor(()=>w.document.querySelector('#bg-task-progress-text').textContent.includes('completed'),'terminal compression state');
+    assert.equal(polls.length,0,'Completed tasks stop polling');
+    assert.equal(draft.value,'unsaved draft');assert.equal(w.document.activeElement,draft,'Progress preserves settings and focus');
+  } finally {compression.window.close();}
+
   const plain = await page('# 中文标题\n\nHello 0123 **bold** $x^2$ and [a link](https://example.com).\n\nFootnote[^1]\n\n[^1]: Details');
   try {
     assert.deepEqual(plain.requests, [], 'Ordinary math notes do not load diagram engines');

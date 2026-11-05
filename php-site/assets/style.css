@@ -4422,6 +4422,28 @@ body.layout-app .admin-shares .share-title-cell { min-width: 200px; max-width: 3
 .password-field .input { flex: 1; }
 .password-field .button { min-width: 60px; min-height: 40px; }
 .form-actions { display: flex; gap: 10px; align-items: center; padding-block: 4px 16px; }
+/* Image optimization uses the same semantic surfaces and controls as settings. */
+.image-compression-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(130px, 100%), 1fr));
+  gap: 12px;
+  margin: 16px 0;
+}
+.image-compression-stats > div {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.image-compression-stats dt { color: var(--muted); font-size: .85rem; }
+.image-compression-stats dd { margin: 4px 0 0; font-size: 1.25rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.image-compression-status { margin-block: 16px; }
+.image-compression-status progress { display: block; width: 100%; accent-color: var(--primary); }
+#image-compression details { margin-block: 12px; }
+#image-compression .button { max-width: 100%; white-space: normal; }
+
+
 .sps-footnote-window { border-radius: 14px; box-shadow: 0 6px 12px rgb(0 0 0 / 5%), 0 20px 50px rgb(0 0 0 / 15%); }
 body.layout-share .sps-footnote-window .sps-footnote-window__body.markdown-body { padding: 12px 18px 18px; font-size: 14px; line-height: 1.7; overflow: auto; min-height: 0; }
 .sps-footnote-window__body > :first-child { margin-top: 0; }

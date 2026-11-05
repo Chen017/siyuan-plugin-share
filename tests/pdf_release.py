@@ -2,9 +2,24 @@
 from pathlib import Path
 import subprocess
 import time
+from contextlib import contextmanager
 
 
 class PdfReleaseTests:
+    @contextmanager
+    def isolated_pdf_quota_settings(self):
+        keys = "'pdf_export_requests','pdf_export_window_seconds','pdf_export_ip_requests','pdf_export_fingerprint_requests'"
+        original = self.rows(f'SELECT key,value,updated_at FROM settings WHERE key IN ({keys})')
+        try:
+            yield
+        finally:
+            self.rows(f'DELETE FROM settings WHERE key IN ({keys})')
+            for row in original:
+                values = ','.join("'" + str(row[key]).replace("'", "''") + "'" for key in ('key', 'value', 'updated_at'))
+                self.rows(f'INSERT INTO settings(key,value,updated_at) VALUES ({values})')
+            self.rows('DELETE FROM pdf_export_events')
+            self.rows('DELETE FROM pdf_export_leases')
+
     def pdf_workers(self, share, count, mode='concurrent'):
         if self.container:
             command = ['docker', 'exec', '--user', 'www-data', self.container, 'php', '/tmp/pdf-race.php', '/var/www/html/bootstrap.php']
@@ -17,18 +32,24 @@ class PdfReleaseTests:
         workers = [subprocess.Popen([*command, str(share['id']), str(i + 1), barrier, mode, cookie],
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE) for i in range(count)]
         results = []
-        for worker in workers:
-            output, errors = worker.communicate(timeout=25)
-            self.assertEqual(worker.returncode, 0, errors)
-            self.assertEqual(errors, b'')
-            results.append(output.decode())
+        try:
+            for worker in workers:
+                output, errors = worker.communicate(timeout=25)
+                self.assertEqual(worker.returncode, 0, errors)
+                self.assertEqual(errors, b'')
+                results.append(output.decode())
+        finally:
+            for worker in workers:
+                if worker.poll() is None:
+                    worker.kill()
+                worker.communicate(timeout=5)
         return results
 
     def test_pdf_release_repeated_atomic_quota_races(self):
         share = self.share()
         self.pdf_visitor(share)
-        self.rows("UPDATE settings SET value = '5' WHERE key = 'pdf_export_requests'")
-        try:
+        with self.isolated_pdf_quota_settings():
+            self.rows("UPDATE settings SET value = '5' WHERE key = 'pdf_export_requests'")
             for _ in range(3):
                 self.rows('DELETE FROM pdf_export_events')
                 self.rows('DELETE FROM pdf_export_leases')
@@ -37,27 +58,19 @@ class PdfReleaseTests:
                 self.assertEqual(results.count('limited'), 7, results)
                 self.assertEqual(self.rows('SELECT SUM(doc_count) AS n FROM pdf_export_events')[0]['n'], 5)
                 self.assertEqual(self.rows('SELECT COUNT(*) AS n FROM pdf_export_leases')[0]['n'], 0)
-        finally:
-            self.rows('DELETE FROM pdf_export_events')
-            self.rows('DELETE FROM pdf_export_leases')
-            self.rows("UPDATE settings SET value = '120' WHERE key = 'pdf_export_requests'")
 
     def test_pdf_release_parallel_legacy_upgrade_and_admission(self):
         share = self.share()
         self.pdf_visitor(share)
-        self.rows("DELETE FROM settings WHERE key = 'pdf_export_requests'")
-        self.rows("UPDATE settings SET value = '600' WHERE key = 'pdf_export_window_seconds'")
-        self.rows("INSERT INTO settings(key, value, updated_at) VALUES ('pdf_export_ip_requests', '10', '2026-01-01'), ('pdf_export_fingerprint_requests', '6', '2026-01-01')")
-        try:
+        with self.isolated_pdf_quota_settings():
+            self.rows("DELETE FROM settings WHERE key = 'pdf_export_requests'")
+            self.rows("UPDATE settings SET value = '600' WHERE key = 'pdf_export_window_seconds'")
+            self.rows("INSERT INTO settings(key, value, updated_at) VALUES ('pdf_export_ip_requests', '10', '2026-01-01'), ('pdf_export_fingerprint_requests', '6', '2026-01-01')")
             results = self.pdf_workers(share, 12)
             self.assertEqual(results.count('accepted'), 4, results)
             self.assertEqual(results.count('limited'), 8, results)
             values = {row['key']: row['value'] for row in self.rows("SELECT key, value FROM settings WHERE key IN ('pdf_export_requests', 'pdf_export_window_seconds', 'pdf_export_ip_requests', 'pdf_export_fingerprint_requests')")}
             self.assertEqual(values, {'pdf_export_requests': '6', 'pdf_export_window_seconds': '3600'})
-        finally:
-            self.rows("UPDATE settings SET value = '120' WHERE key = 'pdf_export_requests'")
-            self.rows('DELETE FROM pdf_export_leases')
-            self.rows('DELETE FROM pdf_export_events')
 
     def test_pdf_release_tree_overflow_and_exact_batch_boundary(self):
         docs = [{'docId': self.name + str(i), 'title': '边界文档' + str(i), 'markdown': 'RELEASE_BOUNDARY_' + str(i),

@@ -19,9 +19,14 @@ $queries = [
     'share_docs' => 'SELECT id, share_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, content_hash, meta_hash, created_at, updated_at FROM share_docs ORDER BY id',
     'share_assets' => 'SELECT id, share_id, doc_id, asset_path, file_path, size_bytes, asset_hash, created_at FROM share_assets ORDER BY id',
 ];
+if (!$coreOnly) {
+    // Full backups also verify extension metadata, including compression state.
+    $queries['share_docs'] = 'SELECT * FROM share_docs ORDER BY id';
+    $queries['share_assets'] = 'SELECT * FROM share_assets ORDER BY id';
+}
 if ($coreOnly) {
     $queries['settings'] = "SELECT key,value FROM settings WHERE key IN ('site_base_url','reader_home_url','site_head_html',
-        'site_custom_css_enabled','site_custom_css','site_custom_js_enabled','site_custom_js','default_storage_limit_bytes')
+        'site_custom_css_enabled','site_custom_css','site_custom_js_enabled','site_custom_js','default_storage_limit_bytes','admin_auth_mode')
         OR key LIKE 'pdf_export_%' ORDER BY key";
     $noteReference = $pdo->prepare('SELECT 1 FROM share_docs WHERE instr(markdown, ?) > 0 OR instr(markdown, ?) > 0 OR instr(markdown, ?) > 0 LIMIT 1');
     $uploads = realpath(dirname(dirname($path)) . '/uploads');

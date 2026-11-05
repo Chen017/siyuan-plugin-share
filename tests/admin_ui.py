@@ -1,5 +1,9 @@
 """Website share editing must enforce the same access and revision rules as sync."""
 import json
+import hashlib
+import struct
+import time
+import zlib
 import re
 import subprocess
 from pathlib import Path
@@ -154,9 +158,16 @@ class AdminShareTests:
         page = admin.request('/admin')[2]
         self.assertIn(b'id="image-compression"', page)
         self.assertIn(b'Image compression', page)
-        self.assertIn(b'Compress', page)
+        self.assertIn(b'Pending review', page)
+        self.assertNotIn(b'TinyPNG', page)
+        section = page.split(b'id="image-compression"', 1)[1].split(b'</section>', 1)[0]
+        self.assertNotIn(b'style=', section)
 
-        code, _, data = admin.request('/admin/images/status')
+        self.assertEqual(type(self.client)(self.base).request('/admin/images/status')[0], 302)
+        self.assertEqual(admin.request('/admin/images/compress', {'csrf': 'invalid'})[0], 400)
+        self.assertEqual(admin.request('/admin/images/compress-stop', {'csrf': 'invalid'})[0], 400)
+        code, headers, data = admin.request('/admin/images/status')
+        self.assertEqual(headers['Cache-Control'], 'no-store')
         self.assertEqual(code, 200)
         status = json.loads(data.decode('utf-8'))
         payload = status.get('data', status)
@@ -170,8 +181,32 @@ class AdminShareTests:
         resp_code, _, _ = admin.request('/admin/images/compress', {'csrf': token})
         self.assertEqual(resp_code, 302)
         after_page = admin.request('/admin')[2]
-        self.assertTrue(b'Background image optimization' in after_page or b'already compressed' in after_page)
+        self.assertTrue(b'Background image optimization' in after_page or b'No pending images' in after_page)
 
         # Test stop endpoint
         stop_code, _, _ = admin.request('/admin/images/compress-stop', {'csrf': token})
         self.assertEqual(stop_code, 302)
+
+    def test_uploaded_images_queue_after_commit_and_preserve_snapshot(self):
+        def chunk(kind, data):
+            return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
+        pixels = b''.join(b'\0' + bytes([20, 100, 210]) * 100 for _ in range(100))
+        png = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 100, 100, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(pixels, 0)) + chunk(b'IEND', b'')
+        metadata = {'docId': self.name, 'title': 'Queued image', 'markdown': '![Image](assets/queued.png)'}
+        status, _, body = self.client.request('/api/v1/shares/doc',
+            {'metadata': json.dumps(metadata), 'assetPaths[]': 'assets/queued.png'}, {'X-Api-Key': self.key},
+            files={'assets[]': ('queued.png', png)})
+        self.assertEqual(status, 200, body)
+        share = json.loads(body)['data']['share']
+        deadline = time.monotonic() + 10
+        while True:
+            row = self.rows('SELECT * FROM share_assets WHERE share_id=' + str(share['id']))[0]
+            if row['compressed_at']:
+                break
+            self.assertLess(time.monotonic(), deadline, 'Automatic image worker did not finish')
+            time.sleep(0.05)
+        self.assertEqual(row['asset_hash'], hashlib.sha256(png).hexdigest())
+        self.assertEqual(row['original_size_bytes'], len(png))
+        self.assertLess(row['size_bytes'], len(png))
+        snapshot = self.api('shares/snapshot', {'shareId': share['id']})
+        self.assertEqual(snapshot['assets'][0]['hash'], hashlib.sha256(png).hexdigest())

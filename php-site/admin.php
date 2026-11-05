@@ -232,6 +232,7 @@ if ($path === '/admin/images/compress-stop' && $_SERVER['REQUEST_METHOD'] === 'P
 
 if ($path === '/admin/images/status' && $_SERVER['REQUEST_METHOD'] === 'GET') {
     require_admin();
+    header('Cache-Control: no-store');
     $stats = get_image_compression_stats(db());
     $task = get_background_compression_status();
     api_response(200, array_merge($stats, ['background_task' => $task]));

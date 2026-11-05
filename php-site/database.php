@@ -167,6 +167,7 @@ function migrate(PDO $pdo): void {
     ensure_column($pdo, 'share_assets', 'asset_hash', 'TEXT');
     ensure_column($pdo, 'share_assets', 'compressed_at', 'TEXT');
     ensure_column($pdo, 'share_assets', 'original_size_bytes', 'INTEGER NOT NULL DEFAULT 0');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_share_assets_compression_pending ON share_assets(id, asset_path) WHERE compressed_at IS NULL');
 
     if (!table_has_column($pdo, 'shares', 'revision') || !table_has_column($pdo, 'share_uploads', 'share_revision')
         || !table_has_column($pdo, 'share_uploads', 'reserved_bytes')) {
