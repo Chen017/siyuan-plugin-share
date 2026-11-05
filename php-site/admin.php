@@ -211,28 +211,6 @@ if ($path === '/admin/pdf-export-settings' && $_SERVER['REQUEST_METHOD'] === 'PO
 if ($path === '/admin/images/compress' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     require_admin();
     check_csrf();
-    $limit = max(1, min(500, (int)($_POST['limit'] ?? 100)));
-    $result = batch_compress_pending_images(db(), $limit);
-    $msg = sprintf(
-        'Compression complete: %d checked, %d compressed, %d already optimal, %d skipped, %d failed. Saved %s.%s',
-        $result['checked'],
-        $result['compressed'],
-        $result['optimal'],
-        $result['skipped'],
-        $result['failed'],
-        format_bytes((float)$result['saved_bytes']),
-        $result['remaining_pending'] > 0 ? sprintf(' (%d remaining, run again to continue)', $result['remaining_pending']) : ''
-    );
-    flash($result['failed'] > 0 && $result['compressed'] === 0 ? 'error' : 'info', $msg);
-    if (str_contains($_SERVER['HTTP_ACCEPT'] ?? '', 'application/json')) {
-        api_response(200, array_merge($result, ['message' => $msg]));
-    }
-    redirect('/admin#image-compression');
-}
-
-if ($path === '/admin/images/compress-background' && $_SERVER['REQUEST_METHOD'] === 'POST') {
-    require_admin();
-    check_csrf();
     $res = start_background_compression_job();
     flash($res['success'] ? 'info' : 'error', $res['message']);
     if (str_contains($_SERVER['HTTP_ACCEPT'] ?? '', 'application/json')) {

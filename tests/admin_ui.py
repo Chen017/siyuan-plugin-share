@@ -154,7 +154,7 @@ class AdminShareTests:
         page = admin.request('/admin')[2]
         self.assertIn(b'id="image-compression"', page)
         self.assertIn(b'Image compression', page)
-        self.assertIn(b'Check &amp; compress', page)
+        self.assertIn(b'Compress', page)
 
         code, _, data = admin.request('/admin/images/status')
         self.assertEqual(code, 200)
@@ -170,7 +170,7 @@ class AdminShareTests:
         resp_code, _, _ = admin.request('/admin/images/compress', {'csrf': token})
         self.assertEqual(resp_code, 302)
         after_page = admin.request('/admin')[2]
-        self.assertIn(b'Compression complete', after_page)
+        self.assertTrue(b'Background image optimization' in after_page or b'already compressed' in after_page)
 
         # Test stop endpoint
         stop_code, _, _ = admin.request('/admin/images/compress-stop', {'csrf': token})

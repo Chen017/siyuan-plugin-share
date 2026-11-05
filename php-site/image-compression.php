@@ -665,14 +665,14 @@ function render_image_compression_admin_section(): string {
         $pct = $task['total'] > 0 ? round(($task['checked'] / $task['total']) * 100) : 0;
         $html .= '<div class="notice" style="margin: 16px 0; padding:16px; background:#e3f2fd; border:1px solid #90caf9; border-radius:8px; color:#0d47a1;">';
         $html .= '<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">';
-        $html .= '<strong>Continuous background optimization in progress</strong>';
+        $html .= '<strong>Background optimization in progress</strong>';
         if (!empty($task['pid'])) {
             $html .= '<small style="opacity:0.8;">PID: ' . htmlspecialchars((string)$task['pid']) . '</small>';
         }
         $html .= '</div>';
         $html .= '<progress id="bg-task-progress-bar" value="' . (int)$task['checked'] . '" max="' . max(1, (int)$task['total']) . '" style="width:100%; height:12px; margin: 10px 0; border-radius:4px;"></progress>';
         $html .= '<p id="bg-task-progress-text" style="margin:4px 0 8px; font-size:0.875rem;">Processed ' . (int)$task['checked'] . ' / ' . (int)$task['total'] . ' (' . $pct . '%) · ' . (int)$task['remaining'] . ' remaining</p>';
-        $html .= '<p style="font-size:0.82rem; margin:0 0 12px; opacity:0.85;">💡 This task is running in the background on the server. You can safely close your browser or navigate away from this page; optimization will continue until complete.</p>';
+        $html .= '<p style="font-size:0.82rem; margin:0 0 12px; opacity:0.85;">This task is running detached in the background on the server. You can safely close your browser or navigate away from this page; optimization will continue until complete.</p>';
         $html .= '<form method="post" action="' . $base . '/admin/images/compress-stop" style="display:inline-block; margin:0;">';
         $html .= render_hidden_inputs(['csrf' => csrf_token()]);
         $html .= '<button class="button danger" type="submit">Stop background task</button>';
@@ -714,11 +714,11 @@ function render_image_compression_admin_section(): string {
 </script>';
     } elseif ($task['status'] === 'completed') {
         $html .= '<div style="margin:16px 0; padding:12px; background:#e8f5e9; border:1px solid #c8e6c9; border-radius:8px; color:#2e7d32; font-size:0.875rem;">';
-        $html .= '✓ Last background optimization completed! All ' . (int)$task['checked'] . ' images processed. Space saved: ' . format_bytes((float)$task['saved_bytes']) . '.';
+        $html .= '✓ Background optimization completed. All ' . (int)$task['checked'] . ' images processed. Space saved: ' . format_bytes((float)$task['saved_bytes']) . '.';
         $html .= '</div>';
     } elseif ($task['status'] === 'stopped') {
         $html .= '<div style="margin:16px 0; padding:12px; background:#fff3e0; border:1px solid #ffe0b2; border-radius:8px; color:#e65100; font-size:0.875rem;">';
-        $html .= '⏸ Background optimization paused/stopped. ' . (int)$task['remaining'] . ' images remaining.';
+        $html .= '⏸ Background optimization stopped. ' . (int)$task['remaining'] . ' images remaining.';
         $html .= '</div>';
     } elseif ($task['status'] === 'failed') {
         $html .= '<div style="margin:16px 0; padding:12px; background:#ffebee; border:1px solid #ffcdd2; border-radius:8px; color:#b71c1c; font-size:0.875rem;">';
@@ -728,31 +728,14 @@ function render_image_compression_admin_section(): string {
 
     if ($task['status'] !== 'running') {
         $hasPending = $stats['pending_images'] > 0;
-        $html .= '<div style="margin-top:16px; display:flex; flex-direction:column; gap:12px;">';
-        
-        // Primary action: Continuous background optimization (run detached, close page anytime)
-        $html .= '<form class="settings-form" method="post" action="' . $base . '/admin/images/compress-background" style="margin:0;">';
+        $html .= '<form class="settings-form" method="post" action="' . $base . '/admin/images/compress" style="margin-top:16px;">';
         $html .= render_hidden_inputs(['csrf' => csrf_token()]);
-        $bgButtonLabel = $hasPending
-            ? ('Start full background compression (后台一次性全部压缩 ' . $stats['pending_images'] . ' 张，可关闭网页)')
-            : 'All images already optimized';
-        $html .= '<button class="button primary" type="submit" style="background:#2e7d32; border-color:#2e7d32; font-weight:600;"' . ($hasPending ? '' : ' disabled') . '>' . htmlspecialchars($bgButtonLabel) . '</button>';
-        $html .= '<p class="muted" style="margin:4px 0 0; font-size:0.8rem;">Runs detached on the server in the background. You can safely close or navigate away from this page immediately after starting.</p>';
+        $btnLabel = $hasPending
+            ? ('Compress ' . $stats['pending_images'] . ' pending image' . ($stats['pending_images'] > 1 ? 's' : '') . ' in background')
+            : 'All images are optimal';
+        $html .= '<button class="button primary" type="submit" style="background:#2e7d32; border-color:#2e7d32; font-weight:600;"' . ($hasPending ? '' : ' disabled') . '>' . htmlspecialchars($btnLabel) . '</button>';
+        $html .= '<p class="muted" style="margin:4px 0 0; font-size:0.8rem;">Runs asynchronously in the background on the server. You can safely close or navigate away from this page immediately after starting.</p>';
         $html .= '</form>';
-
-        // Secondary action: Single synchronous batch
-        $html .= '<form class="settings-form" method="post" action="' . $base . '/admin/images/compress" style="margin:4px 0 0; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">';
-        $html .= render_hidden_inputs(['csrf' => csrf_token()]);
-        $html .= '<label style="font-size:0.85rem; color:var(--muted); margin:0;">Batch size: ';
-        $html .= '<select name="limit" class="input" style="width:auto; padding:3px 8px; margin-left:4px;">';
-        $html .= '<option value="100">100 / batch</option>';
-        $html .= '<option value="250">250 / batch</option>';
-        $html .= '<option value="500">500 / batch</option>';
-        $html .= '</select></label>';
-        $html .= '<button class="button" type="submit" style="margin:0;">Check &amp; compress single batch</button>';
-        $html .= '</form>';
-
-        $html .= '</div>';
     }
 
     $html .= '</section>';
