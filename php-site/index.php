@@ -846,6 +846,10 @@ function find_share_asset_row(int $shareId, string $assetPath): ?array {
     return $row ?: null;
 }
 
+if (defined('SIYUAN_CLI_BOOTSTRAP_ONLY')) {
+    return;
+}
+
 $path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH) ?: '/';
 $base = base_path();
 if ($base && strpos($path, $base) === 0) {

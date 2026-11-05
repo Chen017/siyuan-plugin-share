@@ -106,6 +106,7 @@ def test_compression_stats_queries():
 def test_php_code_integrity():
     files = [
         ROOT / 'php-site/image-compression.php',
+        ROOT / 'php-site/background-compress.php',
         ROOT / 'php-site/database.php',
         ROOT / 'php-site/sync.php',
         ROOT / 'php-site/storage.php',
@@ -128,6 +129,8 @@ def test_php_code_integrity():
 
     admin_code = (ROOT / 'php-site/admin.php').read_text(encoding='utf-8')
     assert '/admin/images/compress' in admin_code
+    assert '/admin/images/compress-background' in admin_code
+    assert '/admin/images/compress-stop' in admin_code
     assert '/admin/images/status' in admin_code
     assert 'render_image_compression_admin_section' in admin_code
     print('PHP code integrity check passed.')

@@ -230,10 +230,33 @@ if ($path === '/admin/images/compress' && $_SERVER['REQUEST_METHOD'] === 'POST')
     redirect('/admin#image-compression');
 }
 
+if ($path === '/admin/images/compress-background' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_admin();
+    check_csrf();
+    $res = start_background_compression_job();
+    flash($res['success'] ? 'info' : 'error', $res['message']);
+    if (str_contains($_SERVER['HTTP_ACCEPT'] ?? '', 'application/json')) {
+        api_response($res['success'] ? 200 : 400, $res);
+    }
+    redirect('/admin#image-compression');
+}
+
+if ($path === '/admin/images/compress-stop' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_admin();
+    check_csrf();
+    $res = request_stop_background_compression();
+    flash($res['success'] ? 'info' : 'error', $res['message']);
+    if (str_contains($_SERVER['HTTP_ACCEPT'] ?? '', 'application/json')) {
+        api_response($res['success'] ? 200 : 400, $res);
+    }
+    redirect('/admin#image-compression');
+}
+
 if ($path === '/admin/images/status' && $_SERVER['REQUEST_METHOD'] === 'GET') {
     require_admin();
     $stats = get_image_compression_stats(db());
-    api_response(200, $stats);
+    $task = get_background_compression_status();
+    api_response(200, array_merge($stats, ['background_task' => $task]));
 }
 
 if (in_array($path, ['/admin/share-delete', '/admin/share-restore', '/admin/share-hard-delete'], true) && $_SERVER['REQUEST_METHOD'] === 'POST') {

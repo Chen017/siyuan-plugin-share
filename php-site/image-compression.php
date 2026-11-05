@@ -436,10 +436,183 @@ function get_image_compression_stats(PDO $pdo): array {
     ];
 }
 
+function image_compression_task_file(): string {
+    global $config;
+    $storageDir = isset($config['db_path']) ? dirname((string)$config['db_path']) : (__DIR__ . '/storage');
+    if (!is_dir($storageDir)) {
+        @mkdir($storageDir, 0775, true);
+    }
+    return $storageDir . '/image-compression-task.json';
+}
+
+function get_background_compression_status(): array {
+    $file = image_compression_task_file();
+    $default = [
+        'status' => 'idle',
+        'pid' => 0,
+        'started_at' => null,
+        'updated_at' => null,
+        'completed_at' => null,
+        'total' => 0,
+        'checked' => 0,
+        'compressed' => 0,
+        'optimal' => 0,
+        'skipped' => 0,
+        'failed' => 0,
+        'saved_bytes' => 0,
+        'remaining' => 0,
+        'stop_requested' => false,
+        'error' => null,
+    ];
+
+    if (!is_file($file)) {
+        return $default;
+    }
+
+    $raw = @file_get_contents($file);
+    if (!is_string($raw) || trim($raw) === '') {
+        return $default;
+    }
+
+    $data = json_decode($raw, true);
+    if (!is_array($data)) {
+        return $default;
+    }
+
+    $status = array_merge($default, $data);
+
+    // Stale task recovery: if marked 'running' but no heartbeat for > 120s or PID is dead
+    if ($status['status'] === 'running') {
+        $now = time();
+        $updatedAt = (int)($status['updated_at'] ?? 0);
+        $pid = (int)($status['pid'] ?? 0);
+
+        $isDead = false;
+        if ($updatedAt > 0 && ($now - $updatedAt) > 120) {
+            $isDead = true;
+        } elseif ($pid > 0 && function_exists('posix_kill')) {
+            if (!@posix_kill($pid, 0)) {
+                $isDead = true;
+            }
+        }
+
+        if ($isDead) {
+            $status['status'] = 'stopped';
+            $status['error'] = 'Process stopped unexpectedly or heartbeat timed out.';
+            set_background_compression_status($status);
+        }
+    }
+
+    return $status;
+}
+
+function set_background_compression_status(array $data): void {
+    $file = image_compression_task_file();
+    $tmp = $file . '.' . bin2hex(random_bytes(6)) . '.tmp';
+    @file_put_contents($tmp, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+    @rename($tmp, $file);
+}
+
+function start_background_compression_job(): array {
+    $task = get_background_compression_status();
+    if ($task['status'] === 'running') {
+        return [
+            'success' => false,
+            'message' => 'A background compression task is already running (PID ' . ($task['pid'] ?: '?') . ').',
+            'data' => $task,
+        ];
+    }
+
+    $pdo = db();
+    $stats = get_image_compression_stats($pdo);
+    if ($stats['pending_images'] === 0) {
+        return [
+            'success' => false,
+            'message' => 'All images are already compressed. Nothing to do.',
+            'data' => $task,
+        ];
+    }
+
+    $initial = [
+        'status' => 'running',
+        'pid' => 0,
+        'started_at' => time(),
+        'updated_at' => time(),
+        'completed_at' => null,
+        'total' => $stats['pending_images'],
+        'checked' => 0,
+        'compressed' => 0,
+        'optimal' => 0,
+        'skipped' => 0,
+        'failed' => 0,
+        'saved_bytes' => 0,
+        'remaining' => $stats['pending_images'],
+        'stop_requested' => false,
+        'error' => null,
+    ];
+    set_background_compression_status($initial);
+
+    // Identify PHP CLI executable
+    $phpBin = PHP_BINARY;
+    if (str_contains(strtolower($phpBin), 'fpm') || !is_executable($phpBin)) {
+        if (is_executable('/usr/local/bin/php')) {
+            $phpBin = '/usr/local/bin/php';
+        } elseif (is_executable('/usr/bin/php')) {
+            $phpBin = '/usr/bin/php';
+        } else {
+            $phpBin = 'php';
+        }
+    }
+
+    $scriptPath = __DIR__ . '/background-compress.php';
+    $logPath = dirname(image_compression_task_file()) . '/image-compression.log';
+
+    if (stripos(PHP_OS, 'WIN') === 0) {
+        $cmd = 'start /B ' . escapeshellarg($phpBin) . ' ' . escapeshellarg($scriptPath) . ' > ' . escapeshellarg($logPath) . ' 2>&1';
+        @pclose(@popen($cmd, 'r'));
+    } else {
+        $cmd = sprintf('%s %s > %s 2>&1 &', escapeshellarg($phpBin), escapeshellarg($scriptPath), escapeshellarg($logPath));
+        @exec($cmd);
+    }
+
+    usleep(80000); // 80ms to allow script to write PID
+    $task = get_background_compression_status();
+
+    return [
+        'success' => true,
+        'message' => 'Background image optimization started! You can close or navigate away from this page; optimization will continue until all images are compressed.',
+        'data' => $task,
+    ];
+}
+
+function request_stop_background_compression(): array {
+    $task = get_background_compression_status();
+    if ($task['status'] !== 'running') {
+        return [
+            'success' => false,
+            'message' => 'No background compression task is currently running.',
+        ];
+    }
+
+    $task['stop_requested'] = true;
+    set_background_compression_status($task);
+
+    $pid = (int)($task['pid'] ?? 0);
+    if ($pid > 0 && function_exists('posix_kill')) {
+        @posix_kill($pid, 15); // SIGTERM
+    }
+
+    return [
+        'success' => true,
+        'message' => 'Stop signal sent. The background process will stop after finishing its current batch.',
+    ];
+}
+
 function render_image_compression_admin_section(): string {
     $pdo = db();
     $stats = get_image_compression_stats($pdo);
     $tools = $stats['tools'];
+    $task = get_background_compression_status();
 
     $toolsList = [];
     if ($tools['pngquant']['available']) {
@@ -461,39 +634,127 @@ function render_image_compression_admin_section(): string {
 
     $html = '<section class="card settings-section" id="image-compression">';
     $html .= '<h2>Image compression</h2>';
-    $html .= '<p class="muted">Perceptually lossless image compression (TinyPNG-like pngquant, jpegoptim & GD fallback). New uploads are compressed automatically; use the button below to inspect and compress existing or previously failed images.</p>';
+    $html .= '<p class="muted">Perceptually lossless image compression (TinyPNG-like pngquant, jpegoptim & GD fallback). New uploads are compressed automatically; use background optimization to compress all existing or historical images in a single run.</p>';
 
     $html .= '<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin: 16px 0;">';
     $html .= '<div style="padding:12px; background:var(--panel-bg, #f8f9fa); border:1px solid var(--border, #eee); border-radius:8px;">';
     $html .= '<span style="font-size:0.75rem; color:var(--muted); display:block;">Total images</span>';
-    $html .= '<strong style="font-size:1.35rem; font-variant-numeric:tabular-nums;">' . $stats['total_images'] . '</strong>';
+    $html .= '<strong id="img-stat-total" style="font-size:1.35rem; font-variant-numeric:tabular-nums;">' . $stats['total_images'] . '</strong>';
     $html .= '</div>';
 
     $html .= '<div style="padding:12px; background:var(--panel-bg, #f8f9fa); border:1px solid var(--border, #eee); border-radius:8px;">';
     $html .= '<span style="font-size:0.75rem; color:var(--muted); display:block;">Compressed</span>';
-    $html .= '<strong style="font-size:1.35rem; font-variant-numeric:tabular-nums; color:#2e7d32;">' . $stats['compressed_images'] . '</strong>';
+    $html .= '<strong id="img-stat-compressed" style="font-size:1.35rem; font-variant-numeric:tabular-nums; color:#2e7d32;">' . $stats['compressed_images'] . '</strong>';
     $html .= '</div>';
 
     $html .= '<div style="padding:12px; background:var(--panel-bg, #f8f9fa); border:1px solid var(--border, #eee); border-radius:8px;">';
     $html .= '<span style="font-size:0.75rem; color:var(--muted); display:block;">Pending / uncompressed</span>';
-    $html .= '<strong style="font-size:1.35rem; font-variant-numeric:tabular-nums; color:' . ($stats['pending_images'] > 0 ? '#e65100' : 'inherit') . ';">' . $stats['pending_images'] . '</strong>';
+    $html .= '<strong id="img-stat-pending" style="font-size:1.35rem; font-variant-numeric:tabular-nums; color:' . ($stats['pending_images'] > 0 ? '#e65100' : 'inherit') . ';">' . $stats['pending_images'] . '</strong>';
     $html .= '</div>';
 
     $html .= '<div style="padding:12px; background:var(--panel-bg, #f8f9fa); border:1px solid var(--border, #eee); border-radius:8px;">';
     $html .= '<span style="font-size:0.75rem; color:var(--muted); display:block;">Space saved</span>';
-    $html .= '<strong style="font-size:1.35rem; font-variant-numeric:tabular-nums; color:#1976d2;">' . $savedFormatted . '</strong>';
+    $html .= '<strong id="img-stat-saved" style="font-size:1.35rem; font-variant-numeric:tabular-nums; color:#1976d2;">' . $savedFormatted . '</strong>';
     $html .= '</div>';
     $html .= '</div>';
 
     $html .= '<div style="margin: 12px 0; display:flex; gap:8px; flex-wrap:wrap;">' . implode(' ', $toolsList) . '</div>';
 
-    $html .= '<form class="settings-form" method="post" action="' . $base . '/admin/images/compress" style="margin-top:16px;">';
-    $html .= render_hidden_inputs(['csrf' => csrf_token()]);
-    $buttonLabel = $stats['pending_images'] > 0
-        ? ('Check & compress ' . $stats['pending_images'] . ' pending image' . ($stats['pending_images'] > 1 ? 's' : ''))
-        : 'Check & compress all images';
-    $html .= '<button class="button primary" type="submit">' . htmlspecialchars($buttonLabel) . '</button>';
-    $html .= '</form>';
+    // Background Task Status Banner
+    if ($task['status'] === 'running') {
+        $pct = $task['total'] > 0 ? round(($task['checked'] / $task['total']) * 100) : 0;
+        $html .= '<div class="notice" style="margin: 16px 0; padding:16px; background:#e3f2fd; border:1px solid #90caf9; border-radius:8px; color:#0d47a1;">';
+        $html .= '<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">';
+        $html .= '<strong>Continuous background optimization in progress</strong>';
+        if (!empty($task['pid'])) {
+            $html .= '<small style="opacity:0.8;">PID: ' . htmlspecialchars((string)$task['pid']) . '</small>';
+        }
+        $html .= '</div>';
+        $html .= '<progress id="bg-task-progress-bar" value="' . (int)$task['checked'] . '" max="' . max(1, (int)$task['total']) . '" style="width:100%; height:12px; margin: 10px 0; border-radius:4px;"></progress>';
+        $html .= '<p id="bg-task-progress-text" style="margin:4px 0 8px; font-size:0.875rem;">Processed ' . (int)$task['checked'] . ' / ' . (int)$task['total'] . ' (' . $pct . '%) · ' . (int)$task['remaining'] . ' remaining</p>';
+        $html .= '<p style="font-size:0.82rem; margin:0 0 12px; opacity:0.85;">💡 This task is running in the background on the server. You can safely close your browser or navigate away from this page; optimization will continue until complete.</p>';
+        $html .= '<form method="post" action="' . $base . '/admin/images/compress-stop" style="display:inline-block; margin:0;">';
+        $html .= render_hidden_inputs(['csrf' => csrf_token()]);
+        $html .= '<button class="button danger" type="submit">Stop background task</button>';
+        $html .= '</form>';
+        $html .= '</div>';
+
+        // Auto-refresh script for live progress updates while the page is open
+        $html .= '<script>
+(function() {
+    var checkInterval = setInterval(function() {
+        fetch("' . $base . '/admin/images/status", { credentials: "same-origin", headers: { "Accept": "application/json" } })
+        .then(function(r) { return r.json(); })
+        .then(function(res) {
+            var data = res.data || res;
+            var task = data.background_task;
+            if (!task) return;
+            var bar = document.getElementById("bg-task-progress-bar");
+            var txt = document.getElementById("bg-task-progress-text");
+            var pendingEl = document.getElementById("img-stat-pending");
+            var compEl = document.getElementById("img-stat-compressed");
+            var savedEl = document.getElementById("img-stat-saved");
+            if (bar && task.total > 0) {
+                bar.value = task.checked || 0;
+                bar.max = task.total;
+            }
+            if (txt) {
+                var pct = task.total > 0 ? Math.round((task.checked / task.total) * 100) : 0;
+                txt.textContent = "Processed " + (task.checked || 0) + " / " + task.total + " (" + pct + "%) · " + (task.remaining || 0) + " remaining";
+            }
+            if (pendingEl && typeof task.remaining === "number") pendingEl.textContent = task.remaining;
+            if (compEl && typeof data.compressed_images === "number") compEl.textContent = data.compressed_images;
+            if (task.status !== "running") {
+                clearInterval(checkInterval);
+                window.location.reload();
+            }
+        }).catch(function() {});
+    }, 3000);
+})();
+</script>';
+    } elseif ($task['status'] === 'completed') {
+        $html .= '<div style="margin:16px 0; padding:12px; background:#e8f5e9; border:1px solid #c8e6c9; border-radius:8px; color:#2e7d32; font-size:0.875rem;">';
+        $html .= '✓ Last background optimization completed! All ' . (int)$task['checked'] . ' images processed. Space saved: ' . format_bytes((float)$task['saved_bytes']) . '.';
+        $html .= '</div>';
+    } elseif ($task['status'] === 'stopped') {
+        $html .= '<div style="margin:16px 0; padding:12px; background:#fff3e0; border:1px solid #ffe0b2; border-radius:8px; color:#e65100; font-size:0.875rem;">';
+        $html .= '⏸ Background optimization paused/stopped. ' . (int)$task['remaining'] . ' images remaining.';
+        $html .= '</div>';
+    } elseif ($task['status'] === 'failed') {
+        $html .= '<div style="margin:16px 0; padding:12px; background:#ffebee; border:1px solid #ffcdd2; border-radius:8px; color:#b71c1c; font-size:0.875rem;">';
+        $html .= '⚠ Background optimization stopped with error: ' . htmlspecialchars((string)($task['error'] ?? 'Unknown error'));
+        $html .= '</div>';
+    }
+
+    if ($task['status'] !== 'running') {
+        $hasPending = $stats['pending_images'] > 0;
+        $html .= '<div style="margin-top:16px; display:flex; flex-direction:column; gap:12px;">';
+        
+        // Primary action: Continuous background optimization (run detached, close page anytime)
+        $html .= '<form class="settings-form" method="post" action="' . $base . '/admin/images/compress-background" style="margin:0;">';
+        $html .= render_hidden_inputs(['csrf' => csrf_token()]);
+        $bgButtonLabel = $hasPending
+            ? ('Start full background compression (后台一次性全部压缩 ' . $stats['pending_images'] . ' 张，可关闭网页)')
+            : 'All images already optimized';
+        $html .= '<button class="button primary" type="submit" style="background:#2e7d32; border-color:#2e7d32; font-weight:600;"' . ($hasPending ? '' : ' disabled') . '>' . htmlspecialchars($bgButtonLabel) . '</button>';
+        $html .= '<p class="muted" style="margin:4px 0 0; font-size:0.8rem;">Runs detached on the server in the background. You can safely close or navigate away from this page immediately after starting.</p>';
+        $html .= '</form>';
+
+        // Secondary action: Single synchronous batch
+        $html .= '<form class="settings-form" method="post" action="' . $base . '/admin/images/compress" style="margin:4px 0 0; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">';
+        $html .= render_hidden_inputs(['csrf' => csrf_token()]);
+        $html .= '<label style="font-size:0.85rem; color:var(--muted); margin:0;">Batch size: ';
+        $html .= '<select name="limit" class="input" style="width:auto; padding:3px 8px; margin-left:4px;">';
+        $html .= '<option value="100">100 / batch</option>';
+        $html .= '<option value="250">250 / batch</option>';
+        $html .= '<option value="500">500 / batch</option>';
+        $html .= '</select></label>';
+        $html .= '<button class="button" type="submit" style="margin:0;">Check &amp; compress single batch</button>';
+        $html .= '</form>';
+
+        $html .= '</div>';
+    }
+
     $html .= '</section>';
 
     return $html;

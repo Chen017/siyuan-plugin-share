@@ -164,9 +164,14 @@ class AdminShareTests:
         self.assertIn('compressed_images', payload)
         self.assertIn('pending_images', payload)
         self.assertIn('tools', payload)
+        self.assertIn('background_task', payload)
 
         token = re.search(rb'name="csrf" value="([^"]+)"', page)[1].decode()
         resp_code, _, _ = admin.request('/admin/images/compress', {'csrf': token})
         self.assertEqual(resp_code, 302)
         after_page = admin.request('/admin')[2]
         self.assertIn(b'Compression complete', after_page)
+
+        # Test stop endpoint
+        stop_code, _, _ = admin.request('/admin/images/compress-stop', {'csrf': token})
+        self.assertEqual(stop_code, 302)
