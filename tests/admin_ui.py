@@ -1,4 +1,5 @@
 """Website share editing must enforce the same access and revision rules as sync."""
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -147,3 +148,24 @@ class AdminShareTests:
         self.assertNotIn(b'Visitors', page)
         self.assertIn(b'controls.js', page)
         self.assertIn(b'data-confirm-message', self.client.request('/admin')[2])
+
+    def test_admin_image_compression_settings_and_action(self):
+        admin = self.admin()
+        page = admin.request('/admin')[2]
+        self.assertIn(b'id="image-compression"', page)
+        self.assertIn(b'Image compression', page)
+        self.assertIn(b'Check &amp; compress', page)
+
+        code, _, data = admin.request('/admin/images/status')
+        self.assertEqual(code, 200)
+        status = json.loads(data.decode('utf-8'))
+        self.assertIn('total_images', status)
+        self.assertIn('compressed_images', status)
+        self.assertIn('pending_images', status)
+        self.assertIn('tools', status)
+
+        token = re.search(rb'name="csrf" value="([^"]+)"', page)[1].decode()
+        resp_code, _, _ = admin.request('/admin/images/compress', {'csrf': token})
+        self.assertEqual(resp_code, 302)
+        after_page = admin.request('/admin')[2]
+        self.assertIn(b'Compression complete', after_page)

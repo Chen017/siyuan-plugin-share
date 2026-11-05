@@ -22,3 +22,12 @@ Mermaid renders locally. Diagram failures show the source instead of transmittin
 Plugin 0.5.6 restricts authenticated icon fetches to the current SiYuan origin's `/api/` paths and refuses redirects. External icons remain ordinary image links without the SiYuan token. Updating the website does not install the plugin into a SiYuan workspace; install the corresponding plugin package too.
 
 Automatic deployment follows the operator's no-backup policy: it retains neither a rollback image nor a persistent data archive. It pauses writes, compares temporary before/after data fingerprints, checks SQLite integrity and foreign keys, and removes the temporary verification files. A failed preflight resumes the stopped service. Manual backup scripts remain available as an optional operator action.
+
+## Image compression safeguards
+
+Image compression operates on staged assets within the isolated version generation before commit, or via manual batch processing in the administration interface:
+- **Atomicity and fallback**: Optimization only replaces target files in place if the compressed file size is strictly smaller than the original (`--skip-if-larger`). When a compression tool is unavailable, fails, or produces larger output, the original uncompressed file is preserved untouched.
+- **Client hash preservation**: The database retains the client-computed uncompressed SHA-256 hash in `share_assets.asset_hash`. Because the SiYuan plugin compares local asset hashes against the remote snapshot during incremental synchronization, keeping the original hash prevents unchanged images from being repeatedly re-exported or re-uploaded.
+- **Quota synchronization**: When compression reduces attachment sizes, `size_bytes` on `share_assets`, the parent share, and the user's allocated storage are updated to reflect the actual disk usage.
+- **Admin batch optimization**: The administrative interface allows triggering on-demand optimization for uncompressed or previously skipped images in bounded batches, ensuring large archives can be optimized without request timeouts.
+

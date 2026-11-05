@@ -16,10 +16,14 @@ RUN set -eux; \
         curl \
         nginx \
         freetype \
+        jpegoptim \
         libjpeg-turbo \
         libpng \
+        libwebp \
+        libwebp-tools \
         libzip \
         oniguruma \
+        pngquant \
         sqlite-libs \
         zlib; \
     apk add --no-cache --virtual .build-deps \
@@ -27,9 +31,10 @@ RUN set -eux; \
         freetype-dev \
         libjpeg-turbo-dev \
         libpng-dev \
+        libwebp-dev \
         libzip-dev \
         zlib-dev; \
-    docker-php-ext-configure gd --with-freetype --with-jpeg; \
+    docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp; \
     php -r 'foreach (["mbstring", "PDO", "pdo_sqlite"] as $ext) { if (!extension_loaded($ext)) { fwrite(STDERR, "$ext is required in the base image\n"); exit(1); } }'; \
     docker-php-ext-install -j"$(nproc)" gd zip; \
     apk del .build-deps; \

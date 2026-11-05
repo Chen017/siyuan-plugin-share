@@ -58,6 +58,7 @@ require_once __DIR__ . '/database.php';
 require_once __DIR__ . '/github-auth.php';
 require_once __DIR__ . '/storage.php';
 require_once __DIR__ . '/upload-safety.php';
+require_once __DIR__ . '/image-compression.php';
 require_once __DIR__ . '/sync.php';
 require_once __DIR__ . '/markdown.php';
 require_once __DIR__ . '/share-access.php';

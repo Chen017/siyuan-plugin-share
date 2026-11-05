@@ -1086,8 +1086,31 @@ function handle_api(string $path): void {
             }
 
             $assetFiles = [];
+            $processedAssets = [];
             foreach ($manifestEntries as $entry) {
-                $assetFiles[$entry['path']] = $fileWrite->stage($stagingDir . '/' . $entry['path'], $shareId, $entry['path']);
+                $stagedRel = $fileWrite->stage($stagingDir . '/' . $entry['path'], $shareId, $entry['path']);
+                $assetFiles[$entry['path']] = $stagedRel;
+                $fullPath = $config['uploads_dir'] . '/' . $stagedRel;
+                $origSize = (int)$entry['size'];
+                $finalSize = $origSize;
+                $origSizeBytes = $origSize;
+                $compressedAt = null;
+                if (is_file($fullPath) && is_compressible_image_path($entry['path'])) {
+                    $comp = compress_image_file($fullPath);
+                    if ($comp['status'] === 'compressed' || $comp['status'] === 'optimal') {
+                        $finalSize = (int)$comp['compressed_size'];
+                        $origSizeBytes = (int)$comp['original_size'];
+                        $compressedAt = now();
+                    }
+                }
+                $processedAssets[$entry['path']] = [
+                    'doc_id' => $entry['docId'] !== '' ? $entry['docId'] : null,
+                    'file_path' => $stagedRel,
+                    'size_bytes' => $finalSize,
+                    'original_size_bytes' => $origSizeBytes,
+                    'compressed_at' => $compressedAt,
+                    'asset_hash' => normalize_hash_hex($entry['hash'] ?? ''),
+                ];
             }
             if ($uploadMode === 'full') {
                 $insertDoc = $pdo->prepare('INSERT INTO share_docs (share_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, content_hash, meta_hash, created_at, updated_at)
@@ -1121,26 +1144,24 @@ function handle_api(string $path): void {
                     unset($docMarkdown);
                 }
                 if (!empty($manifestEntries)) {
-                    $assetStmt = $pdo->prepare('INSERT OR REPLACE INTO share_assets (share_id, doc_id, asset_path, file_path, size_bytes, asset_hash, created_at)
-                        VALUES (:share_id, :doc_id, :asset_path, :file_path, :size_bytes, :asset_hash, :created_at)');
+                    $assetStmt = $pdo->prepare('INSERT OR REPLACE INTO share_assets (share_id, doc_id, asset_path, file_path, size_bytes, asset_hash, original_size_bytes, compressed_at, created_at)
+                        VALUES (:share_id, :doc_id, :asset_path, :file_path, :size_bytes, :asset_hash, :original_size_bytes, :compressed_at, :created_at)');
                     foreach ($manifestEntries as $entry) {
+                        $p = $processedAssets[$entry['path']];
                         $assetStmt->execute([
                             ':share_id' => $shareId,
-                            ':doc_id' => $entry['docId'] !== '' ? $entry['docId'] : null,
+                            ':doc_id' => $p['doc_id'],
                             ':asset_path' => $entry['path'],
-                            ':file_path' => $assetFiles[$entry['path']],
-                            ':size_bytes' => $entry['size'],
-                            ':asset_hash' => normalize_hash_hex($entry['hash'] ?? ''),
+                            ':file_path' => $p['file_path'],
+                            ':size_bytes' => $p['size_bytes'],
+                            ':asset_hash' => $p['asset_hash'],
+                            ':original_size_bytes' => $p['original_size_bytes'],
+                            ':compressed_at' => $p['compressed_at'],
                             ':created_at' => now(),
                         ]);
                     }
                 }
-                $updateSize = $pdo->prepare('UPDATE shares SET size_bytes = :size_bytes, updated_at = :updated_at WHERE id = :id');
-                $updateSize->execute([
-                    ':size_bytes' => $newShareSize,
-                    ':updated_at' => now(),
-                    ':id' => $shareId,
-                ]);
+                recalculate_share_size($shareId);
             } else {
                 if (!empty($deletedDocIds)) {
                     $placeholders = implode(',', array_fill(0, count($deletedDocIds), '?'));
@@ -1208,16 +1229,19 @@ function handle_api(string $path): void {
                 }
 
                 if (!empty($manifestEntries)) {
-                    $assetStmt = $pdo->prepare('INSERT OR REPLACE INTO share_assets (share_id, doc_id, asset_path, file_path, size_bytes, asset_hash, created_at)
-                        VALUES (:share_id, :doc_id, :asset_path, :file_path, :size_bytes, :asset_hash, :created_at)');
+                    $assetStmt = $pdo->prepare('INSERT OR REPLACE INTO share_assets (share_id, doc_id, asset_path, file_path, size_bytes, asset_hash, original_size_bytes, compressed_at, created_at)
+                        VALUES (:share_id, :doc_id, :asset_path, :file_path, :size_bytes, :asset_hash, :original_size_bytes, :compressed_at, :created_at)');
                     foreach ($manifestEntries as $entry) {
+                        $p = $processedAssets[$entry['path']];
                         $assetStmt->execute([
                             ':share_id' => $shareId,
-                            ':doc_id' => $entry['docId'] !== '' ? $entry['docId'] : null,
+                            ':doc_id' => $p['doc_id'],
                             ':asset_path' => $entry['path'],
-                            ':file_path' => $assetFiles[$entry['path']],
-                            ':size_bytes' => $entry['size'],
-                            ':asset_hash' => normalize_hash_hex($entry['hash'] ?? ''),
+                            ':file_path' => $p['file_path'],
+                            ':size_bytes' => $p['size_bytes'],
+                            ':asset_hash' => $p['asset_hash'],
+                            ':original_size_bytes' => $p['original_size_bytes'],
+                            ':compressed_at' => $p['compressed_at'],
                             ':created_at' => now(),
                         ]);
                     }

@@ -84,6 +84,8 @@ function migrate(PDO $pdo): void {
         file_path TEXT NOT NULL,
         size_bytes INTEGER NOT NULL DEFAULT 0,
         asset_hash TEXT,
+        compressed_at TEXT,
+        original_size_bytes INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         UNIQUE(share_id, asset_path),
         FOREIGN KEY(share_id) REFERENCES shares(id)
@@ -163,6 +165,8 @@ function migrate(PDO $pdo): void {
     ensure_column($pdo, 'share_docs', 'meta_hash', 'TEXT');
     ensure_column($pdo, 'share_assets', 'size_bytes', 'INTEGER NOT NULL DEFAULT 0');
     ensure_column($pdo, 'share_assets', 'asset_hash', 'TEXT');
+    ensure_column($pdo, 'share_assets', 'compressed_at', 'TEXT');
+    ensure_column($pdo, 'share_assets', 'original_size_bytes', 'INTEGER NOT NULL DEFAULT 0');
 
     if (!table_has_column($pdo, 'shares', 'revision') || !table_has_column($pdo, 'share_uploads', 'share_revision')
         || !table_has_column($pdo, 'share_uploads', 'reserved_bytes')) {

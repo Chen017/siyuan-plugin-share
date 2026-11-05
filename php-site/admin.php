@@ -165,6 +165,7 @@ if ($path === '/admin') {
         $content .= '<details><summary>Custom ' . $upper . ' help and example</summary><p>' . ($kind === 'css' ? 'Scope selectors to body.layout-share or body.layout-app. Rules load after the site stylesheet.' : 'JavaScript runs after DOMContentLoaded. It is disabled by default. Use only trusted scripts.') . '</p><pre class="help-code">' . htmlspecialchars($example) . '</pre></details>';
     }
     $content .= '</section><button class="button primary" type="submit">Save settings</button></form></div>';
+    $content .= render_image_compression_admin_section();
     $content .= render_pdf_export_settings();
     $key = (string)($_SESSION['api_key_plain'] ?? '');
     unset($_SESSION['api_key_plain']);
@@ -205,6 +206,34 @@ if ($path === '/admin/pdf-export-settings' && $_SERVER['REQUEST_METHOD'] === 'PO
     try { save_pdf_export_settings($_POST); flash('info', 'PDF export settings saved.'); }
     catch (InvalidArgumentException $error) { flash('error', $error->getMessage()); }
     redirect('/admin#settings');
+}
+
+if ($path === '/admin/images/compress' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_admin();
+    check_csrf();
+    $limit = max(1, min(500, (int)($_POST['limit'] ?? 100)));
+    $result = batch_compress_pending_images(db(), $limit);
+    $msg = sprintf(
+        'Compression complete: %d checked, %d compressed, %d already optimal, %d skipped, %d failed. Saved %s.%s',
+        $result['checked'],
+        $result['compressed'],
+        $result['optimal'],
+        $result['skipped'],
+        $result['failed'],
+        format_bytes((float)$result['saved_bytes']),
+        $result['remaining_pending'] > 0 ? sprintf(' (%d remaining, run again to continue)', $result['remaining_pending']) : ''
+    );
+    flash($result['failed'] > 0 && $result['compressed'] === 0 ? 'error' : 'info', $msg);
+    if (str_contains($_SERVER['HTTP_ACCEPT'] ?? '', 'application/json')) {
+        api_response(200, array_merge($result, ['message' => $msg]));
+    }
+    redirect('/admin#image-compression');
+}
+
+if ($path === '/admin/images/status' && $_SERVER['REQUEST_METHOD'] === 'GET') {
+    require_admin();
+    $stats = get_image_compression_stats(db());
+    api_response(200, $stats);
 }
 
 if (in_array($path, ['/admin/share-delete', '/admin/share-restore', '/admin/share-hard-delete'], true) && $_SERVER['REQUEST_METHOD'] === 'POST') {
