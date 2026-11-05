@@ -16,8 +16,8 @@ $result = ['integrity' => 'ok', 'foreign_key_violations' => count($pdo->query('P
 $queries = [
     'users' => 'SELECT id, username, password_hash, role, disabled, api_key_hash, api_key_prefix, api_key_last4, must_change_password FROM users ORDER BY id',
     'shares' => 'SELECT id, user_id, type, slug, title, doc_id, notebook_id, password_hash, expires_at, deleted_at FROM shares ORDER BY id',
-    'share_docs' => 'SELECT * FROM share_docs ORDER BY id',
-    'share_assets' => 'SELECT * FROM share_assets ORDER BY id',
+    'share_docs' => 'SELECT id, share_id, doc_id, title, icon, hpath, parent_id, sort_index, markdown, sort_order, size_bytes, content_hash, meta_hash, created_at, updated_at FROM share_docs ORDER BY id',
+    'share_assets' => 'SELECT id, share_id, doc_id, asset_path, file_path, size_bytes, asset_hash, created_at FROM share_assets ORDER BY id',
 ];
 if ($coreOnly) {
     $queries['settings'] = "SELECT key,value FROM settings WHERE key IN ('site_base_url','reader_home_url','site_head_html',
