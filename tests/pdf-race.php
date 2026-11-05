@@ -20,7 +20,7 @@ while (true) {
     } catch (RuntimeException $error) {
         if ($error->getCode() !== 429) throw $error;
         // Do not mistake a transient per-IP lease for an exhausted time quota.
-        if ($rateRace && str_contains($error->getMessage(), '已有导出') && microtime(true) < $deadline) {
+        if ($rateRace && (str_contains($error->getMessage(), 'Another export is active') || str_contains($error->getMessage(), '已有导出')) && microtime(true) < $deadline) {
             usleep(10000);
             continue;
         }

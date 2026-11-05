@@ -12,7 +12,7 @@ class PdfReleaseTests:
             command = [self.php_executable, str(Path(__file__).with_name('pdf-race.php')), self.bootstrap_path]
         else:
             self.skipTest('Independent PHP workers require the local CLI')
-        barrier = str(time.time() + 1.5)
+        barrier = str(time.time() + 2.0)
         cookie = getattr(self, 'pdf_worker_cookie', '') if mode in ['rate', 'same-visitor'] else ''
         workers = [subprocess.Popen([*command, str(share['id']), str(i + 1), barrier, mode, cookie],
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE) for i in range(count)]
@@ -28,16 +28,19 @@ class PdfReleaseTests:
         share = self.share()
         self.pdf_visitor(share)
         self.rows("UPDATE settings SET value = '5' WHERE key = 'pdf_export_requests'")
-        for _ in range(3):
+        try:
+            for _ in range(3):
+                self.rows('DELETE FROM pdf_export_events')
+                self.rows('DELETE FROM pdf_export_leases')
+                results = self.pdf_workers(share, 12, 'rate')
+                self.assertEqual(results.count('accepted'), 5, results)
+                self.assertEqual(results.count('limited'), 7, results)
+                self.assertEqual(self.rows('SELECT SUM(doc_count) AS n FROM pdf_export_events')[0]['n'], 5)
+                self.assertEqual(self.rows('SELECT COUNT(*) AS n FROM pdf_export_leases')[0]['n'], 0)
+        finally:
             self.rows('DELETE FROM pdf_export_events')
             self.rows('DELETE FROM pdf_export_leases')
-            results = self.pdf_workers(share, 12, 'rate')
-            self.assertEqual(results.count('accepted'), 5, results)
-            self.assertEqual(results.count('limited'), 7, results)
-            self.assertEqual(self.rows('SELECT SUM(doc_count) AS n FROM pdf_export_events')[0]['n'], 5)
-            self.assertEqual(self.rows('SELECT COUNT(*) AS n FROM pdf_export_leases')[0]['n'], 0)
-        self.rows('DELETE FROM pdf_export_events')
-        self.rows("UPDATE settings SET value = '120' WHERE key = 'pdf_export_requests'")
+            self.rows("UPDATE settings SET value = '120' WHERE key = 'pdf_export_requests'")
 
     def test_pdf_release_parallel_legacy_upgrade_and_admission(self):
         share = self.share()
@@ -45,14 +48,16 @@ class PdfReleaseTests:
         self.rows("DELETE FROM settings WHERE key = 'pdf_export_requests'")
         self.rows("UPDATE settings SET value = '600' WHERE key = 'pdf_export_window_seconds'")
         self.rows("INSERT INTO settings(key, value, updated_at) VALUES ('pdf_export_ip_requests', '10', '2026-01-01'), ('pdf_export_fingerprint_requests', '6', '2026-01-01')")
-        results = self.pdf_workers(share, 12)
-        self.assertEqual(results.count('accepted'), 4, results)
-        self.assertEqual(results.count('limited'), 8, results)
-        values = {row['key']: row['value'] for row in self.rows("SELECT key, value FROM settings WHERE key IN ('pdf_export_requests', 'pdf_export_window_seconds', 'pdf_export_ip_requests', 'pdf_export_fingerprint_requests')")}
-        self.assertEqual(values, {'pdf_export_requests': '6', 'pdf_export_window_seconds': '3600'})
-        self.rows("UPDATE settings SET value = '120' WHERE key = 'pdf_export_requests'")
-        self.rows('DELETE FROM pdf_export_leases')
-        self.rows('DELETE FROM pdf_export_events')
+        try:
+            results = self.pdf_workers(share, 12)
+            self.assertEqual(results.count('accepted'), 4, results)
+            self.assertEqual(results.count('limited'), 8, results)
+            values = {row['key']: row['value'] for row in self.rows("SELECT key, value FROM settings WHERE key IN ('pdf_export_requests', 'pdf_export_window_seconds', 'pdf_export_ip_requests', 'pdf_export_fingerprint_requests')")}
+            self.assertEqual(values, {'pdf_export_requests': '6', 'pdf_export_window_seconds': '3600'})
+        finally:
+            self.rows("UPDATE settings SET value = '120' WHERE key = 'pdf_export_requests'")
+            self.rows('DELETE FROM pdf_export_leases')
+            self.rows('DELETE FROM pdf_export_events')
 
     def test_pdf_release_tree_overflow_and_exact_batch_boundary(self):
         docs = [{'docId': self.name + str(i), 'title': '边界文档' + str(i), 'markdown': 'RELEASE_BOUNDARY_' + str(i),
