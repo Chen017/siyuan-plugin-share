@@ -137,33 +137,49 @@ html,body { margin:0; background:white !important; }
     elif args.pdf_list_guides:
         import pypdfium2 as pdfium
         css = [(root / 'php-site/assets/vendor/github-markdown.min.css').as_uri(),
+               (root / 'php-site/assets/vendor/katex.min.css').as_uri(),
                (root / 'php-site/assets/reader-style.css').as_uri(),
                (root / 'php-site/assets/pdf-export.css').as_uri()]
         links = ''.join('<link rel="stylesheet" href="' + html.escape(url, quote=True) + '">' for url in css)
-        library = html.escape((root / 'php-site/assets/vendor/html2pdf.bundle.min.js').as_uri(), quote=True)
+        scripts = ''.join('<script src="' + html.escape((root / 'php-site/assets' / asset).as_uri(), quote=True)
+                          + '"></script>' for asset in ('vendor/katex.min.js', 'vendor/html2pdf.bundle.min.js', 'pdf-text-layer.js'))
         page = work / 'pdf-list-guides.html'
-        page.write_text('''<!doctype html><html><head><meta charset="utf-8">''' + links + '''
-<script src="''' + library + '''"></script></head><body class="layout-share pdf-export-preview">
+        page.write_text('''<!doctype html><html><head><meta charset="utf-8">''' + links + scripts + '''
+</head><body class="layout-share pdf-export-preview">
 <div id="fixture" class="pdf-document pdf-download-document"><section class="pdf-doc"><div class="markdown-body">
-<ol><li id="parent">TEST parent<ul><li id="child">TEST child<br>Child second line<ul>
-<li id="grandchild">TEST grandchild<br>Grandchild second line</li></ul></li></ul></li>
-<li id="single">Single line</li></ol></div></section><div style="height:40px"></div></div>
+<ol><li id="parent"><p><span data-reference>1</span> Generated and principal ideals.</p>
+<ol><li id="ordered-child"><p><span data-reference>1</span> Let <span data-math="R"></span> be an integral domain.</p>
+<ul style="list-style-type:square"><li id="square"><p><span data-math="Leftarrow"></span>
+<span data-reference>H</span>ere is the first step.<br>The proof continues on the next line.</p></li></ul>
+<ul style="list-style-type:circle"><li id="circle"><span data-math="frac{a}{b}"></span>
+<span data-reference>H</span>ere is the second step.<br>Another line follows.</li></ul>
+</li></ol></li><li id="single">Single line</li></ol></div></section><div style="height:40px"></div></div>
 <pre id="out">pending</pre><script>
 (async () => {
   try {
+    for (const node of document.querySelectorAll('[data-math]')) {
+      const formula = /^[A-Z]$/.test(node.dataset.math) ? node.dataset.math : String.fromCharCode(92) + node.dataset.math;
+      katex.render(formula, node);
+    }
+    await document.fonts.ready;
     let worker=html2pdf().set({margin:[16,14],image:{type:'jpeg',quality:.98},
       jsPDF:{unit:'mm',format:'a4',orientation:'portrait',compress:true},
       pagebreak:{mode:[]},html2canvas:{scale:2,backgroundColor:'#ffffff',useCORS:true,logging:false}})
       .from(document.querySelector('#fixture')).toContainer();
     await worker;
     const container=await worker.get('container'), size=await worker.get('pageSize'), bounds=container.getBoundingClientRect();
+    SPSPdfTextLayer.protectFontMetrics(container);
+    await SPSPdfTextLayer.prepareMathSvg(container);
     const items={};
-    for (const id of ['parent','child','grandchild','single']) {
+    for (const id of ['parent','ordered-child','square','circle','single']) {
       const el=container.querySelector('#'+id), rect=el.getBoundingClientRect(), style=getComputedStyle(el,'::before');
+      const reference=el.querySelector('[data-reference]')?.getBoundingClientRect();
       items[id]={x:rect.left-bounds.left+parseFloat(style.left)+0.5, y:rect.top-bounds.top+parseFloat(style.top),
         height:parseFloat(style.height), itemBottom:rect.bottom-bounds.top,
         left:rect.left-bounds.left, top:rect.top-bounds.top,
-        fontSize:parseFloat(getComputedStyle(el).fontSize), lineHeight:parseFloat(getComputedStyle(el).lineHeight)};
+        fontSize:parseFloat(getComputedStyle(el).fontSize), numbered:el.parentElement.tagName==='OL',
+        reference:reference && {left:reference.left-bounds.left,right:reference.right-bounds.left,
+          top:reference.top-bounds.top,bottom:reference.bottom-bounds.top}};
     }
     worker=worker.toCanvas(); await worker;
     worker=worker.toPdf(); await worker;
@@ -177,7 +193,7 @@ html,body { margin:0; background:white !important; }
         assert match, result[-2000:]
         data = json.loads(html.unescape(match.group(1)))
         assert 'error' not in data, data.get('error')
-        assert all(data['items'][name]['height'] > 10 for name in ('parent', 'child', 'grandchild')), data['items']
+        assert all(item['height'] > 10 for name, item in data['items'].items() if name != 'single'), data['items']
         assert data['items']['single']['height'] == 0, data['items']
         pdf = pdfium.PdfDocument(base64.b64decode(data['pdf']))
         image = pdf[0].render(scale=3).to_pil().convert('RGB')
@@ -186,32 +202,38 @@ html,body { margin:0; background:white !important; }
             return round(14 * 72 / 25.4 * 3 + css_x * scale), round(16 * 72 / 25.4 * 3 + css_y * scale)
         def has_ink(x, y):
             return any(max(image.getpixel((xx, yy))) < 245 for xx in range(x-2, x+3) for yy in range(y-2, y+3))
-        for name in ('parent', 'child', 'grandchild'):
-            item = data['items'][name]
+        for name, item in data['items'].items():
+            if name == 'single':
+                continue
             x, y = pixel(item['x'], item['y'] + item['height'] / 2)
             assert has_ink(x, y), f'{name} guide missing from generated PDF at {(x, y)}'
-            x1, y1 = pixel(item['left'] - 1.8 * item['fontSize'], item['top'])
-            x2, y2 = pixel(item['left'] - .12 * item['fontSize'], item['top'] + item['lineHeight'])
+            ref = item['reference']
+            x1, y1 = pixel(item['left'] - 1.7 * item['fontSize'], min(item['top'], ref['top']))
+            x2, y2 = pixel(item['left'] - .12 * item['fontSize'], ref['bottom'] + 2)
             marker = [(xx, yy) for yy in range(y1, y2) for xx in range(x1, x2)
                       if max(image.getpixel((xx, yy))) < 140]
             assert marker, f'{name} marker missing from generated PDF'
             marker_center = (min(p[0] for p in marker) + max(p[0] for p in marker)) / 2
             assert abs(marker_center - x) <= 3 * scale, f'{name} marker at {marker_center}, guide at {x}'
-            text_x1, _ = pixel(item['left'], item['top'])
-            text_x2, _ = pixel(item['left'] + 2.8 * item['fontSize'], item['top'])
-            letters = [(xx, yy) for yy in range(y1, y2) for xx in range(text_x1, text_x2)
+            text_x1, text_y1 = pixel(ref['left'], ref['top'])
+            text_x2, text_y2 = pixel(ref['right'], ref['bottom'])
+            letters = [(xx, yy) for yy in range(text_y1, text_y2) for xx in range(text_x1, text_x2)
                        if max(image.getpixel((xx, yy))) < 140]
             assert letters, f'{name} text missing from generated PDF'
-            if name == 'parent':
+            if item['numbered']:
                 delta = abs(max(p[1] for p in marker) - max(p[1] for p in letters))
             else:
                 delta = abs((min(p[1] for p in marker) + max(p[1] for p in marker)) / 2
                             - (min(p[1] for p in letters) + max(p[1] for p in letters)) / 2)
-            assert delta <= 3 * scale, f'{name} marker and text differ vertically by {delta} pixels; marker y={min(p[1] for p in marker)}..{max(p[1] for p in marker)}, text y={min(p[1] for p in letters)}..{max(p[1] for p in letters)}'
+            assert delta <= 1.25 * scale, (
+                f'{name} marker and text differ vertically by {delta} pixels; '
+                f'marker y={min(p[1] for p in marker)}..{max(p[1] for p in marker)}, '
+                f'text y={min(p[1] for p in letters)}..{max(p[1] for p in letters)}'
+            )
         item = data['items']['single']
         x, y = pixel(item['x'], item['itemBottom'] + 8)
         assert not has_ink(x, y), 'Single-line item unexpectedly has a guide in the generated PDF'
-        print('PDFium list guides passed: exported nested guides render, and a single-line item has no guide.')
+        print('PDFium list guides passed: nested guides and first-line alignment with paragraphs and inline math.')
     else:
         css = [(root / 'php-site/assets/vendor/github-markdown.min.css').as_uri(),
                (root / 'php-site/assets/reader-style.css').as_uri(),
