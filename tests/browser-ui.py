@@ -12,6 +12,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--browser', required=True)
 parser.add_argument('--svg-url')
 parser.add_argument('--mermaid', action='store_true')
+parser.add_argument('--list-guides', action='store_true')
 parser.add_argument('--screenshot', type=Path)
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
@@ -72,6 +73,35 @@ window.addEventListener('load', async () => {
         result = browser(page.as_uri(), ['--dump-dom'])
         assert 'data-result="pass"' in result, result[-3000:]
         print('Chromium Mermaid passed: flowchart, sequence, Gantt and class diagrams render as SVG.')
+    elif args.list_guides:
+        css = [(root / 'php-site/assets/vendor/github-markdown.min.css').as_uri(),
+               (root / 'php-site/assets/reader-style.css').as_uri()]
+        links = ''.join('<link rel="stylesheet" href="' + html.escape(url, quote=True) + '">' for url in css)
+        page = work / 'list-guides.html'
+        page.write_text('''<!doctype html><html><head><meta charset="utf-8">''' + links + '''
+<style>.sample { width: 320px; } .markdown-body { font-size: 16px; }</style></head>
+<body class="layout-share"><article class="markdown-body sample"><ol>
+<li id="single">Short item</li>
+<li id="parent">Parent<ul><li id="child">Child<ol><li id="grandchild">Grandchild</li></ol></li><li id="sibling">Sibling</li></ul></li>
+<li id="wrapped">A long list item whose words wrap over multiple lines when the available reading width becomes narrow enough to require it.</li>
+</ol><section class="footnotes"><ol><li id="footnote">Footnote</li></ol></section></article>
+<script>
+const guide = id => { const el=document.getElementById(id), s=getComputedStyle(el,'::before'), r=el.getBoundingClientRect();
+  return {height:parseFloat(s.height)||0,width:parseFloat(s.width)||0,top:parseFloat(s.top)||0,itemHeight:r.height,left:r.left,marker:getComputedStyle(el).listStyleType}; };
+const single=guide('single'), parent=guide('parent'), child=guide('child'), grandchild=guide('grandchild'), sibling=guide('sibling'), wrapped=guide('wrapped'), footnote=guide('footnote');
+const longEnough = g => g.height > 16 && Math.abs(g.height + g.top - g.itemHeight + 3.2) < 1;
+let valid=single.height===0 && grandchild.height===0 && sibling.height===0 && longEnough(parent) && longEnough(child) && longEnough(wrapped)
+  && parent.width===1 && child.width===1 && wrapped.width===1 && parent.left<child.left && child.left<grandchild.left
+  && single.marker==='decimal' && child.marker!=='none' && footnote.height===0;
+document.querySelector('.sample').style.width='1400px';
+valid = valid && guide('wrapped').height===0;
+document.body.dataset.result=valid?'pass':'fail';
+document.body.dataset.guides=JSON.stringify({single,parent,child,grandchild,sibling,wrapped,footnote,wide:guide('wrapped')});
+</script></body></html>''', encoding='utf-8')
+        for extra in ([], ['--force-dark-mode']):
+            result = browser(page.as_uri(), ['--window-size=1280,1200', '--dump-dom', *extra])
+            assert 'data-result="pass"' in result, result[-4000:]
+        print('Chromium list guides passed: nested and wrapped items, single lines, reflow, markers and footnotes.')
     else:
         css = [(root / 'php-site/assets/vendor/github-markdown.min.css').as_uri(),
                (root / 'php-site/assets/reader-style.css').as_uri(),

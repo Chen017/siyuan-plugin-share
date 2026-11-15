@@ -1993,6 +1993,22 @@ body.layout-share .markdown-body :where(
   list-style-type: decimal;
 }
 
+/* Continue each list item's marker down through its own content and children. */
+body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-body :is(ul, ol) > li:not(.footnotes li):not(.markdown-footnotes li) {
+  position: relative;
+}
+
+body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-body :is(ul, ol) > li:not(.footnotes li):not(.markdown-footnotes li)::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: -1.15em;
+  top: 1.8em;
+  height: max(0px, calc(100% - 2em));
+  width: 1px;
+  background: var(--border);
+  pointer-events: none;
+}
+
 .share-content .markdown-body,
 .kb-main .markdown-body {
   max-width: 920px;
