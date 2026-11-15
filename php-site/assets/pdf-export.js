@@ -524,9 +524,9 @@
   const addProvenance = async (pdf, section) => {
     const source = new URL(section.dataset.pdfSource, location.origin).href;
     const author = '塵';
-    const rights = '随意传播，禁止售卖';
+    const rights = 'Free to share; not for sale';
     const xml = (value) => value.replace(/[<>&"']/g, (char) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[char]));
-    pdf.setProperties({ author, subject: rights });
+    pdf.setProperties({ author, title: rights, subject: source });
     pdf.addMetadata(`<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:source>${xml(source)}</dc:source><dc:creator><rdf:Seq><rdf:li>${xml(author)}</rdf:li></rdf:Seq></dc:creator><dc:rights><rdf:Alt><rdf:li xml:lang="x-default">${xml(rights)}</rdf:li></rdf:Alt></dc:rights></rdf:Description></rdf:RDF></x:xmpmeta>`, true);
     pdf.addFileToVFS('pdf-provenance.ttf', await loadProvenanceFont());
     pdf.addFont('pdf-provenance.ttf', 'SharePDFHidden', 'normal');

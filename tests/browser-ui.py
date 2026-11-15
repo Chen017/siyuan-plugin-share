@@ -145,8 +145,8 @@ html,body { margin:0; background:white !important; }
         page.write_text('''<!doctype html><html><head><meta charset="utf-8">''' + links + '''
 <script src="''' + library + '''"></script></head><body class="layout-share pdf-export-preview">
 <div id="fixture" class="pdf-document pdf-download-document"><section class="pdf-doc"><div class="markdown-body">
-<ol><li id="parent">Parent item<ul><li id="child">Child first line<br>Child second line<ul>
-<li id="grandchild">Grandchild first line<br>Grandchild second line</li></ul></li></ul></li>
+<ol><li id="parent">TEST parent<ul><li id="child">TEST child<br>Child second line<ul>
+<li id="grandchild">TEST grandchild<br>Grandchild second line</li></ul></li></ul></li>
 <li id="single">Single line</li></ol></div></section><div style="height:40px"></div></div>
 <pre id="out">pending</pre><script>
 (async () => {
@@ -192,11 +192,22 @@ html,body { margin:0; background:white !important; }
             assert has_ink(x, y), f'{name} guide missing from generated PDF at {(x, y)}'
             x1, y1 = pixel(item['left'] - 1.8 * item['fontSize'], item['top'])
             x2, y2 = pixel(item['left'] - .12 * item['fontSize'], item['top'] + item['lineHeight'])
-            marker = [xx for yy in range(y1, y2) for xx in range(x1, x2)
+            marker = [(xx, yy) for yy in range(y1, y2) for xx in range(x1, x2)
                       if max(image.getpixel((xx, yy))) < 140]
             assert marker, f'{name} marker missing from generated PDF'
-            marker_center = (min(marker) + max(marker)) / 2
+            marker_center = (min(p[0] for p in marker) + max(p[0] for p in marker)) / 2
             assert abs(marker_center - x) <= 3 * scale, f'{name} marker at {marker_center}, guide at {x}'
+            text_x1, _ = pixel(item['left'], item['top'])
+            text_x2, _ = pixel(item['left'] + 2.8 * item['fontSize'], item['top'])
+            letters = [(xx, yy) for yy in range(y1, y2) for xx in range(text_x1, text_x2)
+                       if max(image.getpixel((xx, yy))) < 140]
+            assert letters, f'{name} text missing from generated PDF'
+            if name == 'parent':
+                delta = abs(max(p[1] for p in marker) - max(p[1] for p in letters))
+            else:
+                delta = abs((min(p[1] for p in marker) + max(p[1] for p in marker)) / 2
+                            - (min(p[1] for p in letters) + max(p[1] for p in letters)) / 2)
+            assert delta <= 3 * scale, f'{name} marker and text differ vertically by {delta} pixels'
         item = data['items']['single']
         x, y = pixel(item['x'], item['itemBottom'] + 8)
         assert not has_ink(x, y), 'Single-line item unexpectedly has a guide in the generated PDF'

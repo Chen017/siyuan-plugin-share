@@ -107,7 +107,9 @@ const chooseScope = async (page, value) => {
       const raw = bytes.toString('latin1');
       assert.ok(bytes.includes(Buffer.from(`<dc:source>${sources[i]}</dc:source>`)), 'Each file identifies its own source document');
       assert.ok(bytes.includes(Buffer.from('<rdf:li>塵</rdf:li>')), 'XMP records the requested author');
-      assert.ok(bytes.includes(Buffer.from('随意传播，禁止售卖')), 'XMP preserves the exact Chinese rights notice');
+      assert.ok(bytes.includes(Buffer.from('Free to share; not for sale')), 'XMP preserves the English rights notice');
+      assert.ok(raw.includes('/Title (Free to share; not for sale)'), 'PDF title contains the rights notice');
+      assert.ok(raw.includes(`/Subject (${sources[i]})`), 'PDF subject identifies the source document');
       const streams = [...raw.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)].flatMap((match) => {
         try { return [zlib.inflateSync(Buffer.from(match[1], 'latin1')).toString('latin1')]; } catch { return []; }
       });
