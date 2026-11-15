@@ -1,6 +1,8 @@
 """Real Chromium checks for heading hierarchy or an actual SVG attachment URL."""
 import argparse
+import base64
 import html
+import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import re
@@ -13,6 +15,7 @@ parser.add_argument('--browser', required=True)
 parser.add_argument('--svg-url')
 parser.add_argument('--mermaid', action='store_true')
 parser.add_argument('--list-guides', action='store_true')
+parser.add_argument('--pdf-list-guides', action='store_true')
 parser.add_argument('--screenshot', type=Path)
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
@@ -131,6 +134,63 @@ html,body { margin:0; background:white !important; }
             guide_x = ink_center(top + 50, top + 78)
             assert abs(marker_x - guide_x) <= 3, f'{kind} marker at {marker_x}, guide at {guide_x}'
         print('Chromium list guides passed: nested and wrapped items, single lines, reflow, markers and footnotes.')
+    elif args.pdf_list_guides:
+        import pypdfium2 as pdfium
+        css = [(root / 'php-site/assets/vendor/github-markdown.min.css').as_uri(),
+               (root / 'php-site/assets/reader-style.css').as_uri(),
+               (root / 'php-site/assets/pdf-export.css').as_uri()]
+        links = ''.join('<link rel="stylesheet" href="' + html.escape(url, quote=True) + '">' for url in css)
+        library = html.escape((root / 'php-site/assets/vendor/html2pdf.bundle.min.js').as_uri(), quote=True)
+        page = work / 'pdf-list-guides.html'
+        page.write_text('''<!doctype html><html><head><meta charset="utf-8">''' + links + '''
+<script src="''' + library + '''"></script></head><body class="layout-share pdf-export-preview">
+<div id="fixture" class="pdf-document pdf-download-document"><section class="pdf-doc"><div class="markdown-body">
+<ol><li id="parent">Parent item<ul><li id="child">Child first line<br>Child second line</li></ul></li>
+<li id="single">Single line</li></ol></div></section><div style="height:40px"></div></div>
+<pre id="out">pending</pre><script>
+(async () => {
+  try {
+    let worker=html2pdf().set({margin:[16,14],image:{type:'jpeg',quality:.98},
+      jsPDF:{unit:'mm',format:'a4',orientation:'portrait',compress:true},
+      pagebreak:{mode:[]},html2canvas:{scale:2,backgroundColor:'#ffffff',useCORS:true,logging:false}})
+      .from(document.querySelector('#fixture')).toContainer();
+    await worker;
+    const container=await worker.get('container'), size=await worker.get('pageSize'), bounds=container.getBoundingClientRect();
+    const items={};
+    for (const id of ['parent','child','single']) {
+      const el=container.querySelector('#'+id), rect=el.getBoundingClientRect(), style=getComputedStyle(el,'::before');
+      items[id]={x:rect.left-bounds.left+parseFloat(style.left)+0.5, y:rect.top-bounds.top+parseFloat(style.top),
+        height:parseFloat(style.height), itemBottom:rect.bottom-bounds.top};
+    }
+    worker=worker.toCanvas(); await worker;
+    worker=worker.toPdf(); await worker;
+    const pdf=await worker.get('pdf');
+    document.querySelector('#out').textContent=JSON.stringify({items,width:size.inner.px.width,pdf:pdf.output('datauristring').split(',')[1]});
+  } catch (error) { document.querySelector('#out').textContent=JSON.stringify({error:String(error)}); }
+})();
+</script></body></html>''', encoding='utf-8')
+        result = browser(page.as_uri(), ['--force-dark-mode', '--dump-dom'])
+        match = re.search(r'<pre id="out">(.*?)</pre>', result, re.S)
+        assert match, result[-2000:]
+        data = json.loads(html.unescape(match.group(1)))
+        assert 'error' not in data, data.get('error')
+        assert data['items']['parent']['height'] > 10 and data['items']['child']['height'] > 10, data['items']
+        assert data['items']['single']['height'] == 0, data['items']
+        pdf = pdfium.PdfDocument(base64.b64decode(data['pdf']))
+        image = pdf[0].render(scale=3).to_pil().convert('RGB')
+        scale = 182 / data['width'] * 72 / 25.4 * 3
+        def pixel(css_x, css_y):
+            return round(14 * 72 / 25.4 * 3 + css_x * scale), round(16 * 72 / 25.4 * 3 + css_y * scale)
+        def has_ink(x, y):
+            return any(max(image.getpixel((xx, yy))) < 245 for xx in range(x-2, x+3) for yy in range(y-2, y+3))
+        for name in ('parent', 'child'):
+            item = data['items'][name]
+            x, y = pixel(item['x'], item['y'] + item['height'] / 2)
+            assert has_ink(x, y), f'{name} guide missing from generated PDF at {(x, y)}'
+        item = data['items']['single']
+        x, y = pixel(item['x'], item['itemBottom'] + 8)
+        assert not has_ink(x, y), 'Single-line item unexpectedly has a guide in the generated PDF'
+        print('PDFium list guides passed: exported nested guides render, and a single-line item has no guide.')
     else:
         css = [(root / 'php-site/assets/vendor/github-markdown.min.css').as_uri(),
                (root / 'php-site/assets/reader-style.css').as_uri(),

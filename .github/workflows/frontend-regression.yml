@@ -57,3 +57,4 @@ jobs:
           python -m pip install --only-binary=:all: pypdfium2==5.14.0
           NODE_PATH="$RUNNER_TEMP/reader-test/node_modules" node tests/pdf-text-layer.cjs "$RUNNER_TEMP/pdf-selection"
           python tests/pdf-text-layer.py "$RUNNER_TEMP/pdf-selection"
+          python tests/browser-ui.py --browser "$(command -v google-chrome)" --pdf-list-guides
