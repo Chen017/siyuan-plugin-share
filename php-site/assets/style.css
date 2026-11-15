@@ -2001,7 +2001,7 @@ body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-b
 body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-body :is(ul, ol) > li:not(.footnotes li):not(.markdown-footnotes li)::before {
   content: '';
   position: absolute;
-  inset-inline-start: -1.15em;
+  inset-inline-start: -.75em;
   top: 1.8em;
   height: max(0px, calc(100% - 2em));
   width: 1px;

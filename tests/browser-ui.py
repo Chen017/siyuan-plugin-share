@@ -101,6 +101,35 @@ document.body.dataset.guides=JSON.stringify({single,parent,child,grandchild,sibl
         for extra in ([], ['--force-dark-mode']):
             result = browser(page.as_uri(), ['--window-size=1280,1200', '--dump-dom', *extra])
             assert 'data-result="pass"' in result, result[-4000:]
+        # Check the actual painted marker against the guide, rather than only
+        # measuring list-item boxes (which do not include outside markers).
+        from PIL import Image
+        alignment = work / 'list-alignment.html'
+        alignment.write_text('''<!doctype html><html><head><meta charset="utf-8">''' + links + '''
+<style>
+html,body { margin:0; background:white !important; }
+.fixture { position:absolute; left:100px; width:300px; font:24px/1.8 Arial,sans-serif !important; }
+#ordered { top:20px; } #unordered { top:150px; }
+.fixture li { color:transparent; }
+.fixture li::marker { color:black; }
+.fixture li::before { background:black !important; }
+#unordered ul { list-style-type:square; }
+</style></head><body class="layout-share">
+<article id="ordered" class="markdown-body fixture"><ol><li>First<br>Second</li></ol></article>
+<article id="unordered" class="markdown-body fixture"><ul><li>First<br>Second</li></ul></article>
+</body></html>''', encoding='utf-8')
+        shot = work / 'list-alignment.png'
+        browser(alignment.as_uri(), ['--window-size=500,400', '--hide-scrollbars', '--screenshot=' + str(shot)])
+        image = Image.open(shot).convert('RGB')
+        def ink_center(y1, y2):
+            xs = [x for y in range(y1, y2) for x in range(80, 148)
+                  if max(image.getpixel((x, y))) < 160]
+            assert xs, f'No marker or guide pixels found at y={y1}..{y2}'
+            return (min(xs) + max(xs)) / 2
+        for top, kind in ((20, 'number'), (150, 'square bullet')):
+            marker_x = ink_center(top, top + 43)
+            guide_x = ink_center(top + 50, top + 78)
+            assert abs(marker_x - guide_x) <= 3, f'{kind} marker at {marker_x}, guide at {guide_x}'
         print('Chromium list guides passed: nested and wrapped items, single lines, reflow, markers and footnotes.')
     else:
         css = [(root / 'php-site/assets/vendor/github-markdown.min.css').as_uri(),
