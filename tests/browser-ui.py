@@ -160,7 +160,9 @@ html,body { margin:0; background:white !important; }
     for (const id of ['parent','child','single']) {
       const el=container.querySelector('#'+id), rect=el.getBoundingClientRect(), style=getComputedStyle(el,'::before');
       items[id]={x:rect.left-bounds.left+parseFloat(style.left)+0.5, y:rect.top-bounds.top+parseFloat(style.top),
-        height:parseFloat(style.height), itemBottom:rect.bottom-bounds.top};
+        height:parseFloat(style.height), itemBottom:rect.bottom-bounds.top,
+        left:rect.left-bounds.left, top:rect.top-bounds.top,
+        fontSize:parseFloat(getComputedStyle(el).fontSize), lineHeight:parseFloat(getComputedStyle(el).lineHeight)};
     }
     worker=worker.toCanvas(); await worker;
     worker=worker.toPdf(); await worker;
@@ -187,6 +189,13 @@ html,body { margin:0; background:white !important; }
             item = data['items'][name]
             x, y = pixel(item['x'], item['y'] + item['height'] / 2)
             assert has_ink(x, y), f'{name} guide missing from generated PDF at {(x, y)}'
+            x1, y1 = pixel(item['left'] - 1.8 * item['fontSize'], item['top'])
+            x2, y2 = pixel(item['left'] - .12 * item['fontSize'], item['top'] + item['lineHeight'])
+            marker = [xx for yy in range(y1, y2) for xx in range(x1, x2)
+                      if max(image.getpixel((xx, yy))) < 140]
+            assert marker, f'{name} marker missing from generated PDF'
+            marker_center = (min(marker) + max(marker)) / 2
+            assert abs(marker_center - x) <= 3 * scale, f'{name} marker at {marker_center}, guide at {x}'
         item = data['items']['single']
         x, y = pixel(item['x'], item['itemBottom'] + 8)
         assert not has_ink(x, y), 'Single-line item unexpectedly has a guide in the generated PDF'
