@@ -60,6 +60,10 @@ body.pdf-export-embedded { margin: 0 !important; padding: 0 !important; min-heig
 .pdf-download-document { width: 182mm !important; max-width: none !important; padding: 0 !important; margin: 0 !important; background: white; }
 .pdf-download-document .pdf-doc { margin: 0; padding: 0; border: 0; }
 .pdf-download-document .markdown-body { display: flow-root; font-size: 11pt; line-height: 1.65; }
+/* html2canvas paints unordered markers closer to the text than the browser. */
+body.layout-share.pdf-export-preview .pdf-download-document .markdown-body ul > li:not(.footnotes li):not(.markdown-footnotes li)::before {
+  inset-inline-start: -.45em;
+}
 /* Canvas cloning materializes clearfix pseudo-elements, changing first/last
    child margins and cutting off the final paragraph. flow-root clears floats. */
 .pdf-download-document .markdown-body::before,

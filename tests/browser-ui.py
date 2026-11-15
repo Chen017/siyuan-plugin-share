@@ -145,7 +145,8 @@ html,body { margin:0; background:white !important; }
         page.write_text('''<!doctype html><html><head><meta charset="utf-8">''' + links + '''
 <script src="''' + library + '''"></script></head><body class="layout-share pdf-export-preview">
 <div id="fixture" class="pdf-document pdf-download-document"><section class="pdf-doc"><div class="markdown-body">
-<ol><li id="parent">Parent item<ul><li id="child">Child first line<br>Child second line</li></ul></li>
+<ol><li id="parent">Parent item<ul><li id="child">Child first line<br>Child second line<ul>
+<li id="grandchild">Grandchild first line<br>Grandchild second line</li></ul></li></ul></li>
 <li id="single">Single line</li></ol></div></section><div style="height:40px"></div></div>
 <pre id="out">pending</pre><script>
 (async () => {
@@ -157,7 +158,7 @@ html,body { margin:0; background:white !important; }
     await worker;
     const container=await worker.get('container'), size=await worker.get('pageSize'), bounds=container.getBoundingClientRect();
     const items={};
-    for (const id of ['parent','child','single']) {
+    for (const id of ['parent','child','grandchild','single']) {
       const el=container.querySelector('#'+id), rect=el.getBoundingClientRect(), style=getComputedStyle(el,'::before');
       items[id]={x:rect.left-bounds.left+parseFloat(style.left)+0.5, y:rect.top-bounds.top+parseFloat(style.top),
         height:parseFloat(style.height), itemBottom:rect.bottom-bounds.top,
@@ -176,7 +177,7 @@ html,body { margin:0; background:white !important; }
         assert match, result[-2000:]
         data = json.loads(html.unescape(match.group(1)))
         assert 'error' not in data, data.get('error')
-        assert data['items']['parent']['height'] > 10 and data['items']['child']['height'] > 10, data['items']
+        assert all(data['items'][name]['height'] > 10 for name in ('parent', 'child', 'grandchild')), data['items']
         assert data['items']['single']['height'] == 0, data['items']
         pdf = pdfium.PdfDocument(base64.b64decode(data['pdf']))
         image = pdf[0].render(scale=3).to_pil().convert('RGB')
@@ -185,7 +186,7 @@ html,body { margin:0; background:white !important; }
             return round(14 * 72 / 25.4 * 3 + css_x * scale), round(16 * 72 / 25.4 * 3 + css_y * scale)
         def has_ink(x, y):
             return any(max(image.getpixel((xx, yy))) < 245 for xx in range(x-2, x+3) for yy in range(y-2, y+3))
-        for name in ('parent', 'child'):
+        for name in ('parent', 'child', 'grandchild'):
             item = data['items'][name]
             x, y = pixel(item['x'], item['y'] + item['height'] / 2)
             assert has_ink(x, y), f'{name} guide missing from generated PDF at {(x, y)}'
