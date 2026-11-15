@@ -2,8 +2,8 @@
 
 - Package: `html2pdf.js@0.14.0`, from the upstream npm release.
 - Project: https://github.com/eKoopmans/html2pdf.js
-- Vendored file: `html2pdf.bundle.min.js` (946358 bytes), locally patched as described below.
-- SHA256: `88cce464dc24cdf7be7fdfea1d6674011bb00652e4f3c7d1b9d62a44b585958a`.
+- Vendored file: `html2pdf.bundle.min.js` (946379 bytes), locally patched as described below.
+- SHA256: `cfa55a322aa3cc73aedf3166f021f71803e0a033553c60e29e6ba8fe7569e9a3`.
 - npm tarball integrity: `sha512-yvNJgE/8yru2UeGflkPdjW8YEY+nDH5X7/2WG4uiuSCwYiCp8PZ8EKNiTAa6HxJ1NjC51fZSIEq6xld5CADKBQ==`.
 - MIT and bundled dependency notices: `html2pdf.LICENSE.txt`.
 - Install/audit performed with lifecycle scripts disabled on 2026-10-26; npm audit reported no vulnerabilities for the resolved dependency tree.
