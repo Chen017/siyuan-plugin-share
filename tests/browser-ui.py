@@ -207,7 +207,7 @@ html,body { margin:0; background:white !important; }
             else:
                 delta = abs((min(p[1] for p in marker) + max(p[1] for p in marker)) / 2
                             - (min(p[1] for p in letters) + max(p[1] for p in letters)) / 2)
-            assert delta <= 3 * scale, f'{name} marker and text differ vertically by {delta} pixels'
+            assert delta <= 3 * scale, f'{name} marker and text differ vertically by {delta} pixels; marker y={min(p[1] for p in marker)}..{max(p[1] for p in marker)}, text y={min(p[1] for p in letters)}..{max(p[1] for p in letters)}'
         item = data['items']['single']
         x, y = pixel(item['x'], item['itemBottom'] + 8)
         assert not has_ink(x, y), 'Single-line item unexpectedly has a guide in the generated PDF'
