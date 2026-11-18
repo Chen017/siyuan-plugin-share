@@ -59,6 +59,38 @@ const assets = path.join(__dirname, '../php-site/assets');
       }
     }
 
+    // Multiple SiYuan images in the same Markdown paragraph must remain on one row.
+    const inlinePage = await browser.newPage({viewport: {width: 1000, height: 800}});
+    const galleryImage = `<img src="${pixel}" style="width: 170px; height: 110px">`;
+    const galleryLink = `<a href="#photo"><img src="${pixel}" style="width: 170px; height: 110px"></a>`;
+    const galleryRow = [galleryImage, galleryLink, galleryImage].join(' ');
+    const gallerySource = [galleryRow, galleryRow].join('\\n\\n');
+    await inlinePage.setContent(`<body class="layout-share"><div class="markdown-body" data-md-id="gallery"></div><textarea class="markdown-source" data-md-id="gallery">${gallerySource.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</textarea></body>`);
+    await inlinePage.addStyleTag({path: path.join(assets, 'style.css')});
+    await inlinePage.addStyleTag({content: '.markdown-body { width: 600px; }'});
+    await inlinePage.addScriptTag({path: path.join(assets, 'vendor/markdown-it.min.js')});
+    await inlinePage.addScriptTag({path: path.join(assets, 'app.js')});
+    await inlinePage.locator('.markdown-body p img').first().waitFor();
+    await inlinePage.waitForFunction(() => document.querySelectorAll('.markdown-body p img').length === 6);
+    const galleryPositions = await inlinePage.locator('.markdown-body p img').evaluateAll(images =>
+      images.map(img => ({top: img.getBoundingClientRect().top, left: img.getBoundingClientRect().left, display: getComputedStyle(img).display}))
+    );
+    assert(galleryPositions.every(image => image.display === 'inline-block'), 'Paragraph images remain inline-block, including linked images');
+    for (const rowStart of [0, 3]) {
+      const row = galleryPositions.slice(rowStart, rowStart + 3);
+      assert(row.every(image => Math.abs(image.top - row[0].top) < 1), `Three images stay on one row (row ${rowStart / 3 + 1})`);
+      assert(row[0].left < row[1].left && row[1].left < row[2].left, 'Images retain their left-to-right order');
+    }
+    assert(galleryPositions[3].top > galleryPositions[0].top, 'Separate Markdown paragraphs remain separate rows');
+    await inlinePage.setViewportSize({width: 320, height: 800});
+    await inlinePage.locator('.markdown-body').evaluate(el => { el.style.width = '260px'; });
+    const mobileGallery = await inlinePage.locator('.markdown-body p img').evaluateAll(images =>
+      images.slice(0, 3).map(img => ({top: img.getBoundingClientRect().top, right: img.getBoundingClientRect().right}))
+    );
+    assert(mobileGallery[1].top > mobileGallery[0].top, 'Images wrap on narrow screens');
+    assert(mobileGallery.every(image => image.right <= 320), 'Images do not overflow the mobile viewport');
+    await inlinePage.close();
+
     const svgPage = await browser.newPage({viewport: {width: 390, height: 800}});
     await svgPage.route('https://reader.test/**', route => route.fulfill({
       status: 200, contentType: 'image/svg+xml',
