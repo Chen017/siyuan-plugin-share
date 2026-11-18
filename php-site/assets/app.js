@@ -4047,6 +4047,19 @@ const initImageViewer = () => {
       });
     };
 
+    // SiYuan may HTML-encode comparison and alignment characters when exporting math.
+    // Decode only these entities inside a math token, never the surrounding Markdown/HTML.
+    const decodeMathEntities = (source) =>
+      String(source || "").replace(/&(lt|gt|amp|#(?:\d+|x[\da-f]+));/gi, (match, entity) => {
+        const value = entity.toLowerCase();
+        if (value === "lt") return "<";
+        if (value === "gt") return ">";
+        if (value === "amp") return "&";
+        const code = value[1] === "x"
+          ? Number.parseInt(value.slice(2), 16)
+          : Number.parseInt(value.slice(1), 10);
+        return code === 60 ? "<" : code === 62 ? ">" : code === 38 ? "&" : match;
+      });
     const trustedMath = new Map();
     let mathSequence = 0;
     const mathPrefix = `sps-math-${Array.from(crypto.getRandomValues(new Uint32Array(4)), value => value.toString(16)).join('-')}-`;
@@ -4055,7 +4068,7 @@ const initImageViewer = () => {
 
       const renderKatex = (source, displayMode) => {
         try {
-          const output = window.katex.renderToString(String(source || ""), {
+          const output = window.katex.renderToString(decodeMathEntities(source), {
             trust: false, output: "htmlAndMathml",
             displayMode,
             throwOnError: false,

@@ -184,6 +184,40 @@ async function page(raw, {failMermaid = false, slowGraphviz = false} = {}) {
     assert(curlyMath.w.document.querySelector('.markdown-source').value.includes('cases'),'The original formula source remains intact');
   } finally { curlyMath.close(); }
 
+  // SiYuan's exported Markdown may contain HTML entities inside TeX tokens.
+  // Test the full Markdown-it -> KaTeX -> sanitizer path, without touching prose/code.
+  const entityMathSource = [
+    String.raw`$\frac{\partial^2 U}{\partial x^2}&lt;0$`,
+    String.raw`$\frac{\partial^2 U}{\partial x^2}&gt;0$`,
+    String.raw`$a&#60;b$ and $c&#x3E;d$`,
+    String.raw`$$\begin{aligned}a &amp;= b \\ c &amp;= d\end{aligned}$$`,
+    String.raw`$$\begin{aligned}p &#38;= q \\ r &#x26;= s\end{aligned}$$`,
+    String.raw`$x<y$ and $x>y$`,
+    String.raw`$\text{&lt;b&gt;}$`,
+    'Outside math: &lt; is ordinary Markdown, while `&lt;` is literal code.',
+  ].join('\n\n');
+  const entityMath = await page(entityMathSource);
+  try {
+    const body = entityMath.w.document.querySelector('.markdown-body');
+    const formulas = Array.from(body.querySelectorAll('.katex annotation'), el => el.textContent);
+    const expected = [
+      String.raw`\frac{\partial^2 U}{\partial x^2}<0`,
+      String.raw`\frac{\partial^2 U}{\partial x^2}>0`,
+      'a<b', 'c>d',
+      String.raw`\begin{aligned}a &= b \\ c &= d\end{aligned}`,
+      String.raw`\begin{aligned}p &= q \\ r &= s\end{aligned}`,
+      'x<y', 'x>y',
+      String.raw`\text{<b>}`,
+    ];
+    assert.deepEqual(formulas, expected, 'Entities are decoded only for KaTeX formula tokens');
+    assert.equal(body.querySelectorAll('.katex-error').length, 0, 'Escaped comparisons do not cause red KaTeX errors');
+    assert.equal(body.querySelectorAll('.katex-block').length, 2, 'Both aligned block formulas render');
+    assert.equal(body.querySelectorAll('b').length, 0, 'Formula content cannot inject HTML tags');
+    assert.equal(body.querySelector('code').textContent, '&lt;', 'Code outside math keeps literal HTML entities');
+    assert.equal(entityMath.w.document.querySelector('.markdown-source').value, entityMathSource, 'Original Markdown source remains unchanged');
+    assert.deepEqual(entityMath.requests, [], 'Simple math does not load diagram libraries');
+    assert.equal(entityMath.errors.length, 0, String(entityMath.errors));
+  } finally { entityMath.close(); }
   const images = await page([
     '<img src="/assets/sized.png" style="width: 400px; height: 300px" onerror="alert(1)">',
     '<img src="/assets/width.png" style="width: 280px">',
