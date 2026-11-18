@@ -64,7 +64,7 @@ const assets = path.join(__dirname, '../php-site/assets');
     const galleryImage = `<img src="${pixel}" style="width: 170px; height: 110px">`;
     const galleryLink = `<a href="#photo"><img src="${pixel}" style="width: 170px; height: 110px"></a>`;
     const galleryRow = [galleryImage, galleryLink, galleryImage].join(' ');
-    const gallerySource = [galleryRow, galleryRow].join('\\n\\n');
+    const gallerySource = [galleryRow, galleryRow].join('\n\n');
     await inlinePage.setContent(`<body class="layout-share"><div class="markdown-body" data-md-id="gallery"></div><textarea class="markdown-source" data-md-id="gallery">${gallerySource.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</textarea></body>`);
     await inlinePage.addStyleTag({path: path.join(assets, 'style.css')});
     await inlinePage.addStyleTag({content: '.markdown-body { width: 600px; }'});
