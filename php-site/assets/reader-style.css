@@ -2461,6 +2461,15 @@ body.layout-share .markdown-body img:not([data-sps-sized-image]) {
   margin: 0;
 }
 
+
+/* Preserve SiYuan's inline image layout instead of forcing images into separate centered rows. */
+body.layout-share .markdown-body :is(p, li) > img:not(.sps-emoji),
+body.layout-share .markdown-body :is(p, li) > a > img:not(.sps-emoji) {
+  display: inline-block;
+  vertical-align: top;
+  margin: 4px 8px 4px 0;
+}
+
 .markdown-body figure {
   margin: 12px auto;
   text-align: center;
