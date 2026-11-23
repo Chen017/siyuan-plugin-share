@@ -92,7 +92,7 @@ http {
     }
 
     # OAuth authorization codes in callback query strings must not enter access logs.
-    map $request_uri $log_access { default 1; ~^/auth/github/callback 0; }
+    map $request_uri $log_access { default 1; ~^/auth/github/callback 0; ~^/oauth/ 0; }
     access_log /var/log/nginx/access.log combined if=$log_access;
 
     include /etc/nginx/conf.d/*.conf;

@@ -49,6 +49,7 @@ jobs:
           SIYUAN_BROWSER_EXECUTABLE="$chrome" \
           SIYUAN_PLAYWRIGHT_MODULE="$RUNNER_TEMP/browser-test/node_modules/playwright" \
           python3 tests/run.py --docker siyuan-share:php83-test --browser
+          python3 tests/mcp.py --docker siyuan-share:php83-test
       - name: Verify consistent backup and restoration using disposable data
         run: |
           bash -n scripts/*.sh backup-volumes.sh tests/backup-fixture.sh

@@ -70,6 +70,18 @@ Preserve `php-site/storage/`, `php-site/uploads/` and `php-site/config.php` when
 
 The private GitHub OAuth configuration lives outside the project directory and is not included by that backup script. Store it separately and securely, and verify the authentication mode and read-only mount after restoring.
 
+### Connect Gemini (Read-only MCP)
+
+Note provides an optional read-only Model Context Protocol (MCP) server over OAuth 2.1 at `/mcp` (disabled by default) for Gemini custom apps and other standard Streamable HTTP MCP clients.
+
+1. Open **Site settings** (`/admin`) and expand **AI connection (MCP)**.
+2. Enable **Enable read-only MCP server** (and temporarily enable **Redirect URI learning mode** for first-time setup).
+3. Create an OAuth client (for example `Gemini`) and copy the generated **Client ID** and one-time **Client Secret**.
+4. In Gemini (**Settings -> Connected Apps -> Custom**), enter `https://<your-domain>/mcp` along with the Client ID and Client Secret.
+5. Approve the captured redirect URI in Site settings, complete OAuth consent, and then disable learning mode and debug logs.
+
+Only public, non-expired, non-password-protected shares are exposed through MCP; every tool call verifies visibility in real time.
+
 ### Develop & verify
 
 The plugin has no build step; the server and reader live in `php-site/`. The [maintenance guide](docs/MAINTENANCE.md) describes the project structure, development dependencies, test commands, CI/CD, releases and troubleshooting. See the [PDF guide](docs/GUEST_PDF_EXPORT.md) for export behavior and limits, and the [UI notes](docs/UI_REFINEMENT.md) for interaction and accessibility decisions.

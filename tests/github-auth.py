@@ -112,6 +112,16 @@ with tempfile.TemporaryDirectory(prefix='siyuan-oauth-') as temp:
         assert request('/dashboard', old_cookie=password_cookie)[1] == '/login'
         cookie = github_cookie
         assert request('/dashboard')[0] == 200
+        db.execute("INSERT OR REPLACE INTO settings(key,value,updated_at) VALUES ('mcp_enabled','1',datetime('now'))")
+        db.execute("INSERT INTO oauth_clients(client_id,secret_hash,name,redirect_uris_json,require_pkce,created_at) VALUES ('gh_ret_cid','hash','Gemini','[\"https://oauth-redirect.googleusercontent.com/callback\"]',1,datetime('now'))")
+        db.commit()
+        cookie = ''
+        ret_target = '/oauth/authorize?response_type=code&client_id=gh_ret_cid&redirect_uri=https://oauth-redirect.googleusercontent.com/callback&code_challenge=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&code_challenge_method=S256'
+        assert request(ret_target)[:2] == (302, '/login')
+        state = begin()
+        assert callback(state)[:2] == (302, ret_target)
+        assert request('/dashboard')[0] == 200
+        cookie = github_cookie
         status, _, page = request('/login', old_cookie='')
         assert status == 200 and 'name="password"' not in page
         csrf = re.search(r'name="csrf" value="([^"]+)', page)

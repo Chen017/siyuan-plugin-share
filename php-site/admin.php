@@ -22,11 +22,19 @@ if ($path === '/login') {
             flash('error', 'Invalid username or password.');
             redirect('/login');
         }
+        $returnTo = is_string($_SESSION['oauth_return_to'] ?? null) ? $_SESSION['oauth_return_to'] : null;
+        unset($_SESSION['oauth_return_to']);
         session_regenerate_id(true);
         unset($_SESSION['auth_method'], $_SESSION['github_session']);
         $_SESSION['user_id'] = $user['id'];
         $_SESSION['password_hash'] = $user['password_hash'];
-        redirect((int)$user['must_change_password'] === 1 ? '/account' : '/dashboard');
+        if ((int)$user['must_change_password'] === 1) {
+            redirect('/account');
+        }
+        if (mcp_is_safe_oauth_return_to($returnTo)) {
+            redirect($returnTo);
+        }
+        redirect('/dashboard');
     }
     $content = '<div class="auth-card"><h1>Sign in</h1><p class="auth-description">Manage your shared notes.</p>';
     if ($error = flash('error')) $content .= '<p class="flash error" role="alert">' . htmlspecialchars($error) . '</p>';
@@ -174,6 +182,7 @@ if ($path === '/admin') {
     else $content .= '<p class="muted">' . (!empty($user['api_key_last4']) ? 'Connected · key ending ' . htmlspecialchars((string)$user['api_key_last4']) : 'No plugin connection yet') . '</p>';
     $confirm = !empty($user['api_key_last4']) ? ' data-confirm-message="Replace the connection key? Update it in your SiYuan plugin to reconnect."' : '';
     $content .= '<form method="post" action="' . $base . '/api-key/rotate"' . $confirm . '>' . render_hidden_inputs(['csrf' => csrf_token()]) . '<button class="button" type="submit">' . (!empty($user['api_key_last4']) ? 'Replace connection key' : 'Connect plugin') . '</button></form></details>';
+    $content .= render_mcp_admin_section();
 
     render_page('Site settings', $content, $user, '', ['nav' => 'admin-settings']);
 }
@@ -198,6 +207,13 @@ if ($path === '/admin/settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         'site_custom_js_enabled' => isset($_POST['site_custom_js_enabled']) ? '1' : '0'] as $key => $value) set_setting($key, $value);
     flash('info', 'Site settings saved.');
     redirect('/admin#settings');
+}
+
+if (str_starts_with($path, '/admin/mcp/') && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $user = require_admin();
+    if (handle_mcp_admin_post($path, $user)) {
+        exit;
+    }
 }
 
 if ($path === '/admin/pdf-export-settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {

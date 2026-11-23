@@ -56,6 +56,7 @@ function migrate(PDO $pdo): void {
     );');
 
     pdf_export_migrate($pdo);
+    mcp_oauth_migrate($pdo);
 
     $pdo->exec('CREATE TABLE IF NOT EXISTS share_docs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -236,6 +237,7 @@ function seed_default_settings(PDO $pdo): void {
     ensure_setting($pdo, 'site_custom_js_enabled', '0');
     ensure_setting($pdo, 'site_custom_js', '');
     seed_pdf_export_settings($pdo);
+    mcp_seed_default_settings($pdo);
 }
 
 function seed_default_admin(PDO $pdo): void {

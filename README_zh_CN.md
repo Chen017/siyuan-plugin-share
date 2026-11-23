@@ -70,6 +70,18 @@ docker compose ps
 
 GitHub OAuth 私有配置位于上述项目目录之外，备份脚本不包含它；需要另行安全保存，并在恢复后检查认证模式和只读挂载。
 
+### 连接 Gemini（MCP 只读服务）
+
+Note 在 `/mcp` 提供可选的 OAuth 2.1 只读 Model Context Protocol（MCP）服务端（默认关闭），用于接入 Gemini 自定义应用及其他标准 Streamable HTTP MCP 客户端。
+
+1. 登录后台 **Site settings**（`/admin`），展开 **AI connection (MCP)** 区块。
+2. 勾选开启 **Enable read-only MCP server**（首次配置时可临时开启 **Redirect URI learning mode**）。
+3. 创建 OAuth 客户端（例如 `Gemini`），立即复制 **Client ID** 与仅显示一次的 **Client Secret**。
+4. 在 Gemini（**设置 → 关联应用 → 自定义**）中填写 `https://<你的域名>/mcp` 以及客户端 ID 和密钥。
+5. 首次连接触发回调拦截后，回到后台核对域名并一键放行回调地址，再次连接完成只读授权，随后关闭学习模式与调试日志。
+
+MCP 仅暴露公开、未过期且未设密码的分享，并在每次工具调用时实时校验权限。
+
 ### 开发与验证
 
 思源插件无需构建；服务端和阅读器位于 `php-site/`。[维护指南](docs/MAINTENANCE.md)记录了项目结构、开发依赖、测试命令、CI/CD、发布与故障排查；[PDF 指南](docs/GUEST_PDF_EXPORT.md)说明导出行为和限制，[界面记录](docs/UI_REFINEMENT.md)记录交互与无障碍设计。

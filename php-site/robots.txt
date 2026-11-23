@@ -6,3 +6,5 @@ Disallow: /account
 Disallow: /login
 Disallow: /register
 Disallow: /logout
+Disallow: /mcp
+Disallow: /oauth/

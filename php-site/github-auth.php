@@ -63,7 +63,10 @@ function handle_github_auth(string $path): void {
     if ($path === '/auth/github') {
         $state = bin2hex(random_bytes(32));
         $verifier = rtrim(strtr(base64_encode(random_bytes(32)), '+/', '-_'), '=');
-        $_SESSION['github_oauth'] = ['state' => $state, 'verifier' => $verifier, 'created' => time()];
+        $rawReturnTo = is_string($_SESSION['oauth_return_to'] ?? null) ? $_SESSION['oauth_return_to'] : null;
+        unset($_SESSION['oauth_return_to']);
+        $safeReturnTo = mcp_is_safe_oauth_return_to($rawReturnTo) ? $rawReturnTo : null;
+        $_SESSION['github_oauth'] = ['state' => $state, 'verifier' => $verifier, 'created' => time(), 'return_to' => $safeReturnTo];
         $params = ['client_id' => (string)$oauth['client_id'], 'redirect_uri' => (string)$oauth['callback_url'],
             'state' => $state, 'code_challenge' => rtrim(strtr(base64_encode(hash('sha256', $verifier, true)), '+/', '-_'), '='),
             'code_challenge_method' => 'S256', 'allow_signup' => 'false'];
@@ -90,7 +93,11 @@ function handle_github_auth(string $path): void {
     if ((int)$user['must_change_password'] === 1) {
         db()->prepare('UPDATE users SET must_change_password = 0, updated_at = ? WHERE id = ?')->execute([now(), $user['id']]);
     }
+    $returnTo = is_string($attempt['return_to'] ?? null) ? $attempt['return_to'] : null;
     session_regenerate_id(true);
     $_SESSION = ['user_id' => $user['id'], 'auth_method' => 'github', 'github_session' => github_session_digest($oauth, $user)];
+    if (mcp_is_safe_oauth_return_to($returnTo)) {
+        redirect($returnTo);
+    }
     redirect('/dashboard');
 }

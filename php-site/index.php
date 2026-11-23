@@ -48,7 +48,17 @@ $sessionLifetime = $sessionDays * 86400;
 ini_set('session.gc_maxlifetime', (string)$sessionLifetime);
 ini_set('session.cookie_lifetime', (string)$sessionLifetime);
 session_set_cookie_params(['lifetime' => $sessionLifetime, 'path' => '/', 'secure' => is_file($config['github_oauth_config']), 'httponly' => true, 'samesite' => 'Lax']);
-session_start();
+$earlyRequestPath = PHP_SAPI === 'cli' && empty($_SERVER['REQUEST_URI'])
+    ? '/'
+    : (parse_url((string)($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH) ?: '/');
+$earlyScriptDir = rtrim(str_replace('\\', '/', dirname((string)($_SERVER['SCRIPT_NAME'] ?? ''))), '/');
+if ($earlyScriptDir !== '' && $earlyScriptDir !== '/' && strpos($earlyRequestPath, $earlyScriptDir) === 0) {
+    $earlyRequestPath = substr($earlyRequestPath, strlen($earlyScriptDir)) ?: '/';
+}
+$isStatelessMcpRoute = (bool)preg_match('#^/(mcp|oauth/(token|revoke)|\.well-known/(oauth-|openid-))#', $earlyRequestPath);
+if (!$isStatelessMcpRoute) {
+    session_start();
+}
 date_default_timezone_set('Asia/Shanghai');
 
 require_once __DIR__ . '/vendor/Parsedown.php';
@@ -64,6 +74,37 @@ require_once __DIR__ . '/markdown.php';
 require_once __DIR__ . '/share-access.php';
 require_once __DIR__ . '/share-assets.php';
 require_once __DIR__ . '/reader.php';
+require_once __DIR__ . '/mcp-content.php';
+require_once __DIR__ . '/mcp-oauth.php';
+require_once __DIR__ . '/mcp-server.php';
+
+function trusted_client_ip_hex(): string {
+    $settings = pdf_export_settings();
+    $peer = (string)($_SERVER['REMOTE_ADDR'] ?? '');
+    // Never accept an arbitrary client's X-Forwarded-For/CF-Connecting-IP.
+    // Only use one proxy-overwritten header from explicitly trusted peers.
+    $trusted = array_map('inet_pton', $settings['trusted_proxies']);
+    $header = $settings['ip_header'];
+    $packedPeer = @inet_pton($peer);
+    if ($packedPeer !== false && in_array($packedPeer, $trusted, true)) {
+        $candidate = (string)($_SERVER[$header] ?? '');
+        if (filter_var($candidate, FILTER_VALIDATE_IP)) {
+            $peer = $candidate;
+        }
+    }
+    $packed = @inet_pton($peer);
+    if ($packed === false) {
+        return 'unknown';
+    }
+    if (strlen($packed) === 16) {
+        $packed = substr($packed, 0, 8) . str_repeat("\0", 8);
+    }
+    return bin2hex($packed);
+}
+
+function trusted_client_ip_hash(): string {
+    return hash('sha256', trusted_client_ip_hex());
+}
 
 function base_path(): string {
     $script = $_SERVER['SCRIPT_NAME'] ?? '';
@@ -861,6 +902,31 @@ if ($base && strpos($path, $base) === 0) {
 
 if (strpos($path, '/api/v1/') === 0) {
     handle_api($path);
+}
+
+if (in_array($path, [
+    '/.well-known/oauth-protected-resource',
+    '/.well-known/oauth-protected-resource/mcp',
+    '/.well-known/oauth-authorization-server',
+    '/.well-known/openid-configuration',
+], true)) {
+    mcp_handle_well_known($path);
+}
+
+if ($path === '/oauth/authorize') {
+    mcp_handle_oauth_authorize();
+}
+
+if ($path === '/oauth/token') {
+    mcp_handle_oauth_token();
+}
+
+if ($path === '/oauth/revoke') {
+    mcp_handle_oauth_revoke();
+}
+
+if ($path === '/mcp') {
+    handle_mcp_request();
 }
 
 if (preg_match('#^/s/([a-zA-Z0-9_-]+)/export(?:/(verify|release|claim|document|check|quota|captcha|captcha-verify))?$#', $path, $matches)) {

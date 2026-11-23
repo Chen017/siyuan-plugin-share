@@ -227,22 +227,7 @@ function pdf_export_csrf(): void {
 }
 
 function pdf_export_client_ip(): string {
-    $settings = pdf_export_settings();
-    $peer = (string)($_SERVER['REMOTE_ADDR'] ?? '');
-    // Never accept an arbitrary client's X-Forwarded-For/CF-Connecting-IP.
-    // Only use one proxy-overwritten header from explicitly trusted peers.
-    $trusted = array_map('inet_pton', $settings['trusted_proxies']);
-    $header = $settings['ip_header'];
-    $packedPeer = @inet_pton($peer);
-    if ($packedPeer !== false && in_array($packedPeer, $trusted, true)) {
-        $candidate = (string)($_SERVER[$header] ?? '');
-        if (filter_var($candidate, FILTER_VALIDATE_IP)) $peer = $candidate;
-    }
-    $packed = @inet_pton($peer);
-    if ($packed === false) return 'unknown';
-    // Normalize IPv6 diagnostic metadata; visitor quotas are owned by Cookie.
-    if (strlen($packed) === 16) $packed = substr($packed, 0, 8) . str_repeat("\0", 8);
-    return bin2hex($packed);
+    return trusted_client_ip_hex();
 }
 
 function pdf_export_admit(int $shareId, string $fingerprint, int $documentCount = 1): string {
