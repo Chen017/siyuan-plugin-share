@@ -31,7 +31,7 @@ return [
 ];
 """
 DIAGNOSTICS = re.compile(
-    r'(?:PHP (?:Warning|Deprecated|Fatal error|Parse error|Notice)|(?:Warning|Deprecated|Fatal error|Parse error|Notice):)'
+    r'(?:PHP (?:Warning|Deprecated|Fatal error|Parse error|Notice)\b|<b>(?:Warning|Deprecated|Fatal error|Parse error|Notice)</b>:|(?:Warning|Deprecated|Fatal error|Parse error|Notice):[^\n]* in [^\n]+\.php on line \d+)'
 )
 
 
