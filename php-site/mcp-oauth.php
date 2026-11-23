@@ -74,7 +74,22 @@ function mcp_oauth_migrate(PDO $pdo): void {
         user_agent TEXT,
         status_code INTEGER NOT NULL,
         duration_ms INTEGER NOT NULL,
-        note TEXT
+        note TEXT,
+        output_chars INTEGER NOT NULL DEFAULT 0,
+        est_tokens INTEGER NOT NULL DEFAULT 0
+    );');
+    ensure_column($pdo, 'mcp_debug_logs', 'output_chars', 'INTEGER NOT NULL DEFAULT 0');
+    ensure_column($pdo, 'mcp_debug_logs', 'est_tokens', 'INTEGER NOT NULL DEFAULT 0');
+
+    $pdo->exec('CREATE TABLE IF NOT EXISTS mcp_usage_stats (
+        metric_key TEXT PRIMARY KEY,
+        call_count INTEGER NOT NULL DEFAULT 0,
+        error_count INTEGER NOT NULL DEFAULT 0,
+        total_duration_ms INTEGER NOT NULL DEFAULT 0,
+        max_duration_ms INTEGER NOT NULL DEFAULT 0,
+        total_chars INTEGER NOT NULL DEFAULT 0,
+        total_tokens INTEGER NOT NULL DEFAULT 0,
+        last_called_at TEXT NOT NULL
     );');
 }
 
@@ -258,6 +273,87 @@ function mcp_rate_limit_check(string $bucketKey, int $limit, int $windowSeconds 
     }
 }
 
+function mcp_estimate_tokens(string $text): array {
+    if ($text === '') {
+        return ['chars' => 0, 'tokens' => 0];
+    }
+    $totalChars = mb_strlen($text, 'UTF-8');
+    $asciiOnly = preg_replace('/[^\x00-\x7F]+/', '', $text);
+    $asciiChars = is_string($asciiOnly) ? strlen($asciiOnly) : 0;
+    $nonAsciiChars = max(0, $totalChars - $asciiChars);
+    $tokens = max(1, (int)ceil($nonAsciiChars * 0.75 + $asciiChars * 0.25));
+    return ['chars' => $totalChars, 'tokens' => $tokens];
+}
+
+function mcp_record_usage_stat(
+    string $metricKey,
+    int $durationMs,
+    bool $isError = false,
+    int $chars = 0,
+    int $tokens = 0
+): void {
+    try {
+        $metricKey = substr(trim($metricKey), 0, 64);
+        if ($metricKey === '') {
+            return;
+        }
+        $allowedKeys = [
+            'tools/call:list_shares',
+            'tools/call:get_share_tree',
+            'tools/call:read_document',
+            'tools/call:get_document_outline',
+            'tools/call:search_notes',
+            'tools/call:unknown',
+            'tools/call',
+            'initialize',
+            'notifications/initialized',
+            'notifications/cancelled',
+            'tools/list',
+            'resources/list',
+            'prompts/list',
+            'ping',
+        ];
+        if (!in_array($metricKey, $allowedKeys, true)) {
+            $metricKey = 'other_rpc';
+        }
+        $dur = max(0, $durationMs);
+        $err = $isError ? 1 : 0;
+        $c = max(0, $chars);
+        $t = max(0, $tokens);
+        $ts = now();
+        $pdo = db();
+        $stmt = $pdo->prepare(
+            'INSERT INTO mcp_usage_stats (metric_key, call_count, error_count, total_duration_ms, max_duration_ms, total_chars, total_tokens, last_called_at)
+             VALUES (:k, 1, :err, :dur, :max_dur, :chars, :tokens, :ts)
+             ON CONFLICT(metric_key) DO UPDATE SET
+                 call_count = call_count + 1,
+                 error_count = error_count + :err2,
+                 total_duration_ms = total_duration_ms + :dur2,
+                 max_duration_ms = MAX(max_duration_ms, :max_dur2),
+                 total_chars = total_chars + :chars2,
+                 total_tokens = total_tokens + :tokens2,
+                 last_called_at = :ts2'
+        );
+        $stmt->execute([
+            ':k' => $metricKey,
+            ':err' => $err,
+            ':dur' => $dur,
+            ':max_dur' => $dur,
+            ':chars' => $c,
+            ':tokens' => $t,
+            ':ts' => $ts,
+            ':err2' => $err,
+            ':dur2' => $dur,
+            ':max_dur2' => $dur,
+            ':chars2' => $c,
+            ':tokens2' => $t,
+            ':ts2' => $ts,
+        ]);
+    } catch (Throwable $ignored) {
+        // Usage statistics must never break production requests.
+    }
+}
+
 function mcp_debug_log(
     string $method,
     string $path,
@@ -265,7 +361,9 @@ function mcp_debug_log(
     int $durationMs,
     ?string $rpcMethod = null,
     ?string $protocolVersion = null,
-    ?string $note = null
+    ?string $note = null,
+    int $estTokens = 0,
+    int $outputChars = 0
 ): void {
     try {
         if (!get_bool_setting('mcp_debug_logs_enabled', false)) {
@@ -273,10 +371,10 @@ function mcp_debug_log(
         }
         $pdo = db();
         $ua = substr((string)($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 200);
-        $cleanNote = $note !== null ? substr($note, 0, 200) : null;
+        $cleanNote = $note !== null && $note !== '' ? substr($note, 0, 200) : null;
         $stmt = $pdo->prepare(
-            'INSERT INTO mcp_debug_logs (created_at, method, path, rpc_method, protocol_version, user_agent, status_code, duration_ms, note)
-             VALUES (:created_at, :method, :path, :rpc_method, :protocol_version, :user_agent, :status_code, :duration_ms, :note)'
+            'INSERT INTO mcp_debug_logs (created_at, method, path, rpc_method, protocol_version, user_agent, status_code, duration_ms, note, output_chars, est_tokens)
+             VALUES (:created_at, :method, :path, :rpc_method, :protocol_version, :user_agent, :status_code, :duration_ms, :note, :output_chars, :est_tokens)'
         );
         $stmt->execute([
             ':created_at' => now(),
@@ -288,6 +386,8 @@ function mcp_debug_log(
             ':status_code' => $statusCode,
             ':duration_ms' => max(0, $durationMs),
             ':note' => $cleanNote,
+            ':output_chars' => max(0, $outputChars),
+            ':est_tokens' => max(0, $estTokens),
         ]);
         // Keep only the latest 200 log entries.
         $pdo->exec(
@@ -1013,6 +1113,153 @@ function mcp_handle_oauth_revoke(): void {
     mcp_json_response(200, ['revoked' => true]);
 }
 
+function mcp_format_compact_number(int $n): string {
+    if ($n < 1000) {
+        return (string)$n;
+    }
+    if ($n < 1000000) {
+        return rtrim(rtrim(number_format($n / 1000, 1, '.', ''), '0'), '.') . 'k';
+    }
+    return rtrim(rtrim(number_format($n / 1000000, 2, '.', ''), '0'), '.') . 'M';
+}
+
+function mcp_status_code_info(int $status, ?string $note, string $method, int $durationMs = 0): array {
+    $noteStr = trim((string)$note);
+    $isRpcError = str_starts_with($noteStr, 'rpc_error') || $noteStr === 'tool_error';
+
+    if ($status === 200) {
+        if ($isRpcError) {
+            return [
+                'tone' => 'warn',
+                'level' => 'warn',
+                'title' => '200 OK · RPC / Tool Error',
+                'meaning' => 'HTTP 200 OK (JSON-RPC Error) — The HTTP transport succeeded, but the JSON-RPC call returned an application or tool error (' . $noteStr . ').',
+            ];
+        }
+        if ($durationMs >= 1000) {
+            return [
+                'tone' => 'warn',
+                'level' => 'warn',
+                'title' => '200 OK · Slow Request',
+                'meaning' => 'HTTP 200 OK — Request succeeded, but execution took ' . $durationMs . ' ms (>= 1000 ms warning threshold).',
+            ];
+        }
+        return [
+            'tone' => 'ok',
+            'level' => 'info',
+            'title' => '200 OK',
+            'meaning' => 'HTTP 200 OK — Request succeeded and returned a valid JSON-RPC or OAuth response.',
+        ];
+    }
+
+    if ($status === 202) {
+        return [
+            'tone' => 'info',
+            'level' => 'info',
+            'title' => '202 Accepted',
+            'meaning' => 'HTTP 202 Accepted — JSON-RPC notification (such as notifications/initialized) received. Per MCP specification, notifications return 202 with an empty body. This is normal.',
+        ];
+    }
+
+    if ($status === 302) {
+        $isNormalRedirect = ($noteStr === '' || $noteStr === 'code_issued');
+        return [
+            'tone' => $isNormalRedirect ? 'info' : 'warn',
+            'level' => $isNormalRedirect ? 'info' : 'warn',
+            'title' => $isNormalRedirect ? '302 Redirect' : '302 OAuth Error Redirect',
+            'meaning' => $isNormalRedirect
+                ? 'HTTP 302 Found — Normal OAuth 2.1 authorization redirect (to sign-in or back to the client callback URI with an authorization code).'
+                : 'HTTP 302 Found (OAuth Error) — Redirected back to the client callback URI with an OAuth error (' . $noteStr . ').',
+        ];
+    }
+
+    if ($status === 400) {
+        return [
+            'tone' => 'error',
+            'level' => 'error',
+            'title' => '400 Bad Request',
+            'meaning' => 'HTTP 400 Bad Request — Invalid JSON, missing required OAuth/MCP parameter, PKCE mismatch, expired authorization code, or unregistered redirect URI.',
+        ];
+    }
+
+    if ($status === 401) {
+        return [
+            'tone' => 'warn',
+            'level' => 'warn',
+            'title' => '401 Unauthorized',
+            'meaning' => 'HTTP 401 Unauthorized — Missing, expired, or revoked Bearer token (or invalid OAuth client credentials). MCP clients use this 401 challenge to discover OAuth metadata or refresh tokens.',
+        ];
+    }
+
+    if ($status === 403) {
+        return [
+            'tone' => 'error',
+            'level' => 'error',
+            'title' => '403 Forbidden',
+            'meaning' => 'HTTP 403 Forbidden — Cross-origin request rejected because the HTTP Origin header did not match this site.',
+        ];
+    }
+
+    if ($status === 404) {
+        return [
+            'tone' => 'warn',
+            'level' => 'warn',
+            'title' => '404 Not Found',
+            'meaning' => 'HTTP 404 Not Found — Requested endpoint does not exist or MCP server is disabled.',
+        ];
+    }
+
+    if ($status === 405) {
+        return [
+            'tone' => 'warn',
+            'level' => 'warn',
+            'title' => '405 Method Not Allowed',
+            'meaning' => 'HTTP 405 Method Not Allowed — Client sent a ' . $method . ' request to a POST-only endpoint. Note: MCP clients (like Gemini) routinely probe GET /mcp for optional SSE streams; returning 405 is standard per the MCP Streamable HTTP spec and is not a failure.',
+        ];
+    }
+
+    if ($status === 413) {
+        return [
+            'tone' => 'error',
+            'level' => 'error',
+            'title' => '413 Payload Too Large',
+            'meaning' => 'HTTP 413 Payload Too Large — Request body exceeded the 1 MiB safety limit.',
+        ];
+    }
+
+    if ($status === 429) {
+        return [
+            'tone' => 'error',
+            'level' => 'error',
+            'title' => '429 Too Many Requests',
+            'meaning' => 'HTTP 429 Too Many Requests — Rate limit exceeded (120 req/min per token or 300 req/min per IP). Client must wait for Retry-After.',
+        ];
+    }
+
+    $isErr = $status >= 400;
+    return [
+        'tone' => $isErr ? 'error' : 'info',
+        'level' => $isErr ? 'error' : 'info',
+        'title' => 'HTTP ' . $status,
+        'meaning' => 'HTTP ' . $status . ' — Server response status code.',
+    ];
+}
+
+function mcp_render_rpc_cell(string $rpc): string {
+    if ($rpc === '') {
+        return '<span class="mcp-cell-empty">—</span>';
+    }
+    $escapedFull = htmlspecialchars($rpc, ENT_QUOTES, 'UTF-8');
+    if (str_contains($rpc, ':')) {
+        [$prefix, $name] = explode(':', $rpc, 2);
+        return '<code class="mcp-rpc-badge is-tool" title="' . $escapedFull . '">'
+            . '<span class="mcp-rpc-prefix">' . htmlspecialchars($prefix, ENT_QUOTES, 'UTF-8') . ':</span>'
+            . '<strong>' . htmlspecialchars($name, ENT_QUOTES, 'UTF-8') . '</strong>'
+            . '</code>';
+    }
+    return '<code class="mcp-rpc-badge" title="' . $escapedFull . '">' . $escapedFull . '</code>';
+}
+
 function render_mcp_admin_section(): string {
     $pdo = db();
     $base = base_path();
@@ -1030,7 +1277,7 @@ function render_mcp_admin_section(): string {
     unset($_SESSION['mcp_client_secret_plain']);
 
     $openAttr = ($plainCred !== null || $mcpEnabled) ? ' open' : '';
-    $html = '<details class="card" id="mcp-connection"' . $openAttr . '><summary>AI connection (MCP)</summary>';
+    $html = '<details class="plugin-connection card" id="mcp-connection"' . $openAttr . '><summary>AI connection (MCP)</summary>';
     $html .= '<p class="muted">Expose a read-only Model Context Protocol (MCP) endpoint over OAuth 2.1 for Gemini custom apps. Only public, non-expired, non-password-protected shares are accessible.</p>';
 
     if ($scheme !== 'https' && !$isLocal) {
@@ -1046,7 +1293,7 @@ function render_mcp_admin_section(): string {
     }
 
     $html .= '<label class="field-label" for="mcp-endpoint-url">MCP Server URL</label>';
-    $html .= '<div class="inline-form" style="display:flex;gap:8px;align-items:center;margin-bottom:12px">';
+    $html .= '<div class="mcp-endpoint-row">';
     $html .= '<input class="input" id="mcp-endpoint-url" type="text" readonly value="' . htmlspecialchars($mcpUrl, ENT_QUOTES, 'UTF-8') . '">';
     $html .= '<button class="button" type="button" onclick="navigator.clipboard&&navigator.clipboard.writeText(document.getElementById(\'mcp-endpoint-url\').value)">Copy</button>';
     $html .= '</div>';
@@ -1062,7 +1309,7 @@ function render_mcp_admin_section(): string {
 
     // Create new OAuth client
     $html .= '<section class="settings-group"><h3>OAuth clients</h3>';
-    $html .= '<form class="inline-form" method="post" action="' . $base . '/admin/mcp/client-create" style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:12px">'
+    $html .= '<form class="mcp-client-create-form" method="post" action="' . $base . '/admin/mcp/client-create">'
         . render_hidden_inputs(['csrf' => csrf_token()])
         . '<label>Client name<input class="input" name="name" value="Gemini" maxlength="64" required></label>'
         . '<button class="button" type="submit">Create OAuth client</button>'
@@ -1083,8 +1330,8 @@ function render_mcp_admin_section(): string {
         $urisText = implode("\n", $uris);
         $lastUsed = !empty($client['last_used_at']) ? htmlspecialchars((string)$client['last_used_at'], ENT_QUOTES, 'UTF-8') : 'Never';
 
-        $html .= '<div class="card" style="margin-top:10px">';
-        $html .= '<strong>' . htmlspecialchars((string)$client['name'], ENT_QUOTES, 'UTF-8') . '</strong> · <code>' . htmlspecialchars($cid, ENT_QUOTES, 'UTF-8') . '</code>';
+        $html .= '<div class="card mcp-subcard">';
+        $html .= '<div class="mcp-client-header"><strong>' . htmlspecialchars((string)$client['name'], ENT_QUOTES, 'UTF-8') . '</strong> · <code class="mcp-client-id">' . htmlspecialchars($cid, ENT_QUOTES, 'UTF-8') . '</code></div>';
         $html .= '<p class="muted">Active tokens: ' . $activeTokens . ' · Last used: ' . $lastUsed . '</p>';
 
         $html .= '<form class="settings-form" method="post" action="' . $base . '/admin/mcp/client-update">'
@@ -1094,7 +1341,7 @@ function render_mcp_admin_section(): string {
             . '<button class="button" type="submit">Save client</button>'
             . '</form>';
 
-        $html .= '<div class="table-actions" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">';
+        $html .= '<div class="table-actions mcp-client-actions">';
         $html .= '<form class="inline-form" method="post" action="' . $base . '/admin/mcp/client-rotate-secret" data-confirm-message="Rotate the Client Secret? Existing credentials will stop authenticating new token requests.">'
             . render_hidden_inputs(['csrf' => csrf_token(), 'client_id' => $cid])
             . '<button class="button" type="submit">Rotate secret</button></form>';
@@ -1136,8 +1383,8 @@ function render_mcp_admin_section(): string {
                         . substr($escapedUri, $pos + strlen($escapedHost));
                 }
             }
-            $html .= '<div class="card" style="margin-top:6px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">'
-                . '<div><code>' . $escapedUri . '</code><br><small class="muted">Client: ' . htmlspecialchars((string)$att['client_name'], ENT_QUOTES, 'UTF-8')
+            $html .= '<div class="card mcp-captured-row">'
+                . '<div class="mcp-captured-uri"><code>' . $escapedUri . '</code><br><small class="muted">Client: ' . htmlspecialchars((string)$att['client_name'], ENT_QUOTES, 'UTF-8')
                 . ' · Seen ' . (int)$att['count'] . 'x · Last: ' . htmlspecialchars((string)$att['seen_at'], ENT_QUOTES, 'UTF-8') . '</small></div>'
                 . '<form class="inline-form" method="post" action="' . $base . '/admin/mcp/redirect-allow">'
                 . render_hidden_inputs(['csrf' => csrf_token(), 'attempt_id' => (int)$att['id']])
@@ -1147,28 +1394,225 @@ function render_mcp_admin_section(): string {
         $html .= '</section>';
     }
 
+    // Usage & Token Statistics section
+    $statsRows = $pdo->query('SELECT * FROM mcp_usage_stats ORDER BY call_count DESC, metric_key ASC')->fetchAll(PDO::FETCH_ASSOC);
+    if ($mcpEnabled || !empty($statsRows)) {
+        $totalCalls = 0;
+        $toolCalls = 0;
+        $totalErrors = 0;
+        $totalDurMs = 0;
+        $peakDurMs = 0;
+        $totalChars = 0;
+        $totalTokens = 0;
+        foreach ($statsRows as $sr) {
+            $c = (int)$sr['call_count'];
+            $e = (int)$sr['error_count'];
+            $d = (int)$sr['total_duration_ms'];
+            $m = (int)$sr['max_duration_ms'];
+            $ch = (int)$sr['total_chars'];
+            $tk = (int)$sr['total_tokens'];
+            $totalCalls += $c;
+            if (str_starts_with((string)$sr['metric_key'], 'tools/call:')) {
+                $toolCalls += $c;
+            }
+            $totalErrors += $e;
+            $totalDurMs += $d;
+            if ($m > $peakDurMs) {
+                $peakDurMs = $m;
+            }
+            $totalChars += $ch;
+            $totalTokens += $tk;
+        }
+        $avgDurMs = $totalCalls > 0 ? (int)round($totalDurMs / $totalCalls) : 0;
+        $successRate = $totalCalls > 0 ? number_format(max(0, ($totalCalls - $totalErrors) / $totalCalls * 100), 1) . '%' : '—';
+
+        $html .= '<section class="settings-group" id="mcp-usage-stats">';
+        $html .= '<div class="mcp-section-bar"><div><h3>MCP usage statistics</h3><p class="muted">Cumulative function calls, estimated context tokens and response latency.</p></div>';
+        if (!empty($statsRows)) {
+            $html .= '<form class="inline-form" method="post" action="' . $base . '/admin/mcp/stats-reset" data-confirm-message="Reset all accumulated MCP usage and token statistics?">'
+                . render_hidden_inputs(['csrf' => csrf_token()])
+                . '<button class="button" type="submit">Reset stats</button></form>';
+        }
+        $html .= '</div>';
+
+        $html .= '<dl class="image-compression-stats mcp-stats-cards">'
+            . '<div><dt>Total RPC calls</dt><dd>' . number_format($totalCalls) . '</dd><small class="mcp-stat-sub">' . number_format($toolCalls) . ' tool calls</small></div>'
+            . '<div><dt>Estimated tokens</dt><dd title="' . number_format($totalTokens) . ' tokens">' . ($totalTokens > 0 ? '~' . mcp_format_compact_number($totalTokens) : '0') . '</dd><small class="mcp-stat-sub">' . mcp_format_compact_number($totalChars) . ' UTF-8 chars</small></div>'
+            . '<div><dt>Avg latency</dt><dd>' . $avgDurMs . ' ms</dd><small class="mcp-stat-sub">peak ' . $peakDurMs . ' ms</small></div>'
+            . '<div><dt>Success rate</dt><dd>' . $successRate . '</dd><small class="mcp-stat-sub">' . number_format($totalErrors) . ' errors</small></div>'
+            . '</dl>';
+
+        if (!empty($statsRows)) {
+            $html .= '<div class="table-scroll mcp-table-box"><table class="table mcp-stats-table"><thead><tr>'
+                . '<th>Function / Tool</th>'
+                . '<th class="num">Calls</th>'
+                . '<th class="num">Errors</th>'
+                . '<th class="num">Est. Tokens</th>'
+                . '<th class="num">Avg / Peak ms</th>'
+                . '<th>Last called</th>'
+                . '</tr></thead><tbody>';
+            foreach ($statsRows as $sr) {
+                $key = (string)$sr['metric_key'];
+                $calls = (int)$sr['call_count'];
+                $errs = (int)$sr['error_count'];
+                $durSum = (int)$sr['total_duration_ms'];
+                $durMax = (int)$sr['max_duration_ms'];
+                $charsSum = (int)$sr['total_chars'];
+                $tokSum = (int)$sr['total_tokens'];
+                $avgMs = $calls > 0 ? (int)round($durSum / $calls) : 0;
+                $avgTok = $calls > 0 && $tokSum > 0 ? (int)round($tokSum / $calls) : 0;
+                $sharePct = $totalCalls > 0 ? (int)round($calls / $totalCalls * 100) : 0;
+
+                $tokCell = $tokSum > 0
+                    ? '<strong>~' . mcp_format_compact_number($tokSum) . '</strong> <span class="mcp-cell-sub">· ' . mcp_format_compact_number($avgTok) . '/call</span>'
+                    : '<span class="mcp-cell-empty">—</span>';
+                $errCell = $errs > 0
+                    ? '<span class="mcp-err-pill">' . number_format($errs) . '</span>'
+                    : '<span class="mcp-cell-empty">0</span>';
+
+                $html .= '<tr>'
+                    . '<td>' . mcp_render_rpc_cell($key) . '</td>'
+                    . '<td class="num"><strong>' . number_format($calls) . '</strong> <span class="mcp-cell-sub">(' . $sharePct . '%)</span></td>'
+                    . '<td class="num">' . $errCell . '</td>'
+                    . '<td class="num" title="' . number_format($tokSum) . ' tokens (' . number_format($charsSum) . ' chars)">' . $tokCell . '</td>'
+                    . '<td class="num"><strong>' . $avgMs . ' ms</strong> <span class="mcp-cell-sub">/ ' . $durMax . ' ms</span></td>'
+                    . '<td class="mcp-col-time">' . htmlspecialchars((string)$sr['last_called_at'], ENT_QUOTES, 'UTF-8') . '</td>'
+                    . '</tr>';
+            }
+            $html .= '</tbody></table></div>';
+        } else {
+            $html .= '<p class="muted">No MCP calls recorded yet.</p>';
+        }
+        $html .= '</section>';
+    }
+
     // Debug logs table
     $logs = $pdo->query('SELECT * FROM mcp_debug_logs ORDER BY id DESC LIMIT 200')->fetchAll(PDO::FETCH_ASSOC);
     if ($debugLogsEnabled || !empty($logs)) {
-        $html .= '<section class="settings-group"><h3>MCP debug logs</h3>';
+        $totalLogs = count($logs);
+        $warnLogs = 0;
+        $toolLogs = 0;
+        $preparedLogs = [];
+        foreach ($logs as $log) {
+            $statusCode = (int)$log['status_code'];
+            $durMs = (int)$log['duration_ms'];
+            $noteRaw = (string)($log['note'] ?? '');
+            $methodRaw = (string)$log['method'];
+            $rpcRaw = (string)($log['rpc_method'] ?? '');
+            $sInfo = mcp_status_code_info($statusCode, $noteRaw, $methodRaw, $durMs);
+            $level = $sInfo['level'];
+            if ($level !== 'info') {
+                $warnLogs++;
+            }
+            $isTool = str_starts_with($rpcRaw, 'tools/call') || str_starts_with($rpcRaw, 'batch:tools/call');
+            if ($isTool) {
+                $toolLogs++;
+            }
+            $preparedLogs[] = [
+                'row' => $log,
+                'status_info' => $sInfo,
+                'level' => $level,
+                'is_tool' => $isTool,
+            ];
+        }
+
+        $html .= '<section class="settings-group mcp-logs-panel" id="mcp-debug-logs" data-mcp-filter="warnings" data-warn-count="' . $warnLogs . '" data-tool-count="' . $toolLogs . '" data-total-count="' . $totalLogs . '">';
+        $html .= '<div class="mcp-section-bar"><div><h3>MCP debug logs</h3><p class="muted">Showing latest ' . $totalLogs . ' requests (max 200). Click any row or status badge <strong>!</strong> for details.</p></div>';
         if (!empty($logs)) {
-            $html .= '<form class="inline-form" method="post" action="' . $base . '/admin/mcp/logs-clear" style="margin-bottom:8px">'
+            $html .= '<div class="mcp-log-controls">'
+                . '<div class="mcp-filter-group" role="group" aria-label="Filter debug logs">'
+                . '<button type="button" class="mcp-filter-pill is-active" data-mcp-filter-btn="warnings" aria-pressed="true">Warnings+ <span class="mcp-filter-count">' . $warnLogs . '</span></button>'
+                . '<button type="button" class="mcp-filter-pill" data-mcp-filter-btn="tools" aria-pressed="false">Tool calls <span class="mcp-filter-count">' . $toolLogs . '</span></button>'
+                . '<button type="button" class="mcp-filter-pill" data-mcp-filter-btn="all" aria-pressed="false">All <span class="mcp-filter-count">' . $totalLogs . '</span></button>'
+                . '</div>'
+                . '<form class="inline-form" method="post" action="' . $base . '/admin/mcp/logs-clear">'
                 . render_hidden_inputs(['csrf' => csrf_token()])
-                . '<button class="button" type="submit">Clear logs</button></form>';
-            $html .= '<div style="overflow-x:auto"><table style="width:100%;font-size:0.85em"><thead><tr>'
-                . '<th>Time</th><th>Req</th><th>RPC</th><th>Proto</th><th>Status</th><th>ms</th><th>Note</th><th>UA</th>'
+                . '<button class="button" type="submit">Clear logs</button></form>'
+                . '</div>';
+        }
+        $html .= '</div>';
+
+        if (!empty($preparedLogs)) {
+            $html .= '<div class="table-scroll mcp-table-box mcp-log-scroll"><table class="table mcp-log-table"><thead><tr>'
+                . '<th>Time</th><th>Req</th><th>RPC</th><th>Proto</th><th>Status</th><th class="num">Tokens</th><th class="num">ms</th><th>Note</th><th>UA</th>'
                 . '</tr></thead><tbody>';
-            foreach ($logs as $log) {
-                $html .= '<tr>'
-                    . '<td>' . htmlspecialchars((string)$log['created_at'], ENT_QUOTES, 'UTF-8') . '</td>'
-                    . '<td><code>' . htmlspecialchars((string)$log['method'] . ' ' . (string)$log['path'], ENT_QUOTES, 'UTF-8') . '</code></td>'
-                    . '<td>' . htmlspecialchars((string)($log['rpc_method'] ?? ''), ENT_QUOTES, 'UTF-8') . '</td>'
-                    . '<td>' . htmlspecialchars((string)($log['protocol_version'] ?? ''), ENT_QUOTES, 'UTF-8') . '</td>'
-                    . '<td>' . (int)$log['status_code'] . '</td>'
-                    . '<td>' . (int)$log['duration_ms'] . '</td>'
-                    . '<td>' . htmlspecialchars((string)($log['note'] ?? ''), ENT_QUOTES, 'UTF-8') . '</td>'
-                    . '<td>' . htmlspecialchars(substr((string)($log['user_agent'] ?? ''), 0, 48), ENT_QUOTES, 'UTF-8') . '</td>'
+
+            $html .= '<tr class="mcp-log-filter-empty mcp-log-filter-empty--warnings"><td colspan="9">'
+                . 'No warnings or errors in the latest ' . $totalLogs . ' logs. '
+                . '<button type="button" class="mcp-inline-link" data-mcp-filter-btn="all">Show all ' . $totalLogs . ' logs</button>'
+                . '</td></tr>';
+            $html .= '<tr class="mcp-log-filter-empty mcp-log-filter-empty--tools"><td colspan="9">'
+                . 'No tool calls in the latest ' . $totalLogs . ' logs. '
+                . '<button type="button" class="mcp-inline-link" data-mcp-filter-btn="all">Show all ' . $totalLogs . ' logs</button>'
+                . '</td></tr>';
+
+            foreach ($preparedLogs as $idx => $item) {
+                $log = $item['row'];
+                $sInfo = $item['status_info'];
+                $level = $item['level'];
+                $isTool = $item['is_tool'];
+                $detailId = 'mcp-log-detail-' . (int)($log['id'] ?? $idx);
+
+                $createdAt = htmlspecialchars((string)$log['created_at'], ENT_QUOTES, 'UTF-8');
+                $methodStr = (string)$log['method'];
+                $pathStr = (string)$log['path'];
+                $reqFull = htmlspecialchars($methodStr . ' ' . $pathStr, ENT_QUOTES, 'UTF-8');
+                $rpcStr = (string)($log['rpc_method'] ?? '');
+                $protoStr = (string)($log['protocol_version'] ?? '');
+                $statusCode = (int)$log['status_code'];
+                $durMs = (int)$log['duration_ms'];
+                $noteStr = (string)($log['note'] ?? '');
+                $uaStr = (string)($log['user_agent'] ?? '');
+                $estTokens = (int)($log['est_tokens'] ?? 0);
+                $outChars = (int)($log['output_chars'] ?? 0);
+
+                $tone = $sInfo['tone'];
+                $meaningTitle = htmlspecialchars($sInfo['title'], ENT_QUOTES, 'UTF-8');
+                $meaningDesc = htmlspecialchars($sInfo['meaning'], ENT_QUOTES, 'UTF-8');
+
+                $protoCell = $protoStr !== ''
+                    ? '<span class="mcp-proto-tag">' . htmlspecialchars($protoStr, ENT_QUOTES, 'UTF-8') . '</span>'
+                    : '<span class="mcp-cell-empty">—</span>';
+                $tokCell = $estTokens > 0
+                    ? '~' . mcp_format_compact_number($estTokens)
+                    : '<span class="mcp-cell-empty">—</span>';
+                $noteCell = $noteStr !== ''
+                    ? '<span class="mcp-note-pill is-' . $level . '" title="' . htmlspecialchars($noteStr, ENT_QUOTES, 'UTF-8') . '">' . htmlspecialchars($noteStr, ENT_QUOTES, 'UTF-8') . '</span>'
+                    : '<span class="mcp-cell-empty">—</span>';
+                $uaCell = $uaStr !== ''
+                    ? '<span class="mcp-ellipsis" title="' . htmlspecialchars($uaStr, ENT_QUOTES, 'UTF-8') . '">' . htmlspecialchars($uaStr, ENT_QUOTES, 'UTF-8') . '</span>'
+                    : '<span class="mcp-cell-empty">—</span>';
+
+                $html .= '<tr class="mcp-log-row is-level-' . $level . '" data-log-level="' . $level . '" data-log-tool="' . ($isTool ? '1' : '0') . '" data-mcp-log-row="' . $detailId . '" tabindex="0" aria-expanded="false">'
+                    . '<td class="mcp-col-time">' . $createdAt . '</td>'
+                    . '<td class="mcp-col-req" title="' . $reqFull . '"><span class="mcp-method-tag is-' . strtolower(htmlspecialchars($methodStr, ENT_QUOTES, 'UTF-8')) . '">' . htmlspecialchars($methodStr, ENT_QUOTES, 'UTF-8') . '</span><code class="mcp-path-code">' . htmlspecialchars($pathStr, ENT_QUOTES, 'UTF-8') . '</code></td>'
+                    . '<td class="mcp-col-rpc">' . mcp_render_rpc_cell($rpcStr) . '</td>'
+                    . '<td class="mcp-col-proto">' . $protoCell . '</td>'
+                    . '<td class="mcp-col-status">'
+                    . '<span class="mcp-status-wrap">'
+                    . '<button type="button" class="mcp-status-badge is-' . $tone . '" data-mcp-status-btn aria-label="Status ' . $statusCode . ': ' . $meaningTitle . '" title="' . $meaningDesc . '">'
+                    . '<span class="mcp-status-code">' . $statusCode . '</span>'
+                    . '<span class="mcp-status-bang" aria-hidden="true">!</span>'
+                    . '</button>'
+                    . '<span class="mcp-status-popover" role="tooltip" hidden><strong>' . $meaningTitle . '</strong><span>' . $meaningDesc . '</span></span>'
+                    . '</span>'
+                    . '</td>'
+                    . '<td class="mcp-col-tokens num" title="' . ($estTokens > 0 ? number_format($estTokens) . ' est. tokens (' . number_format($outChars) . ' UTF-8 chars)' : 'No tool content tokens') . '">' . $tokCell . '</td>'
+                    . '<td class="mcp-col-ms num">' . $durMs . ' <span class="mcp-unit">ms</span></td>'
+                    . '<td class="mcp-col-note">' . $noteCell . '</td>'
+                    . '<td class="mcp-col-ua">' . $uaCell . '</td>'
                     . '</tr>';
+
+                $html .= '<tr class="mcp-log-detail-row" id="' . $detailId . '" hidden><td colspan="9"><div class="mcp-log-detail-box">'
+                    . '<div class="mcp-detail-status is-' . $tone . '"><span class="mcp-status-bang" aria-hidden="true">!</span><div><strong>' . $meaningTitle . '</strong><p>' . $meaningDesc . '</p></div></div>'
+                    . '<div class="mcp-detail-grid">'
+                    . '<div><span class="mcp-detail-label">Request</span><code>' . $reqFull . '</code></div>'
+                    . '<div><span class="mcp-detail-label">RPC Method</span><code>' . ($rpcStr !== '' ? htmlspecialchars($rpcStr, ENT_QUOTES, 'UTF-8') : '—') . '</code></div>'
+                    . '<div><span class="mcp-detail-label">Protocol</span><span>' . ($protoStr !== '' ? htmlspecialchars($protoStr, ENT_QUOTES, 'UTF-8') : '—') . '</span></div>'
+                    . '<div><span class="mcp-detail-label">Latency &amp; Tokens</span><span>' . $durMs . ' ms' . ($estTokens > 0 ? ' · ~' . number_format($estTokens) . ' tokens (' . number_format($outChars) . ' chars)' : '') . '</span></div>'
+                    . ($noteStr !== '' ? '<div class="mcp-detail-wide"><span class="mcp-detail-label">Note</span><code>' . htmlspecialchars($noteStr, ENT_QUOTES, 'UTF-8') . '</code></div>' : '')
+                    . '<div class="mcp-detail-wide"><span class="mcp-detail-label">User-Agent</span><code class="mcp-detail-ua">' . ($uaStr !== '' ? htmlspecialchars($uaStr, ENT_QUOTES, 'UTF-8') : '—') . '</code></div>'
+                    . '</div></div></td></tr>';
             }
             $html .= '</tbody></table></div>';
         } else {
@@ -1325,6 +1769,12 @@ function handle_mcp_admin_post(string $path, array $user): bool {
     if ($path === '/admin/mcp/logs-clear') {
         $pdo->exec('DELETE FROM mcp_debug_logs');
         flash('info', 'MCP debug logs cleared.');
+        redirect('/admin#mcp-connection');
+    }
+
+    if ($path === '/admin/mcp/stats-reset') {
+        $pdo->exec('DELETE FROM mcp_usage_stats');
+        flash('info', 'MCP usage statistics reset.');
         redirect('/admin#mcp-connection');
     }
 

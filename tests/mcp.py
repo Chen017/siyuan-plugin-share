@@ -726,16 +726,37 @@ class McpIntegrationTests(unittest.TestCase):
         st, _, raw = self.mcp_call(access, {'jsonrpc': '2.0', 'id': 20, 'method': 'tools/call', 'params': {'name': 'read_document', 'arguments': {'share': 'sem5note', 'doc_id': 'doc-tangent'}}})
         self.assertTrue(json.loads(raw)['result']['isError'])
 
-        # Debug logs exist and never leak tokens/secrets; clear works
+        # Debug logs and usage statistics exist, track tokens/errors, and never leak tokens/secrets
         st, _, admin_html = admin.request('/admin')
         self.assertEqual(st, 200)
         admin_text = admin_html.decode('utf-8')
         self.assertIn('tools/call:read_document', admin_text)
+        self.assertIn('id="mcp-usage-stats"', admin_text)
+        self.assertIn('data-mcp-filter="warnings"', admin_text)
+        self.assertIn('405 Method Not Allowed', admin_text)
+        self.assertIn('mcp-status-bang', admin_text)
         self.assertNotIn(access, admin_text)
         self.assertNotIn(csec, admin_text)
+
+        read_stats = self.sql_query("SELECT * FROM mcp_usage_stats WHERE metric_key = 'tools/call:read_document'")
+        self.assertEqual(len(read_stats), 1)
+        self.assertGreaterEqual(int(read_stats[0]['call_count']), 5)
+        self.assertGreaterEqual(int(read_stats[0]['error_count']), 2)
+        self.assertGreater(int(read_stats[0]['total_tokens']), 100)
+        self.assertGreater(int(read_stats[0]['total_chars']), 300)
+
+        tok_logs = self.sql_query("SELECT * FROM mcp_debug_logs WHERE rpc_method = 'tools/call:read_document' AND est_tokens > 0")
+        self.assertGreater(len(tok_logs), 0)
+
         st, _, _ = admin.post_form('/admin/mcp/logs-clear', {})
         self.assertEqual(st, 302)
         self.assertEqual(len(self.sql_query('SELECT * FROM mcp_debug_logs')), 0)
+        # Clearing debug logs must not wipe cumulative usage statistics
+        self.assertGreater(len(self.sql_query('SELECT * FROM mcp_usage_stats')), 0)
+
+        st, _, _ = admin.post_form('/admin/mcp/stats-reset', {})
+        self.assertEqual(st, 302)
+        self.assertEqual(len(self.sql_query('SELECT * FROM mcp_usage_stats')), 0)
 
 
 def main():

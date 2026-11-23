@@ -113,6 +113,27 @@ async function page(raw, {failMermaid = false, slowGraphviz = false} = {}) {
     assert.equal(draft.value,'unsaved draft');assert.equal(w.document.activeElement,draft,'Progress preserves settings and focus');
   } finally {compression.window.close();}
 
+  const mcpLogs = new JSDOM(`<body class="layout-app"><section class="mcp-logs-panel" data-mcp-filter="warnings" data-warn-count="1" data-tool-count="1" data-total-count="2"><div class="mcp-filter-group"><button type="button" class="mcp-filter-pill is-active" data-mcp-filter-btn="warnings" aria-pressed="true">Warnings+</button><button type="button" class="mcp-filter-pill" data-mcp-filter-btn="tools" aria-pressed="false">Tool calls</button><button type="button" class="mcp-filter-pill" data-mcp-filter-btn="all" aria-pressed="false">All</button></div><table class="table mcp-log-table"><tbody><tr class="mcp-log-row is-level-warn" data-log-level="warn" data-log-tool="0" data-mcp-log-row="mcp-log-detail-1" tabindex="0" aria-expanded="false"><td class="mcp-col-status"><span class="mcp-status-wrap"><button type="button" class="mcp-status-badge is-warn" data-mcp-status-btn><span class="mcp-status-code">405</span><span class="mcp-status-bang">!</span></button><span class="mcp-status-popover" hidden><strong>405 Method Not Allowed</strong><span>SSE probe unsupported</span></span></span></td></tr><tr class="mcp-log-detail-row" id="mcp-log-detail-1" hidden><td>Detail 1</td></tr></tbody></table></section></body>`, {url:'https://reader.test/admin',runScripts:'outside-only',pretendToBeVisual:true});
+  try {
+    const w = mcpLogs.window;
+    w.eval(app);
+    const panel = w.document.querySelector('.mcp-logs-panel');
+    assert.equal(panel.getAttribute('data-mcp-filter'), 'warnings');
+    w.document.querySelector('[data-mcp-filter-btn="all"]').click();
+    assert.equal(panel.getAttribute('data-mcp-filter'), 'all');
+    assert.equal(w.document.querySelector('[data-mcp-filter-btn="all"]').getAttribute('aria-pressed'), 'true');
+    assert.equal(w.document.querySelector('[data-mcp-filter-btn="warnings"]').getAttribute('aria-pressed'), 'false');
+    const pop = w.document.querySelector('.mcp-status-popover');
+    assert.equal(pop.hidden, true);
+    w.document.querySelector('[data-mcp-status-btn]').click();
+    assert.equal(pop.hidden, false, 'Clicking status badge ! opens status meaning popover');
+    assert.equal(w.document.getElementById('mcp-log-detail-1').hidden, true, 'Status badge click does not toggle detail row');
+    w.document.querySelector('tr[data-mcp-log-row]').click();
+    assert.equal(w.document.getElementById('mcp-log-detail-1').hidden, false, 'Clicking log row expands detail row');
+    assert.equal(w.document.querySelector('tr[data-mcp-log-row]').getAttribute('aria-expanded'), 'true');
+    await new Promise(resolve => setTimeout(resolve, 0));
+  } finally {mcpLogs.window.close();}
+
   const plain = await page('# 中文标题\n\nHello 0123 **bold** $x^2$ and [a link](https://example.com).\n\nFootnote[^1]\n\n[^1]: Details');
   try {
     assert.deepEqual(plain.requests, [], 'Ordinary math notes do not load diagram engines');

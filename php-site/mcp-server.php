@@ -489,8 +489,20 @@ function mcp_execute_tool(int $userId, string $toolName, array $args): array {
     throw new InvalidArgumentException('Unknown tool: ' . $toolName);
 }
 
-function mcp_dispatch_single_rpc(array $msg, int $userId, ?string &$rpcMethodOut, ?string &$protoOut): ?array {
+function mcp_dispatch_single_rpc(
+    array $msg,
+    int $userId,
+    ?string &$rpcMethodOut,
+    ?string &$protoOut,
+    ?array &$metaOut = null,
+    ?float $reqStart = null
+): ?array {
+    $rpcStart = $reqStart ?? microtime(true);
+    $metaOut = ['is_error' => false, 'note' => null, 'chars' => 0, 'tokens' => 0];
+
     if (($msg['jsonrpc'] ?? null) !== '2.0' || !isset($msg['method']) || !is_string($msg['method'])) {
+        $metaOut['is_error'] = true;
+        $metaOut['note'] = 'rpc_error:-32600';
         return mcp_rpc_error($msg['id'] ?? null, -32600, 'Invalid JSON-RPC 2.0 request.');
     }
 
@@ -503,11 +515,17 @@ function mcp_dispatch_single_rpc(array $msg, int $userId, ?string &$rpcMethodOut
         if (!$hasId) {
             return null;
         }
+        $metaOut['is_error'] = true;
+        $metaOut['note'] = 'rpc_error:-32602';
+        $dur = (int)round((microtime(true) - $rpcStart) * 1000);
+        mcp_record_usage_stat($rpcMethodOut, $dur, true);
         return mcp_rpc_error($id, -32602, 'Invalid params: expected object.');
     }
 
     // Notifications (no id or notifications/* prefix) receive no JSON-RPC response body.
     if (!$hasId || str_starts_with($method, 'notifications/')) {
+        $dur = (int)round((microtime(true) - $rpcStart) * 1000);
+        mcp_record_usage_stat($rpcMethodOut, $dur, false);
         return null;
     }
 
@@ -517,6 +535,8 @@ function mcp_dispatch_single_rpc(array $msg, int $userId, ?string &$rpcMethodOut
             ? $requestedVersion
             : MCP_SUPPORTED_PROTOCOL_VERSIONS[0];
         $protoOut = $negotiated;
+        $dur = (int)round((microtime(true) - $rpcStart) * 1000);
+        mcp_record_usage_stat('initialize', $dur, false);
         return mcp_rpc_result($id, [
             'protocolVersion' => $negotiated,
             'capabilities' => [
@@ -531,18 +551,26 @@ function mcp_dispatch_single_rpc(array $msg, int $userId, ?string &$rpcMethodOut
     }
 
     if ($method === 'ping') {
+        $dur = (int)round((microtime(true) - $rpcStart) * 1000);
+        mcp_record_usage_stat('ping', $dur, false);
         return mcp_rpc_result($id, new stdClass());
     }
 
     if ($method === 'tools/list') {
+        $dur = (int)round((microtime(true) - $rpcStart) * 1000);
+        mcp_record_usage_stat('tools/list', $dur, false);
         return mcp_rpc_result($id, ['tools' => mcp_tool_definitions()]);
     }
 
     if ($method === 'resources/list') {
+        $dur = (int)round((microtime(true) - $rpcStart) * 1000);
+        mcp_record_usage_stat('resources/list', $dur, false);
         return mcp_rpc_result($id, ['resources' => []]);
     }
 
     if ($method === 'prompts/list') {
+        $dur = (int)round((microtime(true) - $rpcStart) * 1000);
+        mcp_record_usage_stat('prompts/list', $dur, false);
         return mcp_rpc_result($id, ['prompts' => []]);
     }
 
@@ -550,16 +578,33 @@ function mcp_dispatch_single_rpc(array $msg, int $userId, ?string &$rpcMethodOut
         $toolName = $params['name'] ?? null;
         $arguments = $params['arguments'] ?? [];
         if (!is_string($toolName) || $toolName === '' || !is_array($arguments)) {
+            $metaOut['is_error'] = true;
+            $metaOut['note'] = 'rpc_error:-32602';
+            $dur = (int)round((microtime(true) - $rpcStart) * 1000);
+            mcp_record_usage_stat('tools/call', $dur, true);
             return mcp_rpc_error($id, -32602, 'Invalid tools/call parameters.');
         }
         $rpcMethodOut = 'tools/call:' . $toolName;
         $knownNames = array_column(mcp_tool_definitions(), 'name');
         if (!in_array($toolName, $knownNames, true)) {
+            $metaOut['is_error'] = true;
+            $metaOut['note'] = 'rpc_error:-32602';
+            $dur = (int)round((microtime(true) - $rpcStart) * 1000);
+            mcp_record_usage_stat('tools/call:unknown', $dur, true);
             return mcp_rpc_error($id, -32602, 'Unknown tool: ' . $toolName);
         }
+        $argJson = !empty($arguments) ? (json_encode($arguments, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '') : '';
+        $argEst = mcp_estimate_tokens($argJson);
         try {
             $structured = mcp_execute_tool($userId, $toolName, $arguments);
             $text = mcp_format_tool_text($toolName, $structured);
+            $outEst = mcp_estimate_tokens($text);
+            $totalChars = $argEst['chars'] + $outEst['chars'];
+            $totalTokens = $argEst['tokens'] + $outEst['tokens'];
+            $dur = (int)round((microtime(true) - $rpcStart) * 1000);
+            $metaOut['chars'] = $totalChars;
+            $metaOut['tokens'] = $totalTokens;
+            mcp_record_usage_stat($rpcMethodOut, $dur, false, $totalChars, $totalTokens);
             return mcp_rpc_result($id, [
                 'content' => [
                     ['type' => 'text', 'text' => $text],
@@ -568,8 +613,23 @@ function mcp_dispatch_single_rpc(array $msg, int $userId, ?string &$rpcMethodOut
                 'isError' => false,
             ]);
         } catch (InvalidArgumentException $e) {
+            $dur = (int)round((microtime(true) - $rpcStart) * 1000);
+            $metaOut['is_error'] = true;
+            $metaOut['note'] = 'rpc_error:-32602';
+            $metaOut['chars'] = $argEst['chars'];
+            $metaOut['tokens'] = $argEst['tokens'];
+            mcp_record_usage_stat($rpcMethodOut, $dur, true, $argEst['chars'], $argEst['tokens']);
             return mcp_rpc_error($id, -32602, $e->getMessage());
         } catch (RuntimeException $e) {
+            $errEst = mcp_estimate_tokens($e->getMessage());
+            $totalChars = $argEst['chars'] + $errEst['chars'];
+            $totalTokens = $argEst['tokens'] + $errEst['tokens'];
+            $dur = (int)round((microtime(true) - $rpcStart) * 1000);
+            $metaOut['is_error'] = true;
+            $metaOut['note'] = 'tool_error';
+            $metaOut['chars'] = $totalChars;
+            $metaOut['tokens'] = $totalTokens;
+            mcp_record_usage_stat($rpcMethodOut, $dur, true, $totalChars, $totalTokens);
             return mcp_rpc_result($id, [
                 'content' => [
                     ['type' => 'text', 'text' => $e->getMessage()],
@@ -579,6 +639,8 @@ function mcp_dispatch_single_rpc(array $msg, int $userId, ?string &$rpcMethodOut
         }
     }
 
+    $metaOut['is_error'] = true;
+    $metaOut['note'] = 'rpc_error:-32601';
     return mcp_rpc_error($id, -32601, 'Method not found: ' . $method);
 }
 
@@ -590,7 +652,7 @@ function handle_mcp_request(): void {
 
     $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
     if ($method !== 'POST') {
-        mcp_debug_log($method, '/mcp', 405, (int)round((microtime(true) - $start) * 1000));
+        mcp_debug_log($method, '/mcp', 405, (int)round((microtime(true) - $start) * 1000), null, null, 'sse_probe_unsupported');
         mcp_json_response(405, ['error' => 'method_not_allowed'], ['Allow: POST']);
     }
 
@@ -649,19 +711,33 @@ function handle_mcp_request(): void {
 
     if ($isBatch) {
         $responses = [];
+        $batchTokens = 0;
+        $batchChars = 0;
+        $batchNote = null;
         foreach ($decoded as $item) {
             if (!is_array($item)) {
                 $responses[] = mcp_rpc_error(null, -32600, 'Invalid JSON-RPC request object.');
+                if ($batchNote === null) {
+                    $batchNote = 'rpc_error:-32600';
+                }
                 continue;
             }
             $itemRpc = null;
             $itemProto = null;
-            $res = mcp_dispatch_single_rpc($item, $userId, $itemRpc, $itemProto);
+            $itemMeta = null;
+            $res = mcp_dispatch_single_rpc($item, $userId, $itemRpc, $itemProto, $itemMeta);
             if ($rpcMethodOut === null && $itemRpc !== null) {
                 $rpcMethodOut = 'batch:' . $itemRpc;
             }
             if ($itemProto !== null) {
                 $protoOut = $itemProto;
+            }
+            if (is_array($itemMeta)) {
+                $batchTokens += (int)($itemMeta['tokens'] ?? 0);
+                $batchChars += (int)($itemMeta['chars'] ?? 0);
+                if ($batchNote === null && !empty($itemMeta['note'])) {
+                    $batchNote = (string)$itemMeta['note'];
+                }
             }
             if ($res !== null) {
                 $responses[] = $res;
@@ -669,12 +745,12 @@ function handle_mcp_request(): void {
         }
         $dur = (int)round((microtime(true) - $start) * 1000);
         if (empty($responses)) {
-            mcp_debug_log('POST', '/mcp', 202, $dur, $rpcMethodOut, $protoOut);
+            mcp_debug_log('POST', '/mcp', 202, $dur, $rpcMethodOut, $protoOut, $batchNote, $batchTokens, $batchChars);
             http_response_code(202);
             header('Cache-Control: no-store');
             exit;
         }
-        mcp_debug_log('POST', '/mcp', 200, $dur, $rpcMethodOut, $protoOut);
+        mcp_debug_log('POST', '/mcp', 200, $dur, $rpcMethodOut, $protoOut, $batchNote, $batchTokens, $batchChars);
         http_response_code(200);
         header('Content-Type: application/json; charset=utf-8');
         header('Cache-Control: no-store');
@@ -682,16 +758,20 @@ function handle_mcp_request(): void {
         exit;
     }
 
-    $response = mcp_dispatch_single_rpc($decoded, $userId, $rpcMethodOut, $protoOut);
+    $rpcMeta = null;
+    $response = mcp_dispatch_single_rpc($decoded, $userId, $rpcMethodOut, $protoOut, $rpcMeta, $start);
     $dur = (int)round((microtime(true) - $start) * 1000);
+    $rpcNote = is_array($rpcMeta) && !empty($rpcMeta['note']) ? (string)$rpcMeta['note'] : null;
+    $rpcTokens = is_array($rpcMeta) ? (int)($rpcMeta['tokens'] ?? 0) : 0;
+    $rpcChars = is_array($rpcMeta) ? (int)($rpcMeta['chars'] ?? 0) : 0;
     if ($response === null) {
-        mcp_debug_log('POST', '/mcp', 202, $dur, $rpcMethodOut, $protoOut);
+        mcp_debug_log('POST', '/mcp', 202, $dur, $rpcMethodOut, $protoOut, $rpcNote, $rpcTokens, $rpcChars);
         http_response_code(202);
         header('Cache-Control: no-store');
         exit;
     }
 
-    mcp_debug_log('POST', '/mcp', 200, $dur, $rpcMethodOut, $protoOut);
+    mcp_debug_log('POST', '/mcp', 200, $dur, $rpcMethodOut, $protoOut, $rpcNote, $rpcTokens, $rpcChars);
     http_response_code(200);
     header('Content-Type: application/json; charset=utf-8');
     header('Cache-Control: no-store');

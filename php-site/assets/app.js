@@ -5744,8 +5744,77 @@ const initImageViewer = () => {
   );
 
 
+  const initMcpDebugLogs = () => {
+    const panel = document.querySelector(".mcp-logs-panel");
+    if (!panel) return;
+
+    const closeAllPopovers = (except = null) => {
+      panel.querySelectorAll(".mcp-status-popover:not([hidden])").forEach((pop) => {
+        if (pop !== except) pop.hidden = true;
+      });
+    };
+
+    panel.addEventListener("click", (event) => {
+      const filterBtn = event.target.closest?.("[data-mcp-filter-btn]");
+      if (filterBtn) {
+        const mode = filterBtn.getAttribute("data-mcp-filter-btn") || "warnings";
+        panel.setAttribute("data-mcp-filter", mode);
+        panel.querySelectorAll(".mcp-filter-group [data-mcp-filter-btn]").forEach((btn) => {
+          const active = btn.getAttribute("data-mcp-filter-btn") === mode;
+          btn.classList.toggle("is-active", active);
+          btn.setAttribute("aria-pressed", String(active));
+        });
+        closeAllPopovers();
+        return;
+      }
+
+      const statusBtn = event.target.closest?.("[data-mcp-status-btn]");
+      if (statusBtn) {
+        event.stopPropagation();
+        const wrap = statusBtn.closest(".mcp-status-wrap");
+        const pop = wrap?.querySelector(".mcp-status-popover");
+        if (pop) {
+          const willOpen = pop.hidden;
+          closeAllPopovers(pop);
+          pop.hidden = !willOpen;
+        }
+        return;
+      }
+
+      const row = event.target.closest?.("tr[data-mcp-log-row]");
+      if (row) {
+        if (window.getSelection && String(window.getSelection()).length > 0) return;
+        const detailId = row.getAttribute("data-mcp-log-row");
+        const detailRow = detailId ? document.getElementById(detailId) : null;
+        if (detailRow) {
+          const expanded = detailRow.hidden;
+          detailRow.hidden = !expanded;
+          row.classList.toggle("is-expanded", expanded);
+          row.setAttribute("aria-expanded", String(expanded));
+        }
+      }
+    });
+
+    panel.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        closeAllPopovers();
+        return;
+      }
+      if (event.key !== "Enter" && event.key !== " ") return;
+      const row = event.target.closest?.("tr[data-mcp-log-row]");
+      if (!row || event.target !== row) return;
+      event.preventDefault();
+      row.click();
+    });
+
+    document.addEventListener("click", (event) => {
+      if (!panel.contains(event.target)) closeAllPopovers();
+    });
+  };
+
   initKnowledgeTree();
   initActionTableOverflowState();
+  initMcpDebugLogs();
 
   window.SPSControls?.mount();
   document.querySelector('[data-share-password-toggle]')?.addEventListener('click', event => {
