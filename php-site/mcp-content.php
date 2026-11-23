@@ -51,7 +51,7 @@ function mcp_parse_share_target(string $shareInput, ?string $docIdInput = null):
             throw new InvalidArgumentException('Invalid share URL.');
         }
         $urlPath = (string)($parts['path'] ?? '');
-        if (!preg_match('#(?:^|/)s/([a-zA-Z0-9_-]+)(?:/([^/?#]+))?#', $urlPath, $matches)) {
+        if (!preg_match('~(?:^|/)s/([a-zA-Z0-9_-]+)(?:/([^/?#]+))?~', $urlPath, $matches)) {
             throw new InvalidArgumentException('Share URL must point to /s/<slug> or /s/<slug>/<doc_id>.');
         }
         $slug = (string)$matches[1];
