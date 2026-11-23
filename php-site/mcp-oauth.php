@@ -1210,10 +1210,11 @@ function mcp_status_code_info(int $status, ?string $note, string $method, int $d
     }
 
     if ($status === 405) {
+        $isGetProbe = strtoupper($method) === 'GET';
         return [
-            'tone' => 'warn',
-            'level' => 'warn',
-            'title' => '405 Method Not Allowed',
+            'tone' => $isGetProbe ? 'info' : 'warn',
+            'level' => $isGetProbe ? 'info' : 'warn',
+            'title' => $isGetProbe ? '405 Method Not Allowed (SSE Probe)' : '405 Method Not Allowed',
             'meaning' => 'HTTP 405 Method Not Allowed — Client sent a ' . $method . ' request to a POST-only endpoint. Note: MCP clients (like Gemini) routinely probe GET /mcp for optional SSE streams; returning 405 is standard per the MCP Streamable HTTP spec and is not a failure.',
         ];
     }
