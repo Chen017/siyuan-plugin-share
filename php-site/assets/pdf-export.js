@@ -579,8 +579,85 @@
       const text = await SPSPdfTextLayer.capture(container);
       const bounds = container.getBoundingClientRect();
       const origin = bounds.top;
-      const links = Array.from(container.querySelectorAll('a[href]')).flatMap((anchor) =>
-        Array.from(anchor.getClientRects(), (rect) => ({ url: anchor.href, x: rect.left - bounds.left, y: rect.top - origin, width: rect.width, height: rect.height })));
+      const sourceUrl = new URL(section.dataset.pdfSource || location.href, location.origin);
+      let externalRefs = {};
+      if (section.dataset.pdfExternalRefs) {
+        try {
+          const parsed = JSON.parse(section.dataset.pdfExternalRefs);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) externalRefs = parsed;
+        } catch {}
+      }
+      const targetsById = new Map();
+      const targetsByLowerId = new Map();
+      for (const node of container.querySelectorAll('[id]')) {
+        if (node.closest('svg, .markdown-source, .katex-mathml')) continue;
+        if (!targetsById.has(node.id)) targetsById.set(node.id, node);
+        const lowerId = node.id.toLowerCase();
+        if (!targetsByLowerId.has(lowerId)) targetsByLowerId.set(lowerId, node);
+      }
+      const decodeFragment = (fragment) => {
+        try { return decodeURIComponent(fragment); } catch { return fragment; }
+      };
+      const findTarget = (fragment) => {
+        const decoded = decodeFragment(fragment);
+        return targetsById.get(fragment) || targetsById.get(decoded) || targetsByLowerId.get(decoded.toLowerCase()) || null;
+      };
+      const resolveAnchorHost = (targetEl) => {
+        if (targetEl.classList.contains('sps-block-anchor') || (targetEl.tagName === 'SPAN' && !targetEl.textContent.trim())) {
+          const parent = targetEl.parentElement;
+          if (parent?.classList.contains('sps-block-anchor-wrapper')) {
+            let cursor = parent.nextElementSibling;
+            while (cursor && cursor.classList.contains('sps-block-anchor-wrapper')) cursor = cursor.nextElementSibling;
+            if (cursor) return cursor;
+            cursor = parent.previousElementSibling;
+            while (cursor && cursor.classList.contains('sps-block-anchor-wrapper')) cursor = cursor.previousElementSibling;
+            return cursor || parent;
+          }
+          return targetEl.closest('h1, h2, h3, h4, h5, h6, li, blockquote, pre, tr, .katex-block, p') || parent || targetEl;
+        }
+        return targetEl;
+      };
+      const measureTarget = (targetEl) => {
+        const host = resolveAnchorHost(targetEl);
+        let rect = host.getBoundingClientRect();
+        if (rect.width === 0 && rect.height === 0) rect = targetEl.getBoundingClientRect();
+        return { top: Math.max(0, rect.top - origin), height: Math.max(0, rect.height) };
+      };
+      const resolveLinkDestination = (anchor) => {
+        const rawHref = (anchor.getAttribute('href') || '').trim();
+        if (!rawHref) return null;
+        if (rawHref.startsWith('#')) {
+          const fragment = rawHref.slice(1).trim();
+          if (!fragment) return null;
+          const targetEl = findTarget(fragment);
+          if (targetEl) return { internal: measureTarget(targetEl) };
+          const key = decodeFragment(fragment).toLowerCase();
+          if (Object.prototype.hasOwnProperty.call(externalRefs, key)) {
+            return { url: new URL(externalRefs[key], location.origin).href };
+          }
+          return { url: new URL('#' + fragment, sourceUrl).href };
+        }
+        let resolved;
+        try { resolved = new URL(rawHref, sourceUrl); } catch { return null; }
+        if (!['http:', 'https:', 'mailto:', 'tel:'].includes(resolved.protocol)) return null;
+        if (resolved.origin === sourceUrl.origin && resolved.pathname === sourceUrl.pathname && resolved.search === sourceUrl.search && resolved.hash.length > 1) {
+          const fragment = resolved.hash.slice(1);
+          const targetEl = findTarget(fragment);
+          if (targetEl) return { internal: measureTarget(targetEl) };
+          const key = decodeFragment(fragment).toLowerCase();
+          if (Object.prototype.hasOwnProperty.call(externalRefs, key)) {
+            return { url: new URL(externalRefs[key], location.origin).href };
+          }
+        }
+        return { url: resolved.href };
+      };
+      const links = Array.from(container.querySelectorAll('a[href]')).flatMap((anchor) => {
+        const destination = resolveLinkDestination(anchor);
+        if (!destination) return [];
+        return Array.from(anchor.getClientRects(), (rect) => ({
+          ...destination, x: rect.left - bounds.left, y: rect.top - origin, width: rect.width, height: rect.height,
+        }));
+      });
       const protectedRanges = [];
       const forcedBreaks = [];
       for (const element of container.querySelectorAll('p,div,li,table,tr,pre,h1,h2,h3,h4,h5,h6,blockquote,section,figure,img,svg,canvas,hr,.katex,.katex-display')) {
@@ -635,8 +712,21 @@
         const page = SPSPdfTextLayer.pageAt(pages, link.y + link.height / 2);
         if (page < 0 || page >= pages.length || link.width <= 0 || link.height <= 0) continue;
         pdf.setPage(page + 1);
-        pdf.link(14 + link.x * mmPerPixel, 16 + (link.y - pages[page].start) * mmPerPixel,
-          link.width * mmPerPixel, link.height * mmPerPixel, { url: link.url });
+        const x = 14 + link.x * mmPerPixel;
+        const y = 16 + (link.y - pages[page].start) * mmPerPixel;
+        const w = link.width * mmPerPixel;
+        const h = link.height * mmPerPixel;
+        if (link.internal) {
+          const probeY = link.internal.height > 0
+            ? Math.min(link.internal.top + Math.min(4, link.internal.height / 2), Math.max(0, height - 1))
+            : link.internal.top;
+          const targetPage = Math.max(0, Math.min(pages.length - 1, SPSPdfTextLayer.pageAt(pages, probeY)));
+          const targetOffsetPx = Math.max(0, link.internal.top - pages[targetPage].start);
+          const targetTopMm = Math.max(0, 16 + targetOffsetPx * mmPerPixel - 4);
+          pdf.link(x, y, w, h, { pageNumber: targetPage + 1, top: targetTopMm, left: 0, zoom: 0 });
+        } else if (link.url) {
+          pdf.link(x, y, w, h, { url: link.url });
+        }
       }
       SPSPdfTextLayer.write(pdf, text, { width: size.inner.width, pixelWidth: size.inner.px.width, pixelHeight: pageHeight, pages }, await loadProvenanceFont());
       await addProvenance(pdf, section);
@@ -691,21 +781,24 @@
       observer.disconnect();
     }
     const incomplete = Array.from(documentBody.querySelectorAll("img")).some((img) => !img.complete || img.naturalWidth === 0);
-    documentBody.querySelectorAll(".pdf-doc").forEach((section, index) => {
-      const ids = new Map();
-      section.querySelectorAll("[id]").forEach((node) => {
-        // Diagram IDs are generated uniquely by the renderer. Renaming SVG IDs
-        // would break embedded CSS, gradients, clip paths and marker references.
-        if (node.closest("svg")) return;
-        const previous = node.id;
-        node.id = `pdf-${index}-${previous}`;
-        ids.set(previous, node.id);
+    const sections = documentBody.querySelectorAll(".pdf-doc");
+    if (sections.length > 1) {
+      sections.forEach((section, index) => {
+        const ids = new Map();
+        section.querySelectorAll("[id]").forEach((node) => {
+          // Diagram IDs are generated uniquely by the renderer. Renaming SVG IDs
+          // would break embedded CSS, gradients, clip paths and marker references.
+          if (node.closest("svg")) return;
+          const previous = node.id;
+          node.id = `pdf-${index}-${previous}`;
+          ids.set(previous, node.id);
+        });
+        section.querySelectorAll('a[href^="#"]').forEach((anchor) => {
+          const id = anchor.getAttribute("href").slice(1);
+          if (ids.has(id)) anchor.setAttribute("href", `#${ids.get(id)}`);
+        });
       });
-      section.querySelectorAll('a[href^="#"]').forEach((anchor) => {
-        const id = anchor.getAttribute("href").slice(1);
-        if (ids.has(id)) anchor.setAttribute("href", `#${ids.get(id)}`);
-      });
-    });
+    }
     const diagramPending = !!documentBody.querySelector(".md-graphviz:empty")
       || Array.from(documentBody.querySelectorAll(".mermaid")).some((node) => !node.querySelector("svg, img"));
     status.textContent = incomplete || diagramPending

@@ -373,6 +373,52 @@ function pdf_export_worker_attributes(string $url, string $lease): string {
         . '" data-csrf="' . csrf_token() . '"';
 }
 
+function pdf_export_external_ref_targets(PDO $pdo, int $shareId, string $slug, string $currentDocId, string $markdown): array {
+    if (!preg_match_all('/#(\d{14}-[a-z0-9]{7})\b/i', $markdown, $refMatches)) {
+        return [];
+    }
+    $localIds = [];
+    if (preg_match_all('/\bid\s*=\s*["\'](\d{14}-[a-z0-9]{7})["\']/i', $markdown, $idMatches)) {
+        foreach ($idMatches[1] as $id) {
+            $localIds[strtolower($id)] = true;
+        }
+    }
+    $candidates = [];
+    foreach ($refMatches[1] as $id) {
+        $lower = strtolower($id);
+        if (!isset($localIds[$lower])) {
+            $candidates[$lower] = true;
+            if (count($candidates) >= 200) {
+                break;
+            }
+        }
+    }
+    $candidates = array_keys($candidates);
+    if (!$candidates) {
+        return [];
+    }
+    $targets = [];
+    $placeholders = implode(',', array_fill(0, count($candidates), '?'));
+    $docStmt = $pdo->prepare('SELECT doc_id FROM share_docs WHERE share_id = ? AND lower(doc_id) IN (' . $placeholders . ')');
+    $docStmt->execute(array_merge([$shareId], $candidates));
+    foreach ($docStmt->fetchAll(PDO::FETCH_COLUMN) as $targetDocId) {
+        $targetDocId = (string)$targetDocId;
+        $targets[strtolower($targetDocId)] = base_path() . build_share_redirect_path($slug, $targetDocId, '');
+    }
+    $remaining = array_slice(array_values(array_diff($candidates, array_keys($targets))), 0, 50);
+    if ($remaining) {
+        $blockStmt = $pdo->prepare('SELECT doc_id FROM share_docs WHERE share_id = ? AND doc_id != ? AND (instr(markdown, ?) > 0 OR instr(markdown, ?) > 0) ORDER BY sort_order, id LIMIT 1');
+        foreach ($remaining as $blockId) {
+            $blockStmt->execute([$shareId, $currentDocId, 'id="' . $blockId . '"', "id='" . $blockId . "'"]);
+            $targetDocId = $blockStmt->fetchColumn();
+            if ($targetDocId !== false && $targetDocId !== '') {
+                $targets[$blockId] = base_path() . build_share_redirect_path($slug, (string)$targetDocId, $blockId);
+            }
+        }
+    }
+    return $targets;
+}
+
 function pdf_export_document(array $share, string $slug, string $visitor, string $token, int $index): never {
     $pdo = db();
     $shareId = (int)$share['id'];
@@ -425,7 +471,11 @@ function pdf_export_document(array $share, string $slug, string $visitor, string
         $markdown = insert_adjacent_emoji_image_spacing($markdown);
         $html = render_markdown($markdown);
         $sourceUrl = base_path() . build_share_redirect_path($slug, (string)$doc['doc_id'], '');
-        $section = '<section class="pdf-doc" data-pdf-doc="' . htmlspecialchars((string)$doc['doc_id']) . '" data-pdf-title="' . htmlspecialchars($title) . '" data-pdf-source="' . htmlspecialchars($sourceUrl) . '"><h1>' . htmlspecialchars($title) . '</h1>';
+        $externalRefs = pdf_export_external_ref_targets($pdo, $shareId, $slug, (string)$doc['doc_id'], $markdown);
+        $externalRefsAttr = $externalRefs
+            ? ' data-pdf-external-refs="' . htmlspecialchars(json_encode($externalRefs, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR), ENT_QUOTES, 'UTF-8') . '"'
+            : '';
+        $section = '<section class="pdf-doc" data-pdf-doc="' . htmlspecialchars((string)$doc['doc_id']) . '" data-pdf-title="' . htmlspecialchars($title) . '" data-pdf-source="' . htmlspecialchars($sourceUrl) . '"' . $externalRefsAttr . '><h1>' . htmlspecialchars($title) . '</h1>';
         $section .= '<div class="markdown-body" data-md-id="pdf-' . $index . '">' . $html . '</div><textarea class="markdown-source" data-md-id="pdf-' . $index . '" hidden>' . htmlspecialchars($markdown) . '</textarea></section>';
         $pdo->exec('BEGIN IMMEDIATE');
         try {

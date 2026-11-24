@@ -357,3 +357,44 @@ class PdfExportTests:
         self.rows(f"INSERT INTO share_assets(share_id, doc_id, asset_path, file_path, size_bytes, created_at) VALUES ({int(share['id'])}, '{self.name}', 'assets/large.png', 'unused.png', 52428801, '2026-01-01')")
         self.assertEqual(self.pdf_post(client, path, csrf)[0], 413)
         self.assertEqual(self.rows('SELECT COUNT(*) AS n FROM pdf_export_leases')[0]['n'], 0)
+
+    def test_pdf_external_ref_targets_are_share_scoped(self):
+        other_share = self.share(docId='20261119099999-priv001', markdown='<span id="20261119099999-privblk" class="sps-block-anchor"></span>')
+        self.assertIsNotNone(other_share)
+        docs = [
+            {
+                'docId': '20261119083700-doc0001',
+                'title': '主文档',
+                'markdown': (
+                    '同文档引用 [Local](#20261119083945-locblk1)\n\n'
+                    '跨文档引用 [OtherDoc](#20261119099999-doc0002)\n\n'
+                    '跨文档块引用 [OtherBlock](#20261119099999-blk0002)\n\n'
+                    '跨分享引用 [PrivateDoc](#20261119099999-priv001) [PrivateBlock](#20261119099999-privblk)\n\n'
+                    '局部锚点 <span id="20261119083945-locblk1" class="sps-block-anchor"></span>'
+                ),
+            },
+            {
+                'docId': '20261119099999-doc0002',
+                'title': '目标文档',
+                'markdown': '目标内容 <span id="20261119099999-blk0002" class="sps-block-anchor"></span>',
+            },
+        ]
+        share = self.api('shares/notebook', {'notebookId': self.name, 'title': '引用测试笔记本', 'docs': docs})['share']
+        client, path, csrf = self.pdf_visitor(share)
+        status, _, body = self.pdf_post(client, path, csrf, scope='single', doc_id=docs[0]['docId'])
+        self.assertEqual(status, 200, body)
+        lease = self.pdf_lease(body)
+        try:
+            status, _, rendered = self.pdf_document(client, path, csrf, lease, 0)
+            self.assertEqual(status, 200, rendered)
+            match = re.search(rb'data-pdf-external-refs="([^"]+)"', rendered)
+            self.assertIsNotNone(match, rendered[:400])
+            refs = json.loads(html.unescape(match[1].decode()))
+            slug = share['slug']
+            self.assertEqual(refs.get('20261119099999-doc0002'), f'/s/{slug}/20261119099999-doc0002')
+            self.assertEqual(refs.get('20261119099999-blk0002'), f'/s/{slug}/20261119099999-doc0002#20261119099999-blk0002')
+            self.assertNotIn('20261119083945-locblk1', refs)
+            self.assertNotIn('20261119099999-priv001', refs)
+            self.assertNotIn('20261119099999-privblk', refs)
+        finally:
+            client.request(path + '/release', {'csrf': csrf, 'lease': lease})

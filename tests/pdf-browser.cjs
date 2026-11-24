@@ -114,6 +114,9 @@ const chooseScope = async (page, value) => {
         try { return [zlib.inflateSync(Buffer.from(match[1], 'latin1')).toString('latin1')]; } catch { return []; }
       });
       assert.ok(streams.some((stream) => /\b3 Tr\b/.test(stream)), 'Hidden text uses PDF invisible rendering mode');
+      const uris = [...raw.matchAll(/\/URI\s*\(([^)]+)\)/g)].map((match) => match[1]);
+      assert.equal(uris.some((uri) => uri.includes('/export')), false, `PDF URI must never point to /export: ${JSON.stringify(uris)}`);
+      assert.ok(/\/Dest\s*\[\d+\s+0\s+R\s+\/XYZ\b/.test(raw), 'Same-document footnote emits internal PDF /Dest jump');
       assert.ok(bytes.length > 5000, 'PDF contains rendered content');
       assert.equal((bytes.toString('latin1').match(/\/Type\s*\/Page\b/g) || []).length, 1, 'No empty trailing page');
     }
