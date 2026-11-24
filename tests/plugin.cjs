@@ -9,7 +9,7 @@ const { JSDOM } = require('jsdom');
 const root = path.join(__dirname, '..');
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
-function host({ mobile = false, locale = 'en_US', stored = {}, exportMarkdown = '', kramdown = '', sqlRows = [], appVersion = '3.8.9', confirmAccepted = true } = {}) {
+function host({ mobile = false, locale = 'en_US', stored = {}, exportMarkdown = '', kramdown = '', blockKramdowns = {}, sqlRows = [], sqlHandler = null, appVersion = '3.8.9', confirmAccepted = true } = {}) {
   const dom = new JSDOM('<!doctype html><body></body>', { url: 'https://siyuan.invalid/' });
   const storage = new Map(Object.entries(structuredClone(stored)));
   const listeners = new Map();
@@ -63,8 +63,12 @@ function host({ mobile = false, locale = 'en_US', stored = {}, exportMarkdown = 
         fetchSyncPost: async (url, body) => {
           kernelRequests.push({url, body: plain(body)});
           if (url === '/api/export/exportMdContent') return { code: 0, data: {hPath: '/Fixture', content: exportMarkdown} };
-          if (url === '/api/block/getBlockKramdown') return { code: 0, data: {id: body?.id || '', kramdown} };
-          if (url === '/api/query/sql') return { code: 0, data: sqlRows };
+          if (url === '/api/block/getBlockKramdown') {
+            const bid = String(body?.id || '');
+            const k = Object.prototype.hasOwnProperty.call(blockKramdowns, bid) ? blockKramdowns[bid] : kramdown;
+            return { code: 0, data: {id: bid, kramdown: k} };
+          }
+          if (url === '/api/query/sql') return { code: 0, data: typeof sqlHandler === 'function' ? sqlHandler(body?.stmt || '') : sqlRows };
           if (url === '/api/system/version') return { code: 0, data: appVersion };
           return { code: 0, data: {} };
         },
@@ -344,6 +348,84 @@ function host({ mobile = false, locale = 'en_US', stored = {}, exportMarkdown = 
       assert(sqlFixture.kernelRequests.some((r) => r.url === '/api/query/sql'), 'SQL fallback runs when Kramdown misses referenced IDs');
       assert(exported.content.includes(`<span id="${sqlItemId}" class="sps-block-anchor" data-sps-anchor-kind="list-item"></span>`), 'SQL fallback resolves container block to first child leaf');
     } finally { sqlFixture.close(); }
+
+    // 1) Inline list-marker with 0 spaces (`1. {: id="..."}$R=\Z$`) and double inline IAL (`1. {: id="item"} {: id="p"} text`)
+    {
+      const noSpaceId = '20261124103523-nospc11';
+      const dblItemId = '20261124103523-dblim11';
+      const dblChildId = '20261124103523-dblch11';
+      const inlineKramdown = [
+        `1. {: id="${noSpaceId}"}$R=\\Z$`,
+        `2. {: id="${dblItemId}"} {: id="${dblChildId}"} $R=\\mathbb{F}[x]$`,
+        `{: id="${docId}"}`,
+      ].join('\n');
+      const inlineMd = [
+        '1. $R=\\Z$',
+        '2. $R=\\mathbb{F}[x]$',
+        '',
+        `See [a](#${noSpaceId}), [b](#${dblItemId}), [c](#${dblChildId}).`,
+      ].join('\n');
+      const f = host({ mobile: true, exportMarkdown: inlineMd, kramdown: inlineKramdown });
+      try {
+        const exported = await f.plugin.exportDocMarkdown(docId);
+        assert(exported.content.includes(`<span id="${noSpaceId}" class="sps-block-anchor" data-sps-anchor-kind="list-item"></span>`), 'No-space inline list-item IAL is parsed');
+        assert(exported.content.includes(`<span id="${dblItemId}" class="sps-block-anchor" data-sps-anchor-kind="list-item"></span>`), 'Double inline IAL resolves list-item ID');
+        assert(exported.content.includes(`<span id="${dblChildId}" class="sps-block-anchor"></span>`), 'Double inline IAL resolves inner paragraph ID');
+      } finally { f.close(); }
+    }
+
+    // 2) SQL LIMIT 10000 + targeted `WHERE lower(id) IN (...)` + `$`-stripped content fallback
+    {
+      const truncItemId = '20261124103524-trunc11';
+      const truncChildId = '20261124103524-trchd11';
+      const sqlStatements = [];
+      const f = host({
+        mobile: true,
+        exportMarkdown: `1. $R=\\Z$\n\n   Second line\n\nSee [this](#${truncItemId}).`,
+        kramdown: `1. Unrelated\n{: id="20261124103524-unrel11"}\n{: id="${docId}"}`,
+        sqlHandler: (stmt) => {
+          sqlStatements.push(stmt);
+          if (/FROM blocks WHERE root_id =/i.test(stmt)) {
+            assert(/LIMIT 10000\b/i.test(stmt), 'Whole-doc SQL query overrides SiYuan default 64-row limit with LIMIT 10000');
+            return []; // Simulate truncated / omitted whole-doc result
+          }
+          if (/WHERE lower\(id\) IN/i.test(stmt)) {
+            return [{ id: truncItemId, parent_id: docId, root_id: docId, type: 'i', subtype: 'o', content: 'R=\\Z', markdown: '', sort: 20 }];
+          }
+          if (/WHERE lower\(parent_id\) IN/i.test(stmt)) {
+            return [{ id: truncChildId, parent_id: truncItemId, type: 'p', subtype: '', content: 'R=\\Z', markdown: '', sort: 10 }];
+          }
+          return [];
+        },
+      });
+      try {
+        const exported = await f.plugin.exportDocMarkdown(docId);
+        assert(sqlStatements.some((s) => /WHERE lower\(id\) IN/i.test(s)), 'Targeted SQL lookup runs when whole-doc SQL misses ID');
+        assert(exported.content.includes(`<span id="${truncItemId}" class="sps-block-anchor" data-sps-anchor-kind="list-item"></span>`), 'Targeted SQL + $-stripped content fallback resolves math list item');
+      } finally { f.close(); }
+    }
+
+    // 3) Per-block `/api/block/getBlockKramdown({id: missingId})` fallback when whole-doc Kramdown & SQL miss ID
+    {
+      const perBlockId = '20261124103525-perbk11';
+      const f = host({
+        mobile: true,
+        exportMarkdown: `1. $R=\\mathbb{F}[x]$\n\n   Extra child paragraph\n\nSee [this](#${perBlockId}).`,
+        blockKramdowns: {
+          [docId]: `1. Unrelated\n{: id="20261124103525-other11"}\n{: id="${docId}"}`,
+          [perBlockId]: `1. {: id="${perBlockId}"}\n   $R=\\mathbb{F}[x]$\n   {: id="20261124103525-pchild1"}\n\n   Extra child paragraph\n   {: id="20261124103525-pchild2"}`,
+        },
+        sqlRows: [],
+      });
+      try {
+        const exported = await f.plugin.exportDocMarkdown(docId);
+        assert(
+          f.kernelRequests.some((r) => r.url === '/api/block/getBlockKramdown' && r.body?.id === perBlockId),
+          'Direct per-block getBlockKramdown runs for unresolved missing IDs',
+        );
+        assert(exported.content.includes(`<span id="${perBlockId}" class="sps-block-anchor" data-sps-anchor-kind="list-item"></span>`), 'Per-block Kramdown fallback injects loose multi-paragraph list-item anchor');
+      } finally { f.close(); }
+    }
   }
 
   // forceFull and republishAllNotebooks: force re-export + overwrite upload across all notebook shares.

@@ -45,8 +45,8 @@ const UPLOAD_RETRY_BASE_DELAY = 400;
 const UPLOAD_RETRY_MAX_DELAY = 2000;
 const UPLOAD_MISSING_CHUNK_RETRY_LIMIT = 8;
 const EXPORT_RETRY_CACHE_DIR_NAME = "export-retry-cache";
-// Version 4 entries improve container/list/math/image block anchor injection.
-const EXPORT_RETRY_CACHE_VERSION = 4;
+// Version 5 entries include LIMIT 10000 SQL and per-block Kramdown anchor fallbacks.
+const EXPORT_RETRY_CACHE_VERSION = 5;
 const AUTO_UPDATE_HISTORY_LIMIT = 2000;
 const AUTO_UPDATE_HISTORY_RENDER_LIMIT = 200;
 const AUTO_UPDATE_HISTORY_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
@@ -1612,32 +1612,39 @@ function parseKramdownOrderedBlocks(kramdown, docId = "") {
         id,
         kind: "code",
         headingLevel: 0,
+        firstLineNormText: normalizeBlockMatchText(inner[0] || ""),
         normText: normalizeBlockMatchText(inner.join(" ")),
       };
     }
     if (firstTrimmed.startsWith("$$")) {
       const bodyText = cleanLines.map((l) => l.replace(/^\s*(?:>\s*)+/, "")).join(" ").replace(/^\s*\$\$|\$\$\s*$/g, "");
+      const mathNorm = normalizeBlockMatchText(bodyText);
       return {
         id,
         kind: "math",
         headingLevel: 0,
-        normText: normalizeBlockMatchText(bodyText),
+        firstLineNormText: mathNorm,
+        normText: mathNorm,
       };
     }
     const info = classifyBlockStartLine(firstRaw);
     if (info.kind === "heading") {
+      const headingNorm = normalizeBlockMatchText(info.text);
       return {
         id,
         kind: "heading",
         headingLevel: info.headingLevel,
-        normText: normalizeBlockMatchText(info.text),
+        firstLineNormText: headingNorm,
+        normText: headingNorm,
       };
     }
+    const firstLineNormText = normalizeBlockMatchText(info.text);
     const combinedText = [info.text, ...cleanLines.slice(1).map((l) => stripBlockPrefix(l))].join(" ");
     return {
       id,
       kind: info.kind,
       headingLevel: 0,
+      firstLineNormText,
       normText: normalizeBlockMatchText(combinedText),
     };
   };
@@ -1709,6 +1716,7 @@ function parseKramdownOrderedBlocks(kramdown, docId = "") {
           kind: pc.kind,
           anchorKind: pc.anchorKind,
           headingLevel: parsed.kind === "heading" ? parsed.headingLevel : 0,
+          firstLineNormText: parsed.firstLineNormText || parsed.normText,
           normText: parsed.normText,
         });
       }
@@ -1731,6 +1739,7 @@ function parseKramdownOrderedBlocks(kramdown, docId = "") {
           kind: ref.kind,
           anchorKind: "superblock",
           headingLevel: ref.headingLevel,
+          firstLineNormText: ref.firstLineNormText || ref.normText,
           normText: ref.normText,
         });
         return;
@@ -1747,6 +1756,7 @@ function parseKramdownOrderedBlocks(kramdown, docId = "") {
           kind: "blockquote",
           anchorKind: "blockquote",
           headingLevel: 0,
+          firstLineNormText: ref.firstLineNormText || ref.normText,
           normText: ref.normText,
         });
         return;
@@ -1764,6 +1774,7 @@ function parseKramdownOrderedBlocks(kramdown, docId = "") {
             kind: "list-item",
             anchorKind: "list-item",
             headingLevel: 0,
+            firstLineNormText: blocks[targetIdx].firstLineNormText || blocks[targetIdx].normText,
             normText: blocks[targetIdx].normText,
           });
           return;
@@ -1789,6 +1800,7 @@ function parseKramdownOrderedBlocks(kramdown, docId = "") {
             kind: ref.kind,
             anchorKind: "list",
             headingLevel: ref.headingLevel,
+            firstLineNormText: ref.firstLineNormText || ref.normText,
             normText: ref.normText,
           });
           return;
@@ -1801,6 +1813,7 @@ function parseKramdownOrderedBlocks(kramdown, docId = "") {
         id: blockId,
         kind: ref.kind,
         headingLevel: ref.headingLevel,
+        firstLineNormText: ref.firstLineNormText || ref.normText,
         normText: ref.normText,
       });
     }
@@ -1882,21 +1895,43 @@ function parseKramdownOrderedBlocks(kramdown, docId = "") {
       continue;
     }
 
-    // List marker with inline IAL: `1. {: id="..."}`, `* {: id="..."} optional text`
-    const listMarkerIalMatch = unquoted.match(/^(\s*)(?:([-*+]|\d+[.)])\s+(?:(\[[ xX]\])\s+)?)\{:([^}\n]*)\}(?:\s+(.*))?$/);
+    // List marker with inline IAL: `1. {: id="..."}`, `1. {: id="..."}$R=\Z$`, or `1. {: id="item"} {: id="p"} text`
+    const listMarkerIalMatch = unquoted.match(/^(\s*)(?:([-*+]|\d+[.)])\s+(?:(\[[ xX]\])\s+)?)\{:([^}\n]*)\}(.*)$/);
     if (listMarkerIalMatch) {
       lastClosedSuperblock = null;
       ensureQuoteScopesForDepth(quoteDepth);
       const indent = listMarkerIalMatch[1].replace(/\t/g, "  ").length;
       const marker = listMarkerIalMatch[2];
       const taskMark = listMarkerIalMatch[3] || "";
-      const attrs = listMarkerIalMatch[4] || "";
-      const trailingText = listMarkerIalMatch[5] || "";
-      const idMatch = attrs.match(SIYUAN_IAL_ID_RE);
-      const blockId = idMatch ? idMatch[1].toLowerCase() : "";
-      openListItemScope(quoteDepth, indent, Boolean(blockId && blockId !== docIdLower));
-      if (blockId && blockId !== docIdLower) {
-        pendingContainers.push({id: blockId, kind: "list-item", anchorKind: "list-item"});
+      let rest = String(listMarkerIalMatch[5] || "");
+      const inlineIds = [];
+      const firstIdMatch = (listMarkerIalMatch[4] || "").match(SIYUAN_IAL_ID_RE);
+      if (firstIdMatch) inlineIds.push(firstIdMatch[1].toLowerCase());
+      while (true) {
+        const extraIal = rest.match(/^\s*\{:([^}\n]*)\}(.*)$/);
+        if (!extraIal) break;
+        const extraIdMatch = (extraIal[1] || "").match(SIYUAN_IAL_ID_RE);
+        if (extraIdMatch) inlineIds.push(extraIdMatch[1].toLowerCase());
+        rest = String(extraIal[2] || "");
+      }
+      const validInlineIds = inlineIds.filter((id) => id && id !== docIdLower);
+      openListItemScope(quoteDepth, indent, validInlineIds.length > 0);
+      const trailingText = rest.replace(/^\s+/, "");
+      if (validInlineIds.length > 1 && trailingText.trim()) {
+        const quoteLead = quoteDepth > 0 ? line.match(/^\s*(?:>\s*)+/)[0] : "";
+        const contentLine = `${quoteLead}${listMarkerIalMatch[1]}${marker} ${taskMark ? `${taskMark} ` : ""}${trailingText}`;
+        pendingContainers.push({id: validInlineIds[0], kind: "list-item", anchorKind: "list-item"});
+        for (let k = 1; k < validInlineIds.length - 1; k += 1) {
+          pendingContainers.push({id: validInlineIds[k], kind: "paragraph", anchorKind: ""});
+        }
+        emitLeafAndFlushContainers(validInlineIds[validInlineIds.length - 1], [contentLine]);
+        continue;
+      }
+      if (validInlineIds.length > 0) {
+        pendingContainers.push({id: validInlineIds[0], kind: "list-item", anchorKind: "list-item"});
+        for (let k = 1; k < validInlineIds.length; k += 1) {
+          pendingContainers.push({id: validInlineIds[k], kind: "paragraph", anchorKind: ""});
+        }
       }
       if (trailingText.trim()) {
         buffer.push(`${listMarkerIalMatch[1]}${marker} ${taskMark ? `${taskMark} ` : ""}${trailingText}`);
@@ -2214,20 +2249,24 @@ function injectMissingBlockAnchorsInMarkdown(markdown, orderedBlocks, missingIds
     if (srcIdx === undefined) continue;
     const targetBlock = orderedBlocks[srcIdx];
     const targetNorm = String(targetBlock?.normText || "");
-    if (!targetNorm) continue;
+    const targetFirstNorm = String(targetBlock?.firstLineNormText || "");
+    if (!targetNorm && !targetFirstNorm) continue;
 
+    const stripMathDelimiters = (s) => String(s || "").replace(/\$/g, "").replace(/\s+/g, " ").trim();
     const sameKey = (b) =>
       b.kind === targetBlock.kind &&
       b.headingLevel === targetBlock.headingLevel &&
       b.normText === targetNorm;
 
     const exactMatches = [];
-    mdBlocks.forEach((b, mdIdx) => {
-      if (sameKey(b)) exactMatches.push(mdIdx);
-    });
+    if (targetNorm) {
+      mdBlocks.forEach((b, mdIdx) => {
+        if (sameKey(b)) exactMatches.push(mdIdx);
+      });
+    }
 
     let candidates = exactMatches;
-    if (!candidates.length) {
+    if (!candidates.length && targetNorm) {
       // Relaxed fallback: match normalized text regardless of kind (e.g. blockquote/list formatting differences)
       mdBlocks.forEach((b, mdIdx) => {
         if (b.normText === targetNorm) candidates.push(mdIdx);
@@ -2236,34 +2275,79 @@ function injectMissingBlockAnchorsInMarkdown(markdown, orderedBlocks, missingIds
     if (!candidates.length) {
       // First-line fallback: multi-paragraph or soft-broken list items / containers
       mdBlocks.forEach((b, mdIdx) => {
-        if (b.kind === targetBlock.kind && b.headingLevel === targetBlock.headingLevel && b.firstLineNormText === targetNorm) {
-          candidates.push(mdIdx);
-        }
-      });
-      if (!candidates.length) {
-        mdBlocks.forEach((b, mdIdx) => {
-          if (b.firstLineNormText === targetNorm) candidates.push(mdIdx);
-        });
-      }
-    }
-    if (!candidates.length && targetNorm.length >= 4) {
-      // Prefix/containment fallback when SiYuan alters inline markup slightly on export
-      mdBlocks.forEach((b, mdIdx) => {
-        if (!b.normText) return;
         if (b.kind === targetBlock.kind && b.headingLevel === targetBlock.headingLevel) {
-          if (b.normText.includes(targetNorm) || targetNorm.includes(b.normText)) {
+          if (
+            (targetNorm && b.firstLineNormText === targetNorm) ||
+            (targetFirstNorm && (b.firstLineNormText === targetFirstNorm || b.normText === targetFirstNorm))
+          ) {
             candidates.push(mdIdx);
           }
         }
       });
+      if (!candidates.length) {
+        mdBlocks.forEach((b, mdIdx) => {
+          if (
+            (targetNorm && b.firstLineNormText === targetNorm) ||
+            (targetFirstNorm && (b.firstLineNormText === targetFirstNorm || b.normText === targetFirstNorm))
+          ) {
+            candidates.push(mdIdx);
+          }
+        });
+      }
     }
-    if (!candidates.length && targetNorm.length >= 8) {
+    if (!candidates.length) {
+      const probeText = targetNorm.length >= 4 ? targetNorm : targetFirstNorm;
+      if (probeText.length >= 4) {
+        // Prefix/containment fallback when SiYuan alters inline markup slightly on export
+        mdBlocks.forEach((b, mdIdx) => {
+          if (!b.normText) return;
+          if (b.kind === targetBlock.kind && b.headingLevel === targetBlock.headingLevel) {
+            if (b.normText.includes(probeText) || probeText.includes(b.normText)) {
+              candidates.push(mdIdx);
+            }
+          }
+        });
+      }
+    }
+    if (!candidates.length) {
+      const probeText = targetNorm.length >= 8 ? targetNorm : targetFirstNorm;
+      if (probeText.length >= 8) {
+        mdBlocks.forEach((b, mdIdx) => {
+          if (!b.normText) return;
+          if (b.normText.includes(probeText) || probeText.includes(b.normText)) {
+            candidates.push(mdIdx);
+          }
+        });
+      }
+    }
+    if (!candidates.length) {
+      // Math-delimiter-insensitive fallback when SQL blocks.content omits `$` wrappers.
+      const targetPlain = stripMathDelimiters(targetNorm);
+      const targetFirstPlain = stripMathDelimiters(targetFirstNorm);
       mdBlocks.forEach((b, mdIdx) => {
-        if (!b.normText) return;
-        if (b.normText.includes(targetNorm) || targetNorm.includes(b.normText)) {
-          candidates.push(mdIdx);
+        if (b.kind === targetBlock.kind && b.headingLevel === targetBlock.headingLevel) {
+          const bNormPlain = stripMathDelimiters(b.normText);
+          const bFirstPlain = stripMathDelimiters(b.firstLineNormText);
+          if (
+            (targetPlain && (bNormPlain === targetPlain || bFirstPlain === targetPlain)) ||
+            (targetFirstPlain && (bNormPlain === targetFirstPlain || bFirstPlain === targetFirstPlain))
+          ) {
+            candidates.push(mdIdx);
+          }
         }
       });
+      if (!candidates.length) {
+        mdBlocks.forEach((b, mdIdx) => {
+          const bNormPlain = stripMathDelimiters(b.normText);
+          const bFirstPlain = stripMathDelimiters(b.firstLineNormText);
+          if (
+            (targetPlain && (bNormPlain === targetPlain || bFirstPlain === targetPlain)) ||
+            (targetFirstPlain && (bNormPlain === targetFirstPlain || bFirstPlain === targetFirstPlain))
+          ) {
+            candidates.push(mdIdx);
+          }
+        });
+      }
     }
     if (!candidates.length) continue;
 
@@ -11588,6 +11672,7 @@ class SiYuanSharePlugin extends Plugin {
   async fetchDocOrderedBlocksForAnchors(docId, missingIds = []) {
     const cleanDocId = String(docId || "").trim();
     if (!cleanDocId) return [];
+    const cleanDocIdLower = cleanDocId.toLowerCase();
     const normalizedMissing = Array.from(
       new Set(
         (Array.isArray(missingIds) ? missingIds : [])
@@ -11606,16 +11691,13 @@ class SiYuanSharePlugin extends Plugin {
     }
     if (parsed.length) {
       if (!normalizedMissing.length) return parsed;
-      const parsedIds = new Set(parsed.map((b) => String(b?.id || "").trim().toLowerCase()));
+      const parsedIds = new Set(
+        parsed.filter((b) => b?.normText).map((b) => String(b.id || "").trim().toLowerCase()),
+      );
       if (normalizedMissing.every((id) => parsedIds.has(id))) {
         return parsed;
       }
     }
-    const safeId = cleanDocId.replace(/'/g, "''");
-    const rows = await this.querySqlRows(
-      `SELECT id, parent_id, type, subtype, content, markdown, sort FROM blocks WHERE root_id = '${safeId}' AND id != '${safeId}' ORDER BY sort ASC`,
-    );
-    if (!Array.isArray(rows) || !rows.length) return parsed;
 
     const CONTAINER_SQL_TYPES = {
       i: "list-item",
@@ -11623,6 +11705,67 @@ class SiYuanSharePlugin extends Plugin {
       b: "blockquote",
       s: "superblock",
     };
+
+    const safeId = cleanDocId.replace(/'/g, "''");
+    const wholeDocRows = await this.querySqlRows(
+      `SELECT id, parent_id, type, subtype, content, markdown, sort FROM blocks WHERE root_id = '${safeId}' AND id != '${safeId}' ORDER BY sort ASC LIMIT 10000`,
+    );
+    const rowsById = new Map();
+    const rows = [];
+    const pushSqlRow = (row) => {
+      const id = String(row?.id || "").trim().toLowerCase();
+      if (!SIYUAN_BLOCK_ID_RE.test(id) || id === cleanDocIdLower) return;
+      if (rowsById.has(id)) return;
+      rowsById.set(id, row);
+      rows.push(row);
+    };
+    if (Array.isArray(wholeDocRows)) {
+      wholeDocRows.forEach(pushSqlRow);
+    }
+
+    const parsedValidIds = new Set(
+      parsed.filter((b) => b?.normText).map((b) => String(b.id || "").trim().toLowerCase()),
+    );
+    const foreignIds = new Set();
+    const missingFromWhole = normalizedMissing.filter((id) => !parsedValidIds.has(id) && !rowsById.has(id));
+    if (missingFromWhole.length > 0) {
+      const idListSql = missingFromWhole.slice(0, 500).map((id) => `'${id.replace(/'/g, "''")}'`).join(",");
+      const targetedRows = await this.querySqlRows(
+        `SELECT id, parent_id, root_id, type, subtype, content, markdown, sort FROM blocks WHERE lower(id) IN (${idListSql}) LIMIT 500`,
+      );
+      const containerIdsNeedingChildren = [];
+      if (Array.isArray(targetedRows)) {
+        for (const row of targetedRows) {
+          const id = String(row?.id || "").trim().toLowerCase();
+          const rowRootId = String(row?.root_id || "").trim().toLowerCase();
+          if (rowRootId && rowRootId !== cleanDocIdLower) {
+            if (id) foreignIds.add(id);
+            continue;
+          }
+          pushSqlRow(row);
+          const rowType = String(row?.type || "").trim().toLowerCase();
+          if (CONTAINER_SQL_TYPES[rowType] && SIYUAN_BLOCK_ID_RE.test(id)) {
+            containerIdsNeedingChildren.push(id);
+          }
+        }
+      }
+      if (containerIdsNeedingChildren.length > 0) {
+        const hasLoadedChild = new Set(
+          rows.map((r) => String(r?.parent_id || "").trim().toLowerCase()).filter(Boolean),
+        );
+        const parentsToFetch = containerIdsNeedingChildren.filter((id) => !hasLoadedChild.has(id));
+        if (parentsToFetch.length > 0) {
+          const parentListSql = parentsToFetch.map((id) => `'${id.replace(/'/g, "''")}'`).join(",");
+          const childRows = await this.querySqlRows(
+            `SELECT id, parent_id, type, subtype, content, markdown, sort FROM blocks WHERE lower(parent_id) IN (${parentListSql}) ORDER BY sort ASC LIMIT 1000`,
+          );
+          if (Array.isArray(childRows)) {
+            childRows.forEach(pushSqlRow);
+          }
+        }
+      }
+    }
+
     const buildSqlLeafMeta = (row) => {
       const id = String(row?.id || "").trim().toLowerCase();
       const type = String(row?.type || "").trim().toLowerCase();
@@ -11651,8 +11794,10 @@ class SiYuanSharePlugin extends Plugin {
       } else if (type === "b") {
         kind = "blockquote";
       }
-      const normText = normalizeBlockMatchText(stripBlockPrefix(rawText));
-      return {id, type, kind, headingLevel, normText};
+      const lines = rawText.split(/\r?\n/).filter((l) => l.trim() !== "");
+      const firstLineNormText = normalizeBlockMatchText(stripBlockPrefix(lines[0] || ""));
+      const normText = normalizeBlockMatchText(lines.map((l) => stripBlockPrefix(l)).join(" "));
+      return {id, type, kind, headingLevel, firstLineNormText, normText};
     };
 
     const childrenByParent = new Map();
@@ -11700,39 +11845,125 @@ class SiYuanSharePlugin extends Plugin {
       const anchorKind = CONTAINER_SQL_TYPES[meta.type] || "";
       if (anchorKind) {
         const leaf = findFirstLeafDescendant(id);
+        let firstLineNormText = leaf?.firstLineNormText || leaf?.normText || "";
         let normText = leaf?.normText || "";
         let kind = leaf ? leaf.kind : meta.kind;
         let headingLevel = leaf ? leaf.headingLevel : 0;
         if (anchorKind === "list-item") kind = "list-item";
         else if (anchorKind === "blockquote") kind = "blockquote";
         if (!normText) {
-          const ownFirstLine = String(row?.markdown || row?.content || "").split(/\r?\n/).find((l) => l.trim()) || "";
-          normText = normalizeBlockMatchText(stripBlockPrefix(ownFirstLine)) || meta.normText;
+          firstLineNormText = meta.firstLineNormText;
+          normText = meta.firstLineNormText || meta.normText;
         }
         if (!normText) continue;
-        sqlOut.push({id, kind, anchorKind, headingLevel, normText});
+        sqlOut.push({id, kind, anchorKind, headingLevel, firstLineNormText, normText});
       } else {
         if (!meta.normText) continue;
-        sqlOut.push({id, kind: meta.kind, headingLevel: meta.headingLevel, normText: meta.normText});
+        sqlOut.push({
+          id,
+          kind: meta.kind,
+          headingLevel: meta.headingLevel,
+          firstLineNormText: meta.firstLineNormText,
+          normText: meta.normText,
+        });
       }
     }
 
-    if (!parsed.length) return sqlOut;
-    const parsedById = new Map(parsed.map((b) => [String(b?.id || "").trim().toLowerCase(), b]));
-    const merged = [];
-    const seenMerged = new Set();
-    for (const block of sqlOut) {
-      const existing = parsedById.get(block.id);
-      merged.push(existing || block);
-      seenMerged.add(block.id);
-    }
-    for (const block of parsed) {
-      const id = String(block?.id || "").trim().toLowerCase();
-      if (id && !seenMerged.has(id)) {
-        merged.push(block);
-        seenMerged.add(id);
+    let merged;
+    if (!parsed.length) {
+      merged = sqlOut;
+    } else {
+      const parsedById = new Map(parsed.map((b) => [String(b?.id || "").trim().toLowerCase(), b]));
+      merged = [];
+      const seenMerged = new Set();
+      for (const block of sqlOut) {
+        const existing = parsedById.get(block.id);
+        merged.push(existing || block);
+        seenMerged.add(block.id);
+      }
+      for (const block of parsed) {
+        const id = String(block?.id || "").trim().toLowerCase();
+        if (id && !seenMerged.has(id)) {
+          merged.push(block);
+          seenMerged.add(id);
+        }
       }
     }
+
+    const parseSingleBlockKramdownForAnchor = (targetId, rawKramdown, typeHint = "") => {
+      const subBlocks = parseKramdownOrderedBlocks(rawKramdown, "");
+      const directMatch = subBlocks.find((b) => String(b?.id || "").trim().toLowerCase() === targetId && b?.normText);
+      if (directMatch) return directMatch;
+
+      const contentLines = [];
+      for (const rawLine of String(rawKramdown || "").split(/\r?\n/)) {
+        const unquoted = rawLine.replace(/^\s*(?:>\s*)+/, "");
+        const trimmed = unquoted.trim();
+        if (!trimmed) continue;
+        if (SIYUAN_IAL_LINE_RE.test(rawLine)) continue;
+        if (/^\{\{\{(?:row|col)\b/i.test(trimmed) || trimmed === "}}}") continue;
+        let lineText = rawLine;
+        const lm = unquoted.match(/^(\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?)\{:[^}\n]*\}(.*)$/);
+        if (lm) {
+          const quoteLead = countQuotePrefixDepth(rawLine) > 0 ? rawLine.match(/^\s*(?:>\s*)+/)[0] : "";
+          lineText = `${quoteLead}${lm[1]}${lm[2].replace(/^\s+/, "")}`;
+        } else {
+          const tailIal = unquoted.match(/^(.*?\S)\s*\{:([^}\n]*)\}\s*$/);
+          if (tailIal && SIYUAN_IAL_ID_RE.test(tailIal[2])) {
+            const quoteLead = countQuotePrefixDepth(rawLine) > 0 ? rawLine.match(/^\s*(?:>\s*)+/)[0] : "";
+            lineText = `${quoteLead}${tailIal[1]}`;
+          }
+        }
+        if (lineText.replace(/^\s*(?:>\s*)+/, "").trim()) {
+          contentLines.push(lineText);
+        }
+      }
+      if (!contentLines.length) return null;
+      const firstInfo = classifyBlockStartLine(contentLines[0]);
+      const anchorKind = CONTAINER_SQL_TYPES[typeHint] || "";
+      let kind = firstInfo.kind;
+      let headingLevel = firstInfo.headingLevel;
+      if (anchorKind === "list-item") kind = "list-item";
+      else if (anchorKind === "blockquote") kind = "blockquote";
+      else if (typeHint === "h") kind = "heading";
+      else if (typeHint === "m") kind = "math";
+      else if (typeHint === "c") kind = "code";
+      else if (typeHint === "t") kind = "table";
+      const firstLineNormText = normalizeBlockMatchText(firstInfo.text);
+      const normText = normalizeBlockMatchText(
+        [firstInfo.text, ...contentLines.slice(1).map((l) => stripBlockPrefix(l))].join(" "),
+      );
+      if (!normText && !firstLineNormText) return null;
+      return {
+        id: targetId,
+        kind,
+        ...(anchorKind ? {anchorKind} : {}),
+        headingLevel,
+        firstLineNormText: firstLineNormText || normText,
+        normText: normText || firstLineNormText,
+      };
+    };
+
+    const resolvedIds = new Set(
+      merged.filter((b) => b?.normText || b?.firstLineNormText).map((b) => String(b.id || "").trim().toLowerCase()),
+    );
+    const stillMissing = normalizedMissing.filter((id) => !resolvedIds.has(id) && !foreignIds.has(id)).slice(0, 20);
+    for (const targetId of stillMissing) {
+      try {
+        const blockResp = await fetchSyncPost("/api/block/getBlockKramdown", {id: targetId});
+        const rawBlockKramdown = blockResp?.code === 0 ? String(blockResp?.data?.kramdown || "") : "";
+        if (!rawBlockKramdown.trim()) continue;
+        const typeHint = String(rowsById.get(targetId)?.type || "").trim().toLowerCase();
+        const fallbackBlock = parseSingleBlockKramdownForAnchor(targetId, rawBlockKramdown, typeHint);
+        if (fallbackBlock) {
+          merged.push(fallbackBlock);
+          resolvedIds.add(targetId);
+        }
+      } catch {
+        // Ignore single-block lookup errors for unresolvable/external IDs.
+      }
+    }
+
     return merged;
   }
 
