@@ -45,8 +45,8 @@ const UPLOAD_RETRY_BASE_DELAY = 400;
 const UPLOAD_RETRY_MAX_DELAY = 2000;
 const UPLOAD_MISSING_CHUNK_RETRY_LIMIT = 8;
 const EXPORT_RETRY_CACHE_DIR_NAME = "export-retry-cache";
-// Version 3 entries include same-document block anchor injection.
-const EXPORT_RETRY_CACHE_VERSION = 3;
+// Version 4 entries improve container/list/math/image block anchor injection.
+const EXPORT_RETRY_CACHE_VERSION = 4;
 const AUTO_UPDATE_HISTORY_LIMIT = 2000;
 const AUTO_UPDATE_HISTORY_RENDER_LIMIT = 200;
 const AUTO_UPDATE_HISTORY_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
@@ -1389,7 +1389,40 @@ const SIYUAN_IAL_LINE_RE = /^\s*(?:>\s*)*\{:([^}\n]*)\}\s*$/;
 const SIYUAN_IAL_ID_RE = /\bid\s*=\s*["'](\d{14}-[a-z0-9]{7})["']/i;
 
 function stripInlineCodeSpansForRefScan(line) {
-  return String(line || "").replace(/`+[^`]*`+/g, " ");
+  const text = String(line || "");
+  if (!text.includes("`")) return text;
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === "`") {
+      let tickLen = 1;
+      while (i + tickLen < text.length && text[i + tickLen] === "`") tickLen += 1;
+      const marker = "`".repeat(tickLen);
+      let searchFrom = i + tickLen;
+      let end = -1;
+      while (searchFrom < text.length) {
+        const candidate = text.indexOf(marker, searchFrom);
+        if (candidate < 0) break;
+        const after = candidate + tickLen;
+        if (text[candidate - 1] !== "`" && text[after] !== "`") {
+          end = after;
+          break;
+        }
+        searchFrom = candidate + 1;
+      }
+      if (end >= 0) {
+        out += " ";
+        i = end;
+        continue;
+      }
+      out += marker;
+      i += tickLen;
+      continue;
+    }
+    out += text[i];
+    i += 1;
+  }
+  return out;
 }
 
 function extractMissingSameDocBlockAnchorIds(markdown) {
@@ -1430,7 +1463,7 @@ function extractMissingSameDocBlockAnchorIds(markdown) {
       existingIds.add(idMatch[1].toLowerCase());
     }
 
-    const mdRefRe = /\[[^\]]*\]\(#(\d{14}-[a-z0-9]{7})\)/gi;
+    const mdRefRe = /\]\(\s*<?#(\d{14}-[a-z0-9]{7})>?(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\)/gi;
     let refMatch;
     while ((refMatch = mdRefRe.exec(cleaned)) !== null) {
       const id = refMatch[1].toLowerCase();
@@ -1456,6 +1489,17 @@ function extractMissingSameDocBlockAnchorIds(markdown) {
 function normalizeBlockMatchText(text) {
   let value = String(text || "");
   if (!value) return "";
+  const normalizeImgToken = (rawUrl) => {
+    const cleaned = String(rawUrl || "")
+      .trim()
+      .replace(/^<|>$/g, "")
+      .split(/[?#]/)[0]
+      .replace(/^\.\//, "")
+      .replace(/^\/+/, "");
+    return cleaned ? ` img:${cleaned.toLowerCase()} ` : " img ";
+  };
+  // Strip zero-width characters that SiYuan inserts around inline math/markers.
+  value = value.replace(/[\u200b-\u200d\ufeff]/g, "");
   // Strip SiYuan Kramdown IAL blocks.
   value = value.replace(/\{:[^}\n]*\}/g, " ");
   // Convert SiYuan block-ref syntax ((id "anchor")) or ((id 'anchor')) into its anchor text.
@@ -1463,8 +1507,20 @@ function normalizeBlockMatchText(text) {
   value = value.replace(/\(\(\d{14}-[a-z0-9]{7}\)\)/gi, " ");
   // Strip footnote markers like [^1]
   value = value.replace(/\[\^[^\]]+\]/g, "");
-  // Unwrap Markdown images and links to their visible text.
-  value = value.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1");
+  // Canonicalize Markdown and HTML images identically so pure-image blocks still match uniquely.
+  value = value.replace(/<img\b([^>]*)>/gi, (_, attrs) => {
+    const srcMatch = attrs.match(/\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+    return normalizeImgToken(srcMatch ? (srcMatch[1] ?? srcMatch[2] ?? srcMatch[3] ?? "") : "");
+  });
+  value = value.replace(/!\[[^\]]*\]\(([^)\n]*)\)/g, (_, inner) => {
+    const trimmedInner = String(inner || "").trim();
+    const urlPart = trimmedInner.startsWith("<")
+      ? (trimmedInner.match(/^<([^>]+)>/) || [])[1] || ""
+      : trimmedInner.split(/\s+/)[0] || "";
+    return normalizeImgToken(urlPart);
+  });
+  // Unwrap Markdown links (supporting nested brackets such as [$R=\mathbb{F}[x]$](#id)).
+  value = value.replace(/\[((?:[^[\]]|\[[^[\]]*\])*)\]\([^)]*\)/g, "$1");
   value = value.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
   // Strip inline HTML tags without corrupting math comparisons like a<b.
   value = value.replace(/<\/?[a-zA-Z][a-zA-Z0-9-]*(?:\s+[^>]*)?>/g, " ");
@@ -1485,7 +1541,7 @@ function normalizeBlockMatchText(text) {
 function stripBlockPrefix(rawLine) {
   let line = String(rawLine || "");
   line = line.replace(/^\s*(?:>\s*)+/, "");
-  line = line.replace(/^\s{0,6}(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/, "");
+  line = line.replace(/^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/, "");
   return line;
 }
 
@@ -1500,7 +1556,7 @@ function classifyBlockStartLine(rawLine) {
       text: headingMatch[2],
     };
   }
-  const listMatch = unquoted.match(/^\s{0,6}(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.*)$/);
+  const listMatch = unquoted.match(/^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.*)$/);
   if (listMatch) {
     return {
       kind: "list-item",
@@ -1517,6 +1573,12 @@ function classifyBlockStartLine(rawLine) {
   return {kind: "paragraph", headingLevel: 0, text: trimmed};
 }
 
+function countQuotePrefixDepth(rawLine) {
+  const match = String(rawLine || "").match(/^\s*(?:>\s*)+/);
+  if (!match) return 0;
+  return (match[0].match(/>/g) || []).length;
+}
+
 function parseKramdownOrderedBlocks(kramdown, docId = "") {
   const source = String(kramdown || "");
   if (!source) return [];
@@ -1529,13 +1591,23 @@ function parseKramdownOrderedBlocks(kramdown, docId = "") {
   let fenceLen = 0;
   let inMath = false;
 
+  const superblockStack = [];
+  let lastClosedSuperblock = null;
+  const quoteScopes = [];
+  const listScopes = [];
+  const listItemScopes = [];
+  let pendingContainers = [];
+
   const buildBlockFromLines = (id, blockLines) => {
     const cleanLines = blockLines.filter((line) => line.trim() !== "");
     if (!cleanLines.length) return null;
     const firstRaw = cleanLines[0];
-    const firstTrimmed = firstRaw.trim();
+    const firstTrimmed = firstRaw.replace(/^\s*(?:>\s*)+/, "").trim();
     if (/^(`{3,}|~{3,})/.test(firstTrimmed)) {
-      const inner = cleanLines.slice(1, cleanLines.length > 1 && /^(`{3,}|~{3,})$/.test(cleanLines[cleanLines.length - 1].trim()) ? -1 : undefined);
+      const lastTrimmed = cleanLines[cleanLines.length - 1].replace(/^\s*(?:>\s*)+/, "").trim();
+      const inner = cleanLines
+        .slice(1, cleanLines.length > 1 && /^(`{3,}|~{3,})$/.test(lastTrimmed) ? -1 : undefined)
+        .map((l) => l.replace(/^\s*(?:>\s*)+/, ""));
       return {
         id,
         kind: "code",
@@ -1544,7 +1616,7 @@ function parseKramdownOrderedBlocks(kramdown, docId = "") {
       };
     }
     if (firstTrimmed.startsWith("$$")) {
-      const bodyText = cleanLines.join(" ").replace(/^\$\$|\$\$$/g, "");
+      const bodyText = cleanLines.map((l) => l.replace(/^\s*(?:>\s*)+/, "")).join(" ").replace(/^\s*\$\$|\$\$\s*$/g, "");
       return {
         id,
         kind: "math",
@@ -1570,16 +1642,184 @@ function parseKramdownOrderedBlocks(kramdown, docId = "") {
     };
   };
 
+  const ensureQuoteScopesForDepth = (depth) => {
+    while (quoteScopes.length && quoteScopes[quoteScopes.length - 1].depth > depth) {
+      quoteScopes.pop();
+    }
+    for (let d = quoteScopes.length + 1; d <= depth; d += 1) {
+      quoteScopes.push({depth: d, firstBlockIndex: -1});
+    }
+  };
+
+  const openListItemScope = (quoteDepth, indent, hasId) => {
+    while (
+      listItemScopes.length &&
+      (listItemScopes[listItemScopes.length - 1].quoteDepth > quoteDepth ||
+        (listItemScopes[listItemScopes.length - 1].quoteDepth === quoteDepth &&
+          listItemScopes[listItemScopes.length - 1].indent >= indent))
+    ) {
+      listItemScopes.pop();
+    }
+    while (
+      listScopes.length &&
+      (listScopes[listScopes.length - 1].quoteDepth > quoteDepth ||
+        (listScopes[listScopes.length - 1].quoteDepth === quoteDepth &&
+          listScopes[listScopes.length - 1].indent > indent))
+    ) {
+      listScopes.pop();
+    }
+    const topList = listScopes[listScopes.length - 1];
+    if (!topList || topList.quoteDepth !== quoteDepth || topList.indent !== indent) {
+      listScopes.push({quoteDepth, indent, firstBlockIndex: -1});
+    }
+    listItemScopes.push({quoteDepth, indent, firstBlockIndex: -1, hasId: Boolean(hasId)});
+  };
+
+  const bindScopesToBlockIndex = (blockIdx) => {
+    for (const s of superblockStack) {
+      if (s.firstBlockIndex < 0) s.firstBlockIndex = blockIdx;
+    }
+    for (const q of quoteScopes) {
+      if (q.firstBlockIndex < 0) q.firstBlockIndex = blockIdx;
+    }
+    for (const l of listScopes) {
+      if (l.firstBlockIndex < 0) l.firstBlockIndex = blockIdx;
+    }
+    for (const li of listItemScopes) {
+      if (li.firstBlockIndex < 0) li.firstBlockIndex = blockIdx;
+    }
+  };
+
+  const emitLeafAndFlushContainers = (blockId, blockLines) => {
+    const parsed = buildBlockFromLines(blockId, blockLines);
+    if (!parsed) return;
+    let leafIdx = -1;
+    if (blockId && blockId !== docIdLower) {
+      leafIdx = blocks.length;
+      blocks.push(parsed);
+    } else if (pendingContainers.length > 0) {
+      leafIdx = blocks.length;
+      blocks.push(parsed);
+    }
+    if (leafIdx >= 0) {
+      bindScopesToBlockIndex(leafIdx);
+      for (const pc of pendingContainers) {
+        blocks.push({
+          id: pc.id,
+          kind: pc.kind,
+          anchorKind: pc.anchorKind,
+          headingLevel: parsed.kind === "heading" ? parsed.headingLevel : 0,
+          normText: parsed.normText,
+        });
+      }
+      pendingContainers = [];
+    }
+  };
+
+  const bindTrailingContainerIal = (blockId, ialQuoteDepth, ialIndent) => {
+    if (!blockId || blockId === docIdLower) {
+      if (lastClosedSuperblock) lastClosedSuperblock = null;
+      return;
+    }
+    if (lastClosedSuperblock) {
+      const targetIdx = lastClosedSuperblock.firstBlockIndex;
+      lastClosedSuperblock = null;
+      if (targetIdx >= 0 && blocks[targetIdx]) {
+        const ref = blocks[targetIdx];
+        blocks.push({
+          id: blockId,
+          kind: ref.kind,
+          anchorKind: "superblock",
+          headingLevel: ref.headingLevel,
+          normText: ref.normText,
+        });
+        return;
+      }
+    }
+    const closingQuoteIdx = quoteScopes.findIndex((q) => q.depth === ialQuoteDepth + 1);
+    if (closingQuoteIdx >= 0) {
+      const closingQuote = quoteScopes[closingQuoteIdx];
+      quoteScopes.splice(closingQuoteIdx);
+      if (closingQuote.firstBlockIndex >= 0 && blocks[closingQuote.firstBlockIndex]) {
+        const ref = blocks[closingQuote.firstBlockIndex];
+        blocks.push({
+          id: blockId,
+          kind: "blockquote",
+          anchorKind: "blockquote",
+          headingLevel: 0,
+          normText: ref.normText,
+        });
+        return;
+      }
+    }
+    for (let idx = listItemScopes.length - 1; idx >= 0; idx -= 1) {
+      const li = listItemScopes[idx];
+      if (li.quoteDepth === ialQuoteDepth && !li.hasId && ialIndent <= li.indent + 4) {
+        li.hasId = true;
+        const targetIdx = li.firstBlockIndex;
+        listItemScopes.splice(idx);
+        if (targetIdx >= 0 && blocks[targetIdx]) {
+          blocks.push({
+            id: blockId,
+            kind: "list-item",
+            anchorKind: "list-item",
+            headingLevel: 0,
+            normText: blocks[targetIdx].normText,
+          });
+          return;
+        }
+      }
+    }
+    for (let idx = listScopes.length - 1; idx >= 0; idx -= 1) {
+      const l = listScopes[idx];
+      if (l.quoteDepth === ialQuoteDepth && ialIndent <= l.indent + 2) {
+        listScopes.splice(idx, 1);
+        while (
+          listItemScopes.length &&
+          (listItemScopes[listItemScopes.length - 1].quoteDepth > ialQuoteDepth ||
+            (listItemScopes[listItemScopes.length - 1].quoteDepth === ialQuoteDepth &&
+              listItemScopes[listItemScopes.length - 1].indent >= l.indent))
+        ) {
+          listItemScopes.pop();
+        }
+        if (l.firstBlockIndex >= 0 && blocks[l.firstBlockIndex]) {
+          const ref = blocks[l.firstBlockIndex];
+          blocks.push({
+            id: blockId,
+            kind: ref.kind,
+            anchorKind: "list",
+            headingLevel: ref.headingLevel,
+            normText: ref.normText,
+          });
+          return;
+        }
+      }
+    }
+    if (blocks.length > 0) {
+      const ref = blocks[blocks.length - 1];
+      blocks.push({
+        id: blockId,
+        kind: ref.kind,
+        headingLevel: ref.headingLevel,
+        normText: ref.normText,
+      });
+    }
+  };
+
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
     const trimmed = line.trim();
-    const unquotedTrimmed = line.replace(/^\s*(?:>\s*)+/, "").trim();
+    const quoteDepth = countQuotePrefixDepth(line);
+    const unquoted = line.replace(/^\s*(?:>\s*)+/, "");
+    const unquotedTrimmed = unquoted.trim();
 
     if (!inMath) {
       const fenceMatch = unquotedTrimmed.match(/^(`{3,}|~{3,})/);
       if (fenceMatch) {
         const marker = fenceMatch[1];
         if (!inFence) {
+          lastClosedSuperblock = null;
+          ensureQuoteScopesForDepth(quoteDepth);
           inFence = true;
           fenceChar = marker[0];
           fenceLen = marker.length;
@@ -1601,6 +1841,10 @@ function parseKramdownOrderedBlocks(kramdown, docId = "") {
     }
 
     if (unquotedTrimmed === "$$") {
+      if (!inMath) {
+        lastClosedSuperblock = null;
+        ensureQuoteScopesForDepth(quoteDepth);
+      }
       inMath = !inMath;
       buffer.push(line);
       continue;
@@ -1610,27 +1854,92 @@ function parseKramdownOrderedBlocks(kramdown, docId = "") {
       continue;
     }
 
+    // Superblock open / close markers (`{{{row`, `{{{col`, `}}}`)
+    if (/^\{\{\{(?:row|col)\b/i.test(unquotedTrimmed)) {
+      lastClosedSuperblock = null;
+      ensureQuoteScopesForDepth(quoteDepth);
+      superblockStack.push({quoteDepth, firstBlockIndex: -1});
+      continue;
+    }
+    if (unquotedTrimmed === "}}}" && superblockStack.length > 0) {
+      lastClosedSuperblock = superblockStack.pop();
+      continue;
+    }
+
+    // Standalone IAL line: `{: id="..."}` or `> {: id="..."}`
     const ialMatch = line.match(SIYUAN_IAL_LINE_RE);
     if (ialMatch) {
       const idMatch = ialMatch[1].match(SIYUAN_IAL_ID_RE);
       const blockId = idMatch ? idMatch[1].toLowerCase() : "";
-      if (blockId && blockId !== docIdLower) {
-        const parsed = buildBlockFromLines(blockId, buffer);
-        if (parsed) blocks.push(parsed);
+      const ialIndent = unquoted.match(/^\s*/)[0].replace(/\t/g, "  ").length;
+      if (buffer.some((l) => l.trim() !== "")) {
+        lastClosedSuperblock = null;
+        emitLeafAndFlushContainers(blockId, buffer);
+        buffer = [];
+      } else {
+        bindTrailingContainerIal(blockId, quoteDepth, ialIndent);
       }
+      continue;
+    }
+
+    // List marker with inline IAL: `1. {: id="..."}`, `* {: id="..."} optional text`
+    const listMarkerIalMatch = unquoted.match(/^(\s*)(?:([-*+]|\d+[.)])\s+(?:(\[[ xX]\])\s+)?)\{:([^}\n]*)\}(?:\s+(.*))?$/);
+    if (listMarkerIalMatch) {
+      lastClosedSuperblock = null;
+      ensureQuoteScopesForDepth(quoteDepth);
+      const indent = listMarkerIalMatch[1].replace(/\t/g, "  ").length;
+      const marker = listMarkerIalMatch[2];
+      const taskMark = listMarkerIalMatch[3] || "";
+      const attrs = listMarkerIalMatch[4] || "";
+      const trailingText = listMarkerIalMatch[5] || "";
+      const idMatch = attrs.match(SIYUAN_IAL_ID_RE);
+      const blockId = idMatch ? idMatch[1].toLowerCase() : "";
+      openListItemScope(quoteDepth, indent, Boolean(blockId && blockId !== docIdLower));
+      if (blockId && blockId !== docIdLower) {
+        pendingContainers.push({id: blockId, kind: "list-item", anchorKind: "list-item"});
+      }
+      if (trailingText.trim()) {
+        buffer.push(`${listMarkerIalMatch[1]}${marker} ${taskMark ? `${taskMark} ` : ""}${trailingText}`);
+      }
+      continue;
+    }
+
+    // Trailing inline IAL on a content line: `### Heading {: id="..."}` or `Text {: id="..."}`
+    const trailingIalMatch = unquoted.match(/^(.*?\S)\s*\{:([^}\n]*)\}\s*$/);
+    if (trailingIalMatch && SIYUAN_IAL_ID_RE.test(trailingIalMatch[2])) {
+      lastClosedSuperblock = null;
+      ensureQuoteScopesForDepth(quoteDepth);
+      const idMatch = trailingIalMatch[2].match(SIYUAN_IAL_ID_RE);
+      const blockId = idMatch ? idMatch[1].toLowerCase() : "";
+      const quoteLead = quoteDepth > 0 ? line.match(/^\s*(?:>\s*)+/)[0] : "";
+      const contentLine = `${quoteLead}${trailingIalMatch[1]}`;
+      if (buffer.length === 0) {
+        const lm = contentLine.replace(/^\s*(?:>\s*)+/, "").match(/^(\s*)(?:[-*+]|\d+[.)])\s+/);
+        if (lm) {
+          openListItemScope(quoteDepth, lm[1].replace(/\t/g, "  ").length, true);
+        }
+      }
+      buffer.push(contentLine);
+      emitLeafAndFlushContainers(blockId, buffer);
       buffer = [];
       continue;
     }
 
     if (trimmed === "") {
       if (buffer.length > 0 && buffer[buffer.length - 1].trim() !== "") {
-        // Keep blank lines only if we're not starting a brand-new unrelated block;
-        // in SiYuan Kramdown each block is terminated by its {: id="..."} IAL.
         buffer.push(line);
       }
       continue;
     }
 
+    lastClosedSuperblock = null;
+    ensureQuoteScopesForDepth(quoteDepth);
+    if (buffer.length === 0) {
+      const lm = unquoted.match(/^(\s*)(?:[-*+]|\d+[.)])\s+/);
+      if (lm) {
+        openListItemScope(quoteDepth, lm[1].replace(/\t/g, "  ").length, false);
+      }
+    }
     buffer.push(line);
   }
 
@@ -1689,6 +1998,7 @@ function parseMarkdownBodyBlocks(lines, bodyEndLine) {
       continue;
     }
 
+    const startQuoteDepth = countQuotePrefixDepth(rawLine);
     const unquoted = rawLine.replace(/^\s*(?:>\s*)+/, "");
     const unquotedTrimmed = unquoted.trim();
 
@@ -1705,7 +2015,7 @@ function parseMarkdownBodyBlocks(lines, bodyEndLine) {
           i += 1;
           break;
         }
-        inner.push(lines[i]);
+        inner.push(lines[i].replace(/^\s*(?:>\s*)+/, ""));
         i += 1;
       }
       mdBlocks.push({
@@ -1714,6 +2024,7 @@ function parseMarkdownBodyBlocks(lines, bodyEndLine) {
         firstContentLine: startLine,
         kind: "code",
         headingLevel: 0,
+        firstLineNormText: normalizeBlockMatchText(inner[0] || ""),
         normText: normalizeBlockMatchText(inner.join(" ")),
       });
       continue;
@@ -1741,6 +2052,7 @@ function parseMarkdownBodyBlocks(lines, bodyEndLine) {
         firstContentLine: startLine,
         kind: "math",
         headingLevel: 0,
+        firstLineNormText: normalizeBlockMatchText(bodyText),
         normText: normalizeBlockMatchText(bodyText),
       });
       continue;
@@ -1749,32 +2061,38 @@ function parseMarkdownBodyBlocks(lines, bodyEndLine) {
     // Heading
     const headingMatch = unquotedTrimmed.match(/^(#{1,6})\s+(.*)$/);
     if (headingMatch) {
+      const headingNorm = normalizeBlockMatchText(headingMatch[2]);
       mdBlocks.push({
         startLine: i,
         endLine: i,
         firstContentLine: i,
         kind: "heading",
         headingLevel: headingMatch[1].length,
-        normText: normalizeBlockMatchText(headingMatch[2]),
+        firstLineNormText: headingNorm,
+        normText: headingNorm,
       });
       i += 1;
       continue;
     }
 
     // List item (consumes consecutive indented/non-blank continuation lines until blank or next block)
-    const listMatch = unquoted.match(/^\s{0,6}(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.*)$/);
+    const listMatch = unquoted.match(/^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.*)$/);
     if (listMatch) {
       const startLine = i;
+      const firstLineNormText = normalizeBlockMatchText(listMatch[1]);
       const collected = [listMatch[1]];
       i += 1;
       while (i < bodyEndLine) {
         const nextRaw = lines[i];
         const nextTrimmed = nextRaw.trim();
         if (!nextTrimmed) break;
+        if (countQuotePrefixDepth(nextRaw) > startQuoteDepth) break;
         const nextUnquoted = nextRaw.replace(/^\s*(?:>\s*)+/, "");
-        if (/^\s{0,6}(?:[-*+]|\d+[.)])\s+/.test(nextUnquoted)) break;
-        if (/^(#{1,6}\s+|`{3,}|~{3,}|\$\$)/.test(nextUnquoted.trim())) break;
-        collected.push(nextUnquoted.trim());
+        if (/^\s*(?:[-*+]|\d+[.)])\s+/.test(nextUnquoted)) break;
+        const nextUnquotedTrimmed = nextUnquoted.trim();
+        if (/^(#{1,6}\s+|`{3,}|~{3,}|\$\$)/.test(nextUnquotedTrimmed)) break;
+        if (/^\|.*\|/.test(nextUnquotedTrimmed)) break;
+        collected.push(nextUnquotedTrimmed);
         i += 1;
       }
       mdBlocks.push({
@@ -1783,6 +2101,7 @@ function parseMarkdownBodyBlocks(lines, bodyEndLine) {
         firstContentLine: startLine,
         kind: "list-item",
         headingLevel: 0,
+        firstLineNormText,
         normText: normalizeBlockMatchText(collected.join(" ")),
       });
       continue;
@@ -1803,6 +2122,7 @@ function parseMarkdownBodyBlocks(lines, bodyEndLine) {
         firstContentLine: startLine,
         kind: "table",
         headingLevel: 0,
+        firstLineNormText: normalizeBlockMatchText(collected[0]),
         normText: normalizeBlockMatchText(collected.join(" ")),
       });
       continue;
@@ -1811,7 +2131,9 @@ function parseMarkdownBodyBlocks(lines, bodyEndLine) {
     // Blockquote or Paragraph
     const startLine = i;
     const isQuote = /^\s*>/.test(rawLine);
-    const collected = [stripBlockPrefix(rawLine)];
+    const firstLineRaw = stripBlockPrefix(rawLine);
+    const firstLineNormText = normalizeBlockMatchText(firstLineRaw);
+    const collected = [firstLineRaw];
     i += 1;
     while (i < bodyEndLine) {
       const nextRaw = lines[i];
@@ -1820,7 +2142,8 @@ function parseMarkdownBodyBlocks(lines, bodyEndLine) {
       const nextUnquoted = nextRaw.replace(/^\s*(?:>\s*)+/, "");
       const nextUnquotedTrimmed = nextUnquoted.trim();
       if (/^(#{1,6}\s+|`{3,}|~{3,}|\$\$)/.test(nextUnquotedTrimmed)) break;
-      if (/^\s{0,6}(?:[-*+]|\d+[.)])\s+/.test(nextUnquoted)) break;
+      if (/^\s*(?:[-*+]|\d+[.)])\s+/.test(nextUnquoted)) break;
+      if (/^\|.*\|/.test(nextUnquotedTrimmed)) break;
       if (isQuote !== /^\s*>/.test(nextRaw)) break;
       collected.push(stripBlockPrefix(nextRaw));
       i += 1;
@@ -1831,6 +2154,7 @@ function parseMarkdownBodyBlocks(lines, bodyEndLine) {
       firstContentLine: startLine,
       kind: isQuote ? "blockquote" : "paragraph",
       headingLevel: 0,
+      firstLineNormText,
       normText: normalizeBlockMatchText(collected.join(" ")),
     });
   }
@@ -1841,10 +2165,10 @@ function parseMarkdownBodyBlocks(lines, bodyEndLine) {
 function appendInlineAnchorToLine(line, anchorHtml) {
   const source = String(line || "");
   if (source.includes(anchorHtml)) return source;
-  const trailingMatch = source.match(/([ \t]+)$/);
+  const trailingMatch = source.match(/(\\[ \t]*|[ \t]+)$/);
   const trailing = trailingMatch ? trailingMatch[1] : "";
   const body = trailing ? source.slice(0, -trailing.length) : source;
-  return `${body} ${anchorHtml}${trailing}`;
+  return body ? `${body} ${anchorHtml}${trailing}` : `${anchorHtml}${trailing}`;
 }
 
 function injectMissingBlockAnchorsInMarkdown(markdown, orderedBlocks, missingIds) {
@@ -1909,7 +2233,20 @@ function injectMissingBlockAnchorsInMarkdown(markdown, orderedBlocks, missingIds
         if (b.normText === targetNorm) candidates.push(mdIdx);
       });
     }
-    if (!candidates.length && targetNorm.length >= 6) {
+    if (!candidates.length) {
+      // First-line fallback: multi-paragraph or soft-broken list items / containers
+      mdBlocks.forEach((b, mdIdx) => {
+        if (b.kind === targetBlock.kind && b.headingLevel === targetBlock.headingLevel && b.firstLineNormText === targetNorm) {
+          candidates.push(mdIdx);
+        }
+      });
+      if (!candidates.length) {
+        mdBlocks.forEach((b, mdIdx) => {
+          if (b.firstLineNormText === targetNorm) candidates.push(mdIdx);
+        });
+      }
+    }
+    if (!candidates.length && targetNorm.length >= 4) {
       // Prefix/containment fallback when SiYuan alters inline markup slightly on export
       mdBlocks.forEach((b, mdIdx) => {
         if (!b.normText) return;
@@ -1917,6 +2254,14 @@ function injectMissingBlockAnchorsInMarkdown(markdown, orderedBlocks, missingIds
           if (b.normText.includes(targetNorm) || targetNorm.includes(b.normText)) {
             candidates.push(mdIdx);
           }
+        }
+      });
+    }
+    if (!candidates.length && targetNorm.length >= 8) {
+      mdBlocks.forEach((b, mdIdx) => {
+        if (!b.normText) return;
+        if (b.normText.includes(targetNorm) || targetNorm.includes(b.normText)) {
+          candidates.push(mdIdx);
         }
       });
     }
@@ -1954,15 +2299,19 @@ function injectMissingBlockAnchorsInMarkdown(markdown, orderedBlocks, missingIds
     }
 
     const chosen = mdBlocks[chosenMdIdx];
-    const anchorTag = `<span id="${targetId}" class="sps-block-anchor"></span>`;
-    if (chosen.kind === "heading" || chosen.kind === "paragraph" || chosen.kind === "list-item") {
+    const kindAttr =
+      targetBlock.anchorKind && ["list-item", "blockquote", "list", "superblock"].includes(targetBlock.anchorKind)
+        ? ` data-sps-anchor-kind="${targetBlock.anchorKind}"`
+        : "";
+    if (chosen.kind === "heading" || chosen.kind === "paragraph" || chosen.kind === "list-item" || chosen.kind === "blockquote") {
+      const anchorTag = `<span id="${targetId}" class="sps-block-anchor"${kindAttr}></span>`;
       const list = inlineAppends.get(chosen.firstContentLine) || [];
       if (!list.includes(anchorTag)) {
         list.push(anchorTag);
         inlineAppends.set(chosen.firstContentLine, list);
       }
     } else {
-      const beforeTag = `<span id="${targetId}" class="sps-block-anchor" data-sps-anchor-pos="before"></span>`;
+      const beforeTag = `<span id="${targetId}" class="sps-block-anchor" data-sps-anchor-pos="before"${kindAttr}></span>`;
       const list = beforeInsertions.get(chosen.startLine) || [];
       if (!list.includes(beforeTag)) {
         list.push(beforeTag);
@@ -1977,8 +2326,13 @@ function injectMissingBlockAnchorsInMarkdown(markdown, orderedBlocks, missingIds
   for (let i = 0; i < lines.length; i += 1) {
     const beforeList = beforeInsertions.get(i);
     if (beforeList && beforeList.length) {
-      outLines.push(beforeList.join(""));
-      outLines.push("");
+      const prefixMatch = lines[i].match(/^((?:\s*>\s*)*)([ \t]*)/);
+      const quotePrefix = prefixMatch ? prefixMatch[1] : "";
+      const indentPrefix = prefixMatch ? prefixMatch[2] : "";
+      const tagPrefix = `${quotePrefix}${indentPrefix}`;
+      const blankPrefix = quotePrefix ? quotePrefix.replace(/[ \t]+$/, "") : "";
+      outLines.push(`${tagPrefix}${beforeList.join("")}`);
+      outLines.push(blankPrefix);
     }
     let line = lines[i];
     const appendList = inlineAppends.get(i);
@@ -11231,51 +11585,155 @@ class SiYuanSharePlugin extends Plugin {
     }
   }
 
-  async fetchDocOrderedBlocksForAnchors(docId) {
+  async fetchDocOrderedBlocksForAnchors(docId, missingIds = []) {
     const cleanDocId = String(docId || "").trim();
     if (!cleanDocId) return [];
+    const normalizedMissing = Array.from(
+      new Set(
+        (Array.isArray(missingIds) ? missingIds : [])
+          .map((id) => String(id || "").trim().toLowerCase())
+          .filter((id) => SIYUAN_BLOCK_ID_RE.test(id)),
+      ),
+    );
+    let parsed = [];
     try {
       const resp = await fetchSyncPost("/api/block/getBlockKramdown", {id: cleanDocId});
       if (resp && resp.code === 0 && typeof resp?.data?.kramdown === "string" && resp.data.kramdown.trim()) {
-        const parsed = parseKramdownOrderedBlocks(resp.data.kramdown, cleanDocId);
-        if (parsed.length) return parsed;
+        parsed = parseKramdownOrderedBlocks(resp.data.kramdown, cleanDocId);
       }
     } catch {
       // Fallback to SQL query below.
     }
+    if (parsed.length) {
+      if (!normalizedMissing.length) return parsed;
+      const parsedIds = new Set(parsed.map((b) => String(b?.id || "").trim().toLowerCase()));
+      if (normalizedMissing.every((id) => parsedIds.has(id))) {
+        return parsed;
+      }
+    }
     const safeId = cleanDocId.replace(/'/g, "''");
     const rows = await this.querySqlRows(
-      `SELECT id, type, subtype, content, markdown FROM blocks WHERE root_id = '${safeId}' AND id != '${safeId}' ORDER BY sort ASC`,
+      `SELECT id, parent_id, type, subtype, content, markdown, sort FROM blocks WHERE root_id = '${safeId}' AND id != '${safeId}' ORDER BY sort ASC`,
     );
-    if (!Array.isArray(rows) || !rows.length) return [];
-    const out = [];
-    for (const row of rows) {
+    if (!Array.isArray(rows) || !rows.length) return parsed;
+
+    const CONTAINER_SQL_TYPES = {
+      i: "list-item",
+      l: "list",
+      b: "blockquote",
+      s: "superblock",
+    };
+    const buildSqlLeafMeta = (row) => {
       const id = String(row?.id || "").trim().toLowerCase();
-      if (!SIYUAN_BLOCK_ID_RE.test(id)) continue;
       const type = String(row?.type || "").trim().toLowerCase();
       const subtype = String(row?.subtype || "").trim().toLowerCase();
       let kind = "paragraph";
       let headingLevel = 0;
+      let rawText = String(row?.markdown || row?.content || "");
       if (type === "h") {
         kind = "heading";
         headingLevel = Math.max(1, Math.min(6, Number.parseInt(subtype.replace(/^h/i, ""), 10) || 1));
-      } else if (type === "i") {
-        kind = "list-item";
+        rawText = rawText.replace(/^#{1,6}\s+/, "");
       } else if (type === "m") {
         kind = "math";
+        rawText = rawText.replace(/^\s*\$\$|\$\$\s*$/g, "");
       } else if (type === "c") {
         kind = "code";
-      } else if (type === "b") {
-        kind = "blockquote";
+        const fenceLines = rawText.split(/\r?\n/);
+        if (fenceLines.length >= 2 && /^(`{3,}|~{3,})/.test(fenceLines[0].trim())) {
+          const inner = fenceLines.slice(1, /^(`{3,}|~{3,})$/.test(fenceLines[fenceLines.length - 1].trim()) ? -1 : undefined);
+          rawText = inner.join(" ");
+        }
       } else if (type === "t") {
         kind = "table";
+      } else if (type === "i") {
+        kind = "list-item";
+      } else if (type === "b") {
+        kind = "blockquote";
       }
-      const rawText = String(row?.markdown || row?.content || "");
-      const normText = normalizeBlockMatchText(kind === "heading" ? rawText.replace(/^#{1,6}\s+/, "") : rawText);
-      if (!normText) continue;
-      out.push({id, kind, headingLevel, normText});
+      const normText = normalizeBlockMatchText(stripBlockPrefix(rawText));
+      return {id, type, kind, headingLevel, normText};
+    };
+
+    const childrenByParent = new Map();
+    const metaById = new Map();
+    for (const row of rows) {
+      const meta = buildSqlLeafMeta(row);
+      if (!SIYUAN_BLOCK_ID_RE.test(meta.id)) continue;
+      metaById.set(meta.id, meta);
+      const parentId = String(row?.parent_id || "").trim().toLowerCase();
+      if (parentId) {
+        const list = childrenByParent.get(parentId) || [];
+        list.push(meta.id);
+        childrenByParent.set(parentId, list);
+      }
     }
-    return out;
+
+    const findFirstLeafDescendant = (rootBlockId) => {
+      const visited = new Set([rootBlockId]);
+      const stack = [...(childrenByParent.get(rootBlockId) || [])].reverse();
+      while (stack.length > 0) {
+        const curId = stack.pop();
+        if (!curId || visited.has(curId)) continue;
+        visited.add(curId);
+        const curMeta = metaById.get(curId);
+        if (!curMeta) continue;
+        if (!CONTAINER_SQL_TYPES[curMeta.type] && curMeta.normText) {
+          return curMeta;
+        }
+        const kids = childrenByParent.get(curId);
+        if (kids && kids.length) {
+          for (let k = kids.length - 1; k >= 0; k -= 1) {
+            stack.push(kids[k]);
+          }
+        }
+      }
+      return null;
+    };
+
+    const sqlOut = [];
+    for (const row of rows) {
+      const id = String(row?.id || "").trim().toLowerCase();
+      if (!SIYUAN_BLOCK_ID_RE.test(id)) continue;
+      const meta = metaById.get(id);
+      if (!meta) continue;
+      const anchorKind = CONTAINER_SQL_TYPES[meta.type] || "";
+      if (anchorKind) {
+        const leaf = findFirstLeafDescendant(id);
+        let normText = leaf?.normText || "";
+        let kind = leaf ? leaf.kind : meta.kind;
+        let headingLevel = leaf ? leaf.headingLevel : 0;
+        if (anchorKind === "list-item") kind = "list-item";
+        else if (anchorKind === "blockquote") kind = "blockquote";
+        if (!normText) {
+          const ownFirstLine = String(row?.markdown || row?.content || "").split(/\r?\n/).find((l) => l.trim()) || "";
+          normText = normalizeBlockMatchText(stripBlockPrefix(ownFirstLine)) || meta.normText;
+        }
+        if (!normText) continue;
+        sqlOut.push({id, kind, anchorKind, headingLevel, normText});
+      } else {
+        if (!meta.normText) continue;
+        sqlOut.push({id, kind: meta.kind, headingLevel: meta.headingLevel, normText: meta.normText});
+      }
+    }
+
+    if (!parsed.length) return sqlOut;
+    const parsedById = new Map(parsed.map((b) => [String(b?.id || "").trim().toLowerCase(), b]));
+    const merged = [];
+    const seenMerged = new Set();
+    for (const block of sqlOut) {
+      const existing = parsedById.get(block.id);
+      merged.push(existing || block);
+      seenMerged.add(block.id);
+    }
+    for (const block of parsed) {
+      const id = String(block?.id || "").trim().toLowerCase();
+      if (id && !seenMerged.has(id)) {
+        merged.push(block);
+        seenMerged.add(id);
+      }
+    }
+    return merged;
   }
 
   async exportDocMarkdown(docId) {
@@ -11285,7 +11743,7 @@ class SiYuanSharePlugin extends Plugin {
     const missingIds = extractMissingSameDocBlockAnchorIds(content);
     if (missingIds.length > 0) {
       try {
-        const orderedBlocks = await this.fetchDocOrderedBlocksForAnchors(docId);
+        const orderedBlocks = await this.fetchDocOrderedBlocksForAnchors(docId, missingIds);
         if (orderedBlocks.length > 0) {
           content = injectMissingBlockAnchorsInMarkdown(content, orderedBlocks, missingIds);
         }

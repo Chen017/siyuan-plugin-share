@@ -78,6 +78,7 @@ const MIME_TYPES = {
                   <p>
                     <a href="#20261119083945-cy31h7h">Inline block ref</a> |
                     <a href="#20261119095000-math111">Standalone block ref</a> |
+                    <a href="#20261124103521-ny54ujx">this</a> |
                     <a href="#section-two">Heading ref</a> |
                     <button type="button" class="sps-footnote-action" aria-label="Preview footnote">icon</button><sup class="footnote-ref"><a href="#fn1" id="fnref1">[1]</a></sup> |
                     <a href="/s/demo-share/20261119083700-docroot#20261119083945-cy31h7h">Explicit same-doc ref</a> |
@@ -85,12 +86,19 @@ const MIME_TYPES = {
                     <a href="#20261119099999-blk0002">Cross-doc block ref</a> |
                     <a href="#20261119099999-missing">Unresolved ref</a> |
                     <a href="#20261119099999-hidden1">Hidden target ref</a> |
+                    <a href="https://hidden-link.example" style="visibility: hidden;">Hidden link</a> |
                     <a href="./20261119099999-other01#20261119099999-blk0003">Relative doc ref</a> |
                     <a href="https://example.com/guide">External website</a>
                   </p>
                   <div style="display: none;"><span id="20261119099999-hidden1" class="sps-block-anchor"></span></div>
                   <p style="margin-top: 1150px;">Spacer paragraph on page two boundary.</p>
                   <h2 id="section-two">Section Two</h2>
+                  <ol>
+                    <li>
+                      <p>R = Z <span id="20261124103521-ny54ujx" class="sps-block-anchor" data-sps-anchor-kind="list-item"></span></p>
+                      <p>Multi-paragraph list item body.</p>
+                    </li>
+                  </ol>
                   <p>Target inline paragraph <span id="20261119083945-cy31h7h" class="sps-block-anchor"></span></p>
                   <p class="sps-block-anchor-wrapper"><span id="20261119095000-math111" class="sps-block-anchor"></span></p>
                   <p>Block immediately after standalone wrapper.</p>
@@ -165,11 +173,11 @@ const MIME_TYPES = {
       .map((m) => ({ objId: m[1], y: Number(m[2]) }));
     const uris = [...raw.matchAll(/\/URI\s*\(([^)]+)\)/g)].map((m) => m[1]);
 
-    // Five internal links jump to page 2 (inline ref, standalone wrapper ref, heading ref, footnote #fn1, explicit same-doc URL)
+    // Six internal links jump to page 2 (inline ref, standalone wrapper ref, multi-paragraph list-item ref, heading ref, footnote #fn1, explicit same-doc URL)
     // and one footnote backref (#fnref1) jumps back to page 1.
     const toPage2 = dests.filter((d) => d.objId === pageObjIds[1]);
     const toPage1 = dests.filter((d) => d.objId === pageObjIds[0]);
-    assert.ok(toPage2.length >= 5, `Expected at least 5 internal jumps to page 2, got ${JSON.stringify(dests)} (pageObjIds=${JSON.stringify(pageObjIds)})`);
+    assert.ok(toPage2.length >= 6, `Expected at least 6 internal jumps to page 2, got ${JSON.stringify(dests)} (pageObjIds=${JSON.stringify(pageObjIds)})`);
     assert.ok(toPage1.length >= 1, `Expected footnote backref jump to page 1, got ${JSON.stringify(dests)} (pageObjIds=${JSON.stringify(pageObjIds)})`);
     for (const d of dests) {
       assert.ok(d.y > 0 && d.y < 900, `Expected valid PDF Y coordinate, got ${d.y}`);
@@ -178,8 +186,6 @@ const MIME_TYPES = {
     const expectedUris = [
       'http://reader.test/s/demo-share/20261119099999-other01',
       'http://reader.test/s/demo-share/20261119099999-other01#20261119099999-blk0002',
-      'http://reader.test/s/demo-share/20261119083700-docroot#20261119099999-missing',
-      'http://reader.test/s/demo-share/20261119083700-docroot#20261119099999-hidden1',
       'http://reader.test/s/demo-share/20261119099999-other01#20261119099999-blk0003',
       'https://example.com/guide',
     ];
@@ -187,6 +193,9 @@ const MIME_TYPES = {
       assert.ok(uris.includes(expected), `Missing expected URI ${expected}; got ${JSON.stringify(uris)}`);
     }
     for (const uri of uris) {
+      assert.ok(!uri.includes('20261119099999-missing'), `Unresolved local fragment must not fall back to external browser URI: ${uri}`);
+      assert.ok(!uri.includes('20261119099999-hidden1'), `Hidden local fragment must not fall back to external browser URI: ${uri}`);
+      assert.ok(!uri.includes('hidden-link.example'), `Hidden link must not emit a PDF /URI annotation: ${uri}`);
       assert.ok(!uri.includes('/export'), `Export URI leaked into PDF annotation: ${uri}`);
       assert.ok(!uri.includes('pdf-0-'), `Internal pdf-0- prefix leaked into PDF annotation: ${uri}`);
     }

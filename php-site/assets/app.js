@@ -1451,6 +1451,12 @@
     return clone.innerHTML;
   };
 
+  const findBlockAnchorById = (rawId) => {
+    const cleanId = String(rawId || "").replace(/^#/, "").trim();
+    if (!cleanId) return null;
+    return document.getElementById(cleanId) || document.getElementById(cleanId.toLowerCase());
+  };
+
   const normalizeBlockAnchors = (container) => {
     if (!container) return;
     container.querySelectorAll("[id]").forEach((node) => {
@@ -1467,7 +1473,14 @@
           const hasVisibleContent = Array.from(parent.childNodes).some((child) => {
             if (child.nodeType === 3) return Boolean(child.nodeValue && child.nodeValue.trim());
             if (child.nodeType === 1) {
-              return !child.classList.contains("sps-block-anchor") && Boolean(child.textContent.trim() || child.querySelector("img, video, iframe, svg, canvas, table, math"));
+              return (
+                !child.classList.contains("sps-block-anchor") &&
+                Boolean(
+                  child.textContent.trim() ||
+                    child.matches("img, video, iframe, svg, canvas, table, math, hr") ||
+                    child.querySelector("img, video, iframe, svg, canvas, table, math"),
+                )
+              );
             }
             return false;
           });
@@ -1497,6 +1510,20 @@
         cursor = cursor.previousElementSibling;
       }
       return cursor || parent;
+    }
+    const anchorKind = String(anchorEl.dataset?.spsAnchorKind || "").trim().toLowerCase();
+    if (anchorKind === "list-item") {
+      const li = anchorEl.closest("li");
+      if (li) return li;
+    } else if (anchorKind === "blockquote") {
+      const bq = anchorEl.closest("blockquote");
+      if (bq) return bq;
+    } else if (anchorKind === "list") {
+      const list = anchorEl.closest("ul, ol");
+      if (list) return list;
+    } else if (anchorKind === "table") {
+      const table = anchorEl.closest("table");
+      if (table) return table;
     }
     return (
       anchorEl.closest("h1, h2, h3, h4, h5, h6, li, blockquote, pre, tr, .katex-block, p") ||
@@ -1552,7 +1579,7 @@
   const scrollToShareAnchorTarget = (targetId, {pushHistory = false, highlight = true} = {}) => {
     const cleanId = String(targetId || "").replace(/^#/, "").trim();
     if (!cleanId) return null;
-    const targetEl = document.getElementById(cleanId);
+    const targetEl = findBlockAnchorById(cleanId);
     if (!targetEl) return null;
     const isBlockId = SIYUAN_BLOCK_ID_RE.test(cleanId);
     const host = isBlockId ? (resolveBlockAnchorHost(targetEl) || targetEl) : targetEl;
@@ -2182,7 +2209,7 @@
       if (href.startsWith("#") && !href.startsWith("#fnref")) {
         const blockTargetId = href.slice(1).trim();
         if (SIYUAN_BLOCK_ID_RE.test(blockTargetId)) {
-          const targetEl = document.getElementById(blockTargetId);
+          const targetEl = findBlockAnchorById(blockTargetId);
           if (!targetEl) return;
           event.preventDefault();
           event.stopPropagation();
@@ -2597,7 +2624,7 @@
       if (!href || href.startsWith("#fn")) return;
       const targetId = href.slice(1).trim();
       if (!SIYUAN_BLOCK_ID_RE.test(targetId)) return;
-      if (!document.getElementById(targetId)) return;
+      if (!findBlockAnchorById(targetId)) return;
       if (anchor.dataset.spsBlockRefPreview === "1") return;
       anchor.dataset.spsBlockRefPreview = "1";
       anchor.dataset.spsBlockRefTarget = targetId;
@@ -2655,7 +2682,7 @@
         let previewHtml = "";
         let windowOptions = null;
         if (blockTargetId) {
-          const targetEl = document.getElementById(blockTargetId);
+          const targetEl = findBlockAnchorById(blockTargetId);
           if (!targetEl) return null;
           previewHtml = buildBlockRefPreviewHtml(targetEl);
           if (!previewHtml) return null;
@@ -2755,7 +2782,7 @@
         if (!href || href.startsWith("#fn")) return;
         const targetId = href.slice(1).trim();
         if (!SIYUAN_BLOCK_ID_RE.test(targetId)) return;
-        if (!document.getElementById(targetId)) return;
+        if (!findBlockAnchorById(targetId)) return;
         event.preventDefault();
         clearTimeout(footnoteOpenTimer);
         hoveredFootnoteAction = null;
@@ -3205,10 +3232,13 @@
       const hash = url.includes("#") ? url.slice(url.indexOf("#")) : "";
       pendingAnchorHash = hash ? hash.slice(1) : "";
       if (hash) {
-        const target = document.getElementById(hash.slice(1));
-        if (target) {
-          scrollToShareAnchorTarget(hash.slice(1), {pushHistory: false, highlight: SIYUAN_BLOCK_ID_RE.test(hash.slice(1))});
-          pendingAnchorHash = "";
+        const hasPendingMarkdownSource = Boolean(document.querySelector(".kb-main textarea.markdown-source[data-md-id]"));
+        if (!hasPendingMarkdownSource) {
+          const target = findBlockAnchorById(hash.slice(1));
+          if (target) {
+            scrollToShareAnchorTarget(hash.slice(1), {pushHistory: false, highlight: SIYUAN_BLOCK_ID_RE.test(hash.slice(1))});
+            pendingAnchorHash = "";
+          }
         }
       } else {
         window.scrollTo({top: 0, behavior: "auto"});
@@ -3303,8 +3333,8 @@
       if (nextDocKey === currentDocKey) {
         clearFootnoteWindows();
         const hashId = window.location.hash.replace(/^#/, "").trim();
-        if (hashId && SIYUAN_BLOCK_ID_RE.test(hashId)) {
-          scrollToShareAnchorTarget(hashId, {pushHistory: false, highlight: true});
+        if (hashId && (SIYUAN_BLOCK_ID_RE.test(hashId) || findBlockAnchorById(hashId))) {
+          scrollToShareAnchorTarget(hashId, {pushHistory: false, highlight: SIYUAN_BLOCK_ID_RE.test(hashId)});
         }
         return;
       }
@@ -5997,7 +6027,7 @@ const initImageViewer = () => {
         const targetHash = pendingAnchorHash || (!initialBlockHashHandled ? window.location.hash.replace(/^#/, "").trim() : "");
         pendingAnchorHash = "";
         initialBlockHashHandled = true;
-        if (targetHash && (SIYUAN_BLOCK_ID_RE.test(targetHash) || document.getElementById(targetHash))) {
+        if (targetHash && (SIYUAN_BLOCK_ID_RE.test(targetHash) || findBlockAnchorById(targetHash))) {
           scrollToShareAnchorTarget(targetHash, {
             pushHistory: false,
             highlight: SIYUAN_BLOCK_ID_RE.test(targetHash),

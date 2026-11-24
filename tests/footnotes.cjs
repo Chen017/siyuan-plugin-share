@@ -151,5 +151,60 @@ const pointer = (target, type, relatedTarget = null) => {
   } finally {
     tw.close();
   }
+
+  // Regression: direct <img> paragraph with block anchor is NOT collapsed as empty wrapper;
+  // multi-paragraph <li> and <blockquote> hosts preserve all children in preview/jump;
+  // uppercase block IDs resolve case-insensitively; SPA navigation waits for markdown init.
+  {
+    const regHtml = `
+      <body class="layout-share">
+        <div class="share-shell">
+          <main class="kb-main">
+            <h1 class="kb-title">Euclidean Domains</h1>
+            <div class="markdown-body" data-md-id="doc" data-sps-rendered="1">
+              <p><img src="/assets/pic.png" alt="image"><span id="20261124103521-img1111" class="sps-block-anchor"></span></p>
+              <ol>
+                <li>
+                  <p>First list line <span id="20261124103521-ny54ujx" class="sps-block-anchor" data-sps-anchor-kind="list-item"></span></p>
+                  <p>Second child paragraph of item 1.</p>
+                </li>
+              </ol>
+              <blockquote>
+                <p>Quote paragraph one <span id="20261124103521-bq11111" class="sps-block-anchor" data-sps-anchor-kind="blockquote"></span></p>
+                <p>Quote paragraph two.</p>
+              </blockquote>
+              <p>See <a href="#20261124103521-NY54UJX">this</a>, <a href="#20261124103521-bq11111">quote</a>, <a href="#20261124103521-img1111">img</a>.</p>
+            </div>
+          </main>
+        </div>
+      </body>`;
+    const rDom = new JSDOM(regHtml, {url: 'https://reader.test/s/book/doc1', runScripts: 'outside-only', pretendToBeVisual: true, virtualConsole: new VirtualConsole()});
+    const rw = rDom.window, rd = rw.document;
+    rw.matchMedia = q => ({matches: q.includes('hover: hover'), addEventListener() {}});
+    rw.scrollTo = () => {};
+    rw.HTMLElement.prototype.scrollIntoView = () => {};
+    rw.HTMLElement.prototype.scrollTo = () => {};
+    try {
+      rw.eval(source);
+      await delay(60);
+      const imgPara = rd.querySelector('img[alt="image"]').parentElement;
+      assert(!imgPara.classList.contains('sps-block-anchor-wrapper'), 'Direct image + anchor paragraph is not hidden as empty wrapper');
+
+      const upperRef = rd.querySelector('a[href="#20261124103521-NY54UJX"]');
+      assert(upperRef.nextElementSibling?.classList.contains('sps-block-ref-action'), 'Case-insensitive block ref receives preview action button');
+      upperRef.nextElementSibling.click();
+      const liCard = rd.querySelector('.sps-footnote-window');
+      assert(liCard && liCard.textContent.includes('Second child paragraph of item 1.'), 'List-item host preview includes all child paragraphs');
+      liCard.querySelector('[aria-label="Jump to block"]').click();
+      assert(rd.querySelector('ol > li').classList.contains('sps-block-jump-highlight'), 'Jumping highlights the full <li>, not only the first <p>');
+
+      const bqAction = rd.querySelector('a[href="#20261124103521-bq11111"]').nextElementSibling;
+      bqAction.click();
+      const bqCard = Array.from(rd.querySelectorAll('.sps-footnote-window')).pop();
+      assert(bqCard && bqCard.textContent.includes('Quote paragraph two.'), 'Blockquote host preview includes all child paragraphs');
+    } finally {
+      rw.close();
+    }
+  }
   console.log('Footnotes passed: hover delay/cancellation, pointer travel, adaptive height, click reuse, click [1] preview, TOC exclusion, pinning, focus return, same-doc block ref preview/jump and navigation cleanup.');
 })().finally(() => w.close()).catch(error => {console.error(error); process.exitCode = 1;});

@@ -613,6 +613,20 @@
             while (cursor && cursor.classList.contains('sps-block-anchor-wrapper')) cursor = cursor.previousElementSibling;
             return cursor || parent;
           }
+          const anchorKind = String(targetEl.dataset?.spsAnchorKind || '').trim().toLowerCase();
+          if (anchorKind === 'list-item') {
+            const li = targetEl.closest('li');
+            if (li) return li;
+          } else if (anchorKind === 'blockquote') {
+            const bq = targetEl.closest('blockquote');
+            if (bq) return bq;
+          } else if (anchorKind === 'list') {
+            const list = targetEl.closest('ul, ol');
+            if (list) return list;
+          } else if (anchorKind === 'table') {
+            const table = targetEl.closest('table');
+            if (table) return table;
+          }
           return targetEl.closest('h1, h2, h3, h4, h5, h6, li, blockquote, pre, tr, .katex-block, p') || parent || targetEl;
         }
         return targetEl;
@@ -647,7 +661,7 @@
           if (Object.prototype.hasOwnProperty.call(externalRefs, key)) {
             return { url: new URL(externalRefs[key], location.origin).href };
           }
-          return { url: new URL('#' + fragment, sourceUrl).href };
+          return null;
         }
         let resolved;
         try { resolved = new URL(rawHref, sourceUrl); } catch { return null; }
@@ -667,6 +681,7 @@
         return { url: resolved.href };
       };
       const links = Array.from(container.querySelectorAll('a[href]')).flatMap((anchor) => {
+        if (anchor.closest('.katex-mathml, .markdown-source') || isNodeHidden(anchor)) return [];
         const destination = resolveLinkDestination(anchor);
         if (!destination) return [];
         return Array.from(anchor.getClientRects(), (rect) => ({
@@ -737,7 +752,8 @@
             : link.internal.top;
           const targetPage = Math.max(0, Math.min(pages.length - 1, SPSPdfTextLayer.pageAt(pages, probeY)));
           const targetOffsetPx = Math.max(0, link.internal.top - pages[targetPage].start);
-          const targetTopMm = Math.max(0, 16 + targetOffsetPx * mmPerPixel - 4);
+          const pageHeightMm = pdf.internal.pageSize.getHeight();
+          const targetTopMm = Math.max(0, Math.min(pageHeightMm, 16 + targetOffsetPx * mmPerPixel - 4));
           pdf.link(x, y, w, h, { pageNumber: targetPage + 1, top: targetTopMm, left: 0, zoom: 0 });
         } else if (link.url) {
           pdf.link(x, y, w, h, { url: link.url });

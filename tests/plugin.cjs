@@ -221,6 +221,131 @@ function host({ mobile = false, locale = 'en_US', stored = {}, exportMarkdown = 
     } finally { refFixture.close(); }
   }
 
+  // Real SiYuan container Kramdown formats (inline list-item IAL, trailing container IALs for
+  // multi-paragraph list items, lists, blockquotes, superblocks), zero-width space, bracketed
+  // link text, images, deeply nested lists, math inside lists, and SQL parent_id fallback.
+  {
+    const docId = '20261124103520-2htohim';
+    const item1Id = '20261124103521-ny54ujx';
+    const item2Id = '20261124103521-9ledboo';
+    const listId = '20261124103521-list111';
+    const bqId = '20261124103521-bq11111';
+    const sbId = '20261124103521-sb11111';
+    const imgParaId = '20261124103521-img1111';
+    const deepId = '20261124103521-deep111';
+    const listMathId = '20261124103521-lmath11';
+
+    const realKramdown = [
+      `1. {: id="${item1Id}"}`,
+      '   $R=\\Z$',
+      '   {: id="20261124103521-c111111"}',
+      '',
+      '   $\\forall a,b\\neq 0,\\exist ! q,r\\in \\Z:a=qb+r$',
+      '   {: id="20261124103521-c111112"}',
+      '',
+      `2. {: id="${item2Id}"}`,
+      '   $R=\\mathbb{F}[x]$',
+      '   {: id="20261124103521-c222221"}',
+      '',
+      '   $\\forall a(x),b(x)\\neq 0,\\exist ! q(x),r(x)$',
+      '   {: id="20261124103521-c222222"}',
+      `{: id="${listId}"}`,
+      '',
+      '> Quote first paragraph',
+      '> {: id="20261124103521-qp11111"}',
+      '>',
+      '> Quote second paragraph',
+      '> {: id="20261124103521-qp22222"}',
+      `{: id="${bqId}"}`,
+      '',
+      '{{{row',
+      'Superblock leading text',
+      '{: id="20261124103521-sbp1111"}',
+      '}}}',
+      `{: id="${sbId}"}`,
+      '',
+      '![image](assets/pic.png)',
+      `{: id="${imgParaId}"}`,
+      '',
+      '        - Deep level 3 bullet',
+      `          {: id="${deepId}"}`,
+      '',
+      '   $$',
+      '   a = qb + r',
+      '   $$',
+      `   {: id="${listMathId}"}`,
+      '',
+      `{: id="${docId}"}`,
+    ].join('\n');
+
+    const realExportMarkdown = [
+      '## Euclidean Domains',
+      '',
+      '1. $R=\\Z$  ',
+      '   \u200b$\\forall a,b\\neq 0,\\exist ! q,r\\in \\Z:a=qb+r$',
+      '2. $R=\\mathbb{F}[x]$  ',
+      '   \u200b$\\forall a(x),b(x)\\neq 0,\\exist ! q(x),r(x)$',
+      '',
+      '> Quote first paragraph',
+      '>',
+      '> Quote second paragraph',
+      '',
+      'Superblock leading text',
+      '',
+      '<img alt="image" src="assets/pic.png" />',
+      '',
+      '- Level 1',
+      '    - Level 2',
+      '        - Deep level 3 bullet',
+      '',
+      '   $$',
+      '   a = qb + r',
+      '   $$',
+      '',
+      `Refs: [this](#${item1Id}), [$R=\\mathbb{F}[x]$](#${item2Id}), [whole list](#${listId}), [quote](#${bqId}), [super](#${sbId}), [img](#${imgParaId}), [deep](#${deepId}), [listmath](#${listMathId}).`,
+    ].join('\n');
+
+    const containerFixture = host({ mobile: true, exportMarkdown: realExportMarkdown, kramdown: realKramdown });
+    try {
+      const exported = await containerFixture.plugin.exportDocMarkdown(docId);
+      const outLines = exported.content.split(/\r?\n/);
+      const item1Line = outLines.find((l) => l.includes('$R=\\Z$') && l.includes('1.'));
+      assert(
+        item1Line &&
+          item1Line.includes(`<span id="${item1Id}" class="sps-block-anchor" data-sps-anchor-kind="list-item"></span>`) &&
+          item1Line.endsWith('  '),
+        'List item 1 keeps trailing hard-break spaces and list-item anchor kind',
+      );
+      assert(exported.content.includes(`<span id="${item2Id}" class="sps-block-anchor" data-sps-anchor-kind="list-item"></span>`), 'Bracketed link text triggers injection for list item 2');
+      assert(exported.content.includes(`<span id="${listId}" class="sps-block-anchor" data-sps-anchor-kind="list"></span>`), 'Trailing list container ID is bound to first list item');
+      assert(exported.content.includes(`<span id="${bqId}" class="sps-block-anchor" data-sps-anchor-kind="blockquote"></span>`), 'Trailing blockquote container ID is bound to quote');
+      assert(exported.content.includes(`<span id="${sbId}" class="sps-block-anchor" data-sps-anchor-kind="superblock"></span>`), 'Superblock delimiter {{{row / }}} does not break superblock anchor');
+      assert(exported.content.includes(`<span id="${imgParaId}" class="sps-block-anchor"></span>`), 'Image block anchor matches across Kramdown ![] and <img/>');
+      assert(exported.content.includes(`<span id="${deepId}" class="sps-block-anchor"></span>`), 'Deeply nested (>6 spaces) list item gets anchored');
+      const mathBeforeLine = outLines.find((l) => l.includes(`<span id="${listMathId}" class="sps-block-anchor" data-sps-anchor-pos="before"></span>`));
+      assert(mathBeforeLine && mathBeforeLine.startsWith('   <span'), 'Before-anchor inside indented block preserves leading indentation');
+      assert.deepEqual(plain(containerFixture.sandbox.testHelpers.extractMissingSameDocBlockAnchorIds(exported.content)), [], 'All 8 same-doc references are resolved');
+    } finally { containerFixture.close(); }
+
+    // SQL fallback runs automatically when Kramdown omits a missing container ID.
+    const sqlChildId = '20261124103522-sqlchd1';
+    const sqlItemId = '20261124103522-sqlitm1';
+    const sqlFixture = host({
+      mobile: true,
+      exportMarkdown: `1. First item\n\n   Second line\n\nSee [target](#${sqlItemId}).`,
+      kramdown: `1. Only unrelated\n{: id="20261124103522-other01"}\n{: id="${docId}"}`,
+      sqlRows: [
+        { id: sqlItemId, parent_id: docId, type: 'i', subtype: 'o', content: 'First item', markdown: '1. First item\n\n   Second line', sort: 10 },
+        { id: sqlChildId, parent_id: sqlItemId, type: 'p', subtype: '', content: 'First item', markdown: 'First item', sort: 11 },
+      ],
+    });
+    try {
+      const exported = await sqlFixture.plugin.exportDocMarkdown(docId);
+      assert(sqlFixture.kernelRequests.some((r) => r.url === '/api/query/sql'), 'SQL fallback runs when Kramdown misses referenced IDs');
+      assert(exported.content.includes(`<span id="${sqlItemId}" class="sps-block-anchor" data-sps-anchor-kind="list-item"></span>`), 'SQL fallback resolves container block to first child leaf');
+    } finally { sqlFixture.close(); }
+  }
+
   // forceFull and republishAllNotebooks: force re-export + overwrite upload across all notebook shares.
   {
     const nb1Id = '20261027000001-nb11111';

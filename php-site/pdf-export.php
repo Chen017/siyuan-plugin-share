@@ -405,7 +405,7 @@ function pdf_export_external_ref_targets(PDO $pdo, int $shareId, string $slug, s
     }
     $remaining = array_slice(array_values(array_diff($candidates, array_keys($targets))), 0, 50);
     if ($remaining) {
-        $blockStmt = $pdo->prepare('SELECT doc_id FROM share_docs WHERE share_id = ? AND doc_id != ? AND (instr(markdown, ?) > 0 OR instr(markdown, ?) > 0) ORDER BY sort_order, id LIMIT 1');
+        $blockStmt = $pdo->prepare('SELECT doc_id FROM share_docs WHERE share_id = ? AND doc_id != ? AND (instr(lower(markdown), ?) > 0 OR instr(lower(markdown), ?) > 0) ORDER BY sort_order, id LIMIT 1');
         foreach ($remaining as $blockId) {
             $blockStmt->execute([$shareId, $currentDocId, 'id="' . $blockId . '"', "id='" . $blockId . "'"]);
             $targetDocId = $blockStmt->fetchColumn();
