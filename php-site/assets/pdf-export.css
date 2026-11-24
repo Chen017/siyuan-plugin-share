@@ -64,7 +64,7 @@ body.pdf-export-embedded { margin: 0 !important; padding: 0 !important; min-heig
    child margins and cutting off the final paragraph. flow-root clears floats. */
 .pdf-download-document .markdown-body::before,
 .pdf-download-document .markdown-body::after { content: none !important; display: none !important; }
-.pdf-download-document :is(.code-header, .markdown-source) { display: none !important; }
+.pdf-download-document :is(.code-header, .markdown-source, .sps-block-ref-action) { display: none !important; }
 .pdf-download-document :is(.media-scroll, .code-body, .code-block, pre, .katex-display) { overflow: visible !important; max-height: none !important; }
 .pdf-download-document :is(pre, code) { white-space: pre-wrap !important; overflow-wrap: anywhere !important; }
 .pdf-download-document table { display: table !important; width: 100%; table-layout: fixed; }

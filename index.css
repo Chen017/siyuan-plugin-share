@@ -337,6 +337,19 @@
   word-break: break-all;
 }
 
+.sps-share-list__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.sps-share-list__header .siyuan-plugin-share__title {
+  margin-bottom: 0;
+}
+
 .sps-share-list {
   display: flex;
   flex-direction: column;

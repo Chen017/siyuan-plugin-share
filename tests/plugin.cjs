@@ -9,14 +9,16 @@ const { JSDOM } = require('jsdom');
 const root = path.join(__dirname, '..');
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
-function host({ mobile = false, locale = 'en_US', stored = {}, exportMarkdown = '', appVersion = '3.8.9' } = {}) {
+function host({ mobile = false, locale = 'en_US', stored = {}, exportMarkdown = '', kramdown = '', sqlRows = [], appVersion = '3.8.9', confirmAccepted = true } = {}) {
   const dom = new JSDOM('<!doctype html><body></body>', { url: 'https://siyuan.invalid/' });
   const storage = new Map(Object.entries(structuredClone(stored)));
   const listeners = new Map();
   const timers = new Map();
   const requests = [];
   const kernelRequests = [];
+  const confirmCalls = [];
   const errors = [];
+  let acceptConfirm = confirmAccepted;
   let timerId = 0;
   class Plugin {
     constructor() {
@@ -49,9 +51,22 @@ function host({ mobile = false, locale = 'en_US', stored = {}, exportMarkdown = 
     require(name) {
       if (name === 'siyuan') return {
         Plugin, Setting, getAllEditor: () => [], showMessage() {},
+        confirm(title, text, yes, no) { confirmCalls.push({title, text}); if (acceptConfirm) yes?.(); else no?.(); },
+        Dialog: class {
+          constructor(opts = {}) {
+            this.element = dom.window.document.createElement('div');
+            this.element.innerHTML = opts.content || '';
+            this._destroy = opts.destroyCallback;
+          }
+          destroy() { this._destroy?.(); }
+        },
         fetchSyncPost: async (url, body) => {
           kernelRequests.push({url, body: plain(body)});
-          return { code: 0, data: url === '/api/export/exportMdContent' ? {hPath: '/Fixture', content: exportMarkdown} : url === '/api/system/version' ? appVersion : {} };
+          if (url === '/api/export/exportMdContent') return { code: 0, data: {hPath: '/Fixture', content: exportMarkdown} };
+          if (url === '/api/block/getBlockKramdown') return { code: 0, data: {id: body?.id || '', kramdown} };
+          if (url === '/api/query/sql') return { code: 0, data: sqlRows };
+          if (url === '/api/system/version') return { code: 0, data: appVersion };
+          return { code: 0, data: {} };
         },
       };
       if (mobile) throw new Error('Node builtins are unavailable in the mobile frontend');
@@ -64,13 +79,13 @@ function host({ mobile = false, locale = 'en_US', stored = {}, exportMarkdown = 
     },
   };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'index.js'), 'utf8') +
-    '\n;globalThis.testHelpers = {withRetry, buildDocMetaHashInput};', sandbox, { filename: 'index.js' });
+    '\n;globalThis.testHelpers = {withRetry, buildDocMetaHashInput, extractMissingSameDocBlockAnchorIds, parseKramdownOrderedBlocks, injectMissingBlockAnchorsInMarkdown};', sandbox, { filename: 'index.js' });
   const plugin = new module.exports();
   // Background networking and real editor observation belong to the host integration.
   for (const name of ['bindDocTreeLater', 'refreshCurrentDocContext', 'startBackgroundSync', 'refreshAutoUpdateLoop']) {
     plugin[name] = () => {};
   }
-  return { plugin, storage, listeners, timers, requests, kernelRequests, sandbox, close() {
+  return { plugin, storage, listeners, timers, requests, kernelRequests, confirmCalls, setConfirmAccepted: (v) => { acceptConfirm = !!v; }, sandbox, close() {
     dom.window.close();
     assert.deepEqual(errors, [], 'Plugin bootstrap must not hide asynchronous errors');
   } };
@@ -83,109 +98,229 @@ function host({ mobile = false, locale = 'en_US', stored = {}, exportMarkdown = 
       let shown;
       fixture.sandbox.console.error = () => {}; // showErr logs these expected errors.
       fixture.plugin.notify = message => { shown = message; };
-      const assetError = fixture.plugin.t('siyuanShare.error.imageSizeMigrationAssetsFailed');
-      fixture.plugin.showErr(new Error(assetError));
-      assert.equal(shown, assetError, 'An asset migration error must not be mislabeled as a network failure');
       fixture.plugin.showErr(new Error('Failed to fetch'));
       assert.equal(shown, fixture.plugin.t('siyuanShare.error.networkFail'));
     } finally { fixture.close(); }
   }
-  // Upgrade migration must re-export unchanged documents once per share, and
-  // retry after cancellation or upload failure without changing other shares.
-  for (const kind of ['doc', 'notebook']) {
-    const migration = host({mobile: true, stored: {settings: {siteUrl: 'https://note.etalib.space', apiKey: 'key'}}});
+
+  // Same-document block reference anchor injection: duplicate headings, paragraphs,
+  // list items, math blocks, cross-doc footnotes, and fenced code blocks.
+  {
+    const docId = '20261119083700-docroot';
+    const def1Id = '20261119083945-cy31h7h';
+    const def2Id = '20261119091000-def2222';
+    const def3Id = '20261119092000-def3333';
+    const prop1Id = '20261119090213-69394ce';
+    const prop2Id = '20261119093000-prop222';
+    const thmId = '20261119090213-t2n1juy';
+    const stepId = '20261119094000-step111';
+    const mathId = '20261119095000-math111';
+    const kramdown = [
+      '## Orientation for Regular Surfaces',
+      '{: id="20261119083800-h2first"}',
+      '',
+      '### **Definition**',
+      `{: id="${def1Id}"}`,
+      '',
+      'An orientation of a regular surface $S$ is a map.',
+      '{: id="20261119083950-p111111"}',
+      '',
+      '### **Proposition**',
+      `{: id="${prop1Id}"}`,
+      '',
+      'Let $S$ be a regular surface and $N$ a unit normal vector field.',
+      '{: id="20261119090220-p222222"}',
+      '',
+      '1. First proof step is continuous.',
+      `{: id="${stepId}"}`,
+      '',
+      '### **Theorem**',
+      `{: id="${thmId}"}`,
+      '',
+      '$$',
+      'F(q) = 1',
+      '$$',
+      `{: id="${mathId}"}`,
+      '',
+      '### **Definition**',
+      `{: id="${def2Id}"}`,
+      '',
+      'An oriented surface is a pair.',
+      '{: id="20261119091010-p333333"}',
+      '',
+      '### **Definition**',
+      `{: id="${def3Id}"}`,
+      '',
+      'An atlas is an oriented atlas.',
+      '{: id="20261119092010-p444444"}',
+      '',
+      '### **Proposition**',
+      `{: id="${prop2Id}"}`,
+      '',
+      'Uniqueness.',
+      '{: id="20261119093010-p555555"}',
+      '',
+      `{: id="${docId}"}`,
+    ].join('\n');
+
+    const exportMarkdown = [
+      '## Orientation for Regular Surfaces',
+      '',
+      '### **Definition**',
+      '',
+      'An orientation of a regular surface $S$ is a map.',
+      '',
+      '### **Proposition**',
+      '',
+      'Let $S$ be a regular surface and $N$ a unit normal vector field.',
+      '',
+      '1. First proof step is continuous.',
+      '',
+      '### **Theorem**',
+      '',
+      '$$',
+      'F(q) = 1',
+      '$$',
+      '',
+      '### **Definition**',
+      '',
+      'An oriented surface is a pair.',
+      '',
+      '### **Definition**',
+      '',
+      'An atlas is an oriented atlas.',
+      '',
+      '### **Proposition**',
+      '',
+      'Uniqueness.',
+      '',
+      `By [proposition](#${prop1Id}), [definition of orientation](#${def1Id}), [step 1](#${stepId}), [formula](#${mathId}), and [theorem](#${thmId})[^1].`,
+      '',
+      '```md',
+      '[code link](#20261119099999-code999)',
+      '```',
+      '',
+      '[^1]: Cross-doc footnote.',
+    ].join('\n');
+
+    const refFixture = host({ mobile: true, exportMarkdown, kramdown });
     try {
-      const {plugin} = migration;
+      const exported = await refFixture.plugin.exportDocMarkdown(docId);
+      assert.equal(refFixture.kernelRequests.length, 2, 'Only fetches Kramdown when missing same-doc anchors exist');
+      assert.equal(refFixture.kernelRequests[1].url, '/api/block/getBlockKramdown');
+      const lines = exported.content.split(/\r?\n/);
+      assert(lines[2].includes(`<span id="${def1Id}" class="sps-block-anchor"></span>`), 'First Definition gets def1Id anchor');
+      assert(!lines[18].includes(def1Id) && !lines[22].includes(def1Id), 'Duplicate Definition headings are not mis-tagged');
+      assert(lines[6].includes(`<span id="${prop1Id}" class="sps-block-anchor"></span>`), 'First Proposition gets prop1Id anchor');
+      assert(lines[10].includes(`<span id="${stepId}" class="sps-block-anchor"></span>`), 'List item gets stepId anchor');
+      assert(lines[12].includes(`<span id="${thmId}" class="sps-block-anchor"></span>`), 'Theorem heading gets thmId anchor');
+      const mathAnchorIdx = exported.content.indexOf(`<span id="${mathId}" class="sps-block-anchor" data-sps-anchor-pos="before"></span>`);
+      assert(mathAnchorIdx >= 0 && mathAnchorIdx < exported.content.indexOf('$$\nF(q) = 1'), 'Math block gets anchor placed before $$');
+      assert(!exported.content.includes('20261119099999-code999" class="sps-block-anchor"'), 'Code block links are ignored');
+      assert.deepEqual(plain(refFixture.sandbox.testHelpers.extractMissingSameDocBlockAnchorIds(exported.content)), [], 'No missing anchor IDs remain after injection');
+    } finally { refFixture.close(); }
+  }
+
+  // forceFull and republishAllNotebooks: force re-export + overwrite upload across all notebook shares.
+  {
+    const nb1Id = '20261027000001-nb11111';
+    const nb2Id = '20261027000002-nb22222';
+    const doc1Id = '20261027000003-doc1111';
+    const doc2Id = '20261027000004-doc2222';
+    const singleDocId = '20261027000005-single1';
+    const hash = (text) => createHash('sha256').update(text).digest('hex');
+    const allShares = [
+      { id: 'share-doc-1', type: 'doc', docId: singleDocId, title: 'Doc Share', slug: 'doc1' },
+      { id: 'share-nb-1', type: 'notebook', notebookId: nb1Id, title: 'Notebook 1', slug: 'nb1' },
+      { id: 'share-nb-2', type: 'notebook', notebookId: nb2Id, title: 'Notebook 2', slug: 'nb2' },
+    ];
+    const reFixture = host({
+      mobile: true,
+      locale: 'en_US',
+      stored: {
+        settings: { siteUrl: 'https://note.etalib.space', apiKey: 'key' },
+        sharesBySite: { personal: allShares },
+      },
+    });
+    try {
+      const { plugin, confirmCalls } = reFixture;
       await plugin.loadState();
-      const rootId = '20261027000000-aaaaaaa';
-      const otherId = '20261027000000-bbbbbbb';
-      const share = {id: 'migration-' + kind, docId: rootId, notebookId: rootId, slug: 'test', type: kind};
-      const docs = [{docId: rootId, title: 'First'}, {docId: otherId, title: 'Second'}];
-      let exports = [], uploadCalls = 0, initBodies = [], warnings = [], plans = [], fail = false, cancel = false, failures = false;
+      plugin.shares = structuredClone(allShares);
+      plugin.notebooks = [{ id: nb1Id, name: 'Notebook 1' }, { id: nb2Id, name: 'Notebook 2' }];
+      const buildMeta = reFixture.sandbox.testHelpers.buildDocMetaHashInput;
+      const uploadedDocsByNb = new Map();
+      const notifications = [];
+      let failNb2 = false;
       Object.assign(plugin, {
-        notebooks: [{id: rootId, name: 'Notebook'}],
-        createProgressHandle: () => ({update() {}, close() {}, setBarVisible() {}, confirm: async () => !cancel}),
-        verifyRemote: async () => {}, resolveDocInfoFromAnyId: async () => ({title: 'First'}),
-        resolveNotebookIdFromDoc: async () => '', resolveDocIcon: async () => '',
-        getShareByDocId: () => share, getShareByNotebookId: () => share,
-        isNotebookClosedForAutoUpdate: async () => false,
-        supportsIncrementalShare: () => true, supportsDocChunkUpload: () => false,
-        fetchShareSnapshot: async () => ({docs: [], assets: []}),
-        listDocSubtree: async () => docs, listDocsInNotebook: async () => ({docs}),
-        fillDocIcons: async () => {}, collectStructChangedDocIds: () => [],
-        collectIncrementalCandidateDocIds: async () => ({candidateDocIds: []}),
-        getDocBlockCountCache: () => ({[rootId]: 1}),
-        collectDocExportResults: async selected => {
-          exports.push(selected.map(doc => doc.docId));
-          return selected.map((doc, index) => ({doc, index, exportRes: {}, markdown: '<img src="assets/a.png" style="width: 320px;">', assets: [], failures: failures && doc.docId === rootId ? ['missing'] : []}));
+        verifyRemote: async () => {},
+        syncRemoteShares: async () => plugin.shares,
+        refreshNotebookOptions: async () => {},
+        supportsIncrementalShare: () => true,
+        supportsDocChunkUpload: () => false,
+        listDocsInNotebook: async (nbId) => ({
+          docs: nbId === nb1Id
+            ? [{ docId: doc1Id, title: 'Doc 1', sortIndex: 0, sortOrder: 0 }]
+            : [{ docId: doc2Id, title: 'Doc 2', sortIndex: 0, sortOrder: 0 }],
+        }),
+        fillDocIcons: async () => {},
+        fetchShareSnapshot: async (shareId) => {
+          const id = shareId === 'share-nb-1' ? doc1Id : doc2Id;
+          const title = shareId === 'share-nb-1' ? 'Doc 1' : 'Doc 2';
+          const md = 'unchanged markdown';
+          const metaInput = buildMeta({ title, icon: '', parentId: '', sortOrder: 0, sortIndex: 0 });
+          return { docs: [{ docId: id, title, contentHash: hash(md), metaHash: hash(metaInput) }], assets: [] };
         },
-        resolveIconUpload: async () => '', maybeWarnExportReference: async () => {},
-        buildScopedIncrementalPlan: async ({exportedDocs, preserveExistingAssets}) => { plans.push(preserveExistingAssets); return {uploadDocs: exportedDocs, deletedDocIds: [], deletedAssetPaths: [], uploadAssetEntries: [], uploadAssets: [], summary: {changedDocs: 1}}; },
-        formatIncrementSummaryDetail: () => '', uploadAssetsChunked: async () => {},
-        remoteRequest: async (path, options) => { uploadCalls++; if (path.endsWith('/init')) initBodies.push(plain(options.body)); if (fail && path.includes('/complete')) throw new Error('Upload failed'); return {uploadId: 'test-upload'}; },
-        cancelUploadSession: async () => {}, syncRemoteShares: async () => {},
-        setAutoUpdateShareNotebookHint: () => {}, updateSharePasswordCache: async () => {},
-        setIncrementalCursor: async () => {}, refreshDocBlockCountCacheForShare: async () => {},
-        syncAutoUpdateStructDigestAfterShareSuccess: async () => {}, getShareUrl: () => 'https://note.etalib.space/s/test',
-        renderSettingCurrent: () => {}, refreshDocTreeMarksLater: () => {}, notify: message => warnings.push(message),
+        collectIncrementalCandidateDocIds: async () => { throw new Error('forceFull must skip incremental precheck'); },
+        collectDocExportResults: async (docs) => docs.map((doc, index) => ({
+          doc, index, exportRes: { hPath: '/' + doc.title }, markdown: 'unchanged markdown', assets: [], failures: [],
+        })),
+        resolveIconUpload: async () => '',
+        maybeWarnExportReference: async () => { throw new Error('republishAllNotebooks must skip interactive warnings'); },
+        remoteRequest: async (reqPath, options) => {
+          if (reqPath.endsWith('/init')) {
+            const nbId = options.body?.metadata?.notebookId;
+            if (failNb2 && nbId === nb2Id) throw new Error('Simulated upload error');
+            uploadedDocsByNb.set(nbId, (options.body?.metadata?.docs || []).map(d => d.docId));
+          }
+          return { uploadId: 'upload-' + (options.body?.metadata?.notebookId || 'x') };
+        },
+        uploadAssetsChunked: async () => {},
+        updateSharePasswordCache: async () => {},
+        setIncrementalCursor: async () => {},
+        refreshDocBlockCountCacheForShare: async () => {},
+        syncAutoUpdateStructDigestAfterShareSuccess: async () => {},
+        notify: (msg) => notifications.push(msg),
       });
-      const run = () => kind === 'doc'
-        ? plugin.shareDoc(rootId, {includeChildren: true, allowRequestError: false})
-        : plugin.shareNotebook(rootId, {allowRequestError: false});
-      cancel = true;
-      await assert.rejects(run());
-      assert.deepEqual(plain(exports.at(-1)), [rootId, otherId], `${kind}: cancellation exports every old document`);
-      cancel = false; fail = true;
-      await assert.rejects(run(), /Upload failed/);
-      assert.deepEqual(plain(exports.at(-1)), [rootId, otherId], `${kind}: failed upload retries all documents`);
-      fail = false; failures = true;
-      await run();
-      assert.equal(plans.at(-1), true, `${kind}: missing assets protect all existing assets`);
-      assert(warnings.at(-1).includes('1 local attachment'), `${kind}: user is informed`);
-      assert(plugin.needsImageSizeMigration(share.id), `${kind}: missing files remain pending`);
-      await plugin.loadState();
-      assert.deepEqual(plain(plugin.pendingImageSizeMigrationDocs(share.id)), [rootId], `${kind}: pending documents survive restart`);
-      failures = false;
-      await run();
-      assert.deepEqual(plain(exports.at(-1)), [rootId], `${kind}: only the affected document is retried`);
-      assert.deepEqual(initBodies.at(-1).metadata.docs.map(doc => doc.docId), [rootId], `${kind}: affected document enters the upload`);
-      assert(initBodies.at(-1).metadata.docs.every(doc => doc.markdown.includes('width: 320px;')), `${kind}: exported sizes enter the upload`);
-      await run();
-      assert.deepEqual(plain(exports.at(-1)), [], `${kind}: later updates return to incremental selection`);
-      assert(plugin.needsImageSizeMigration('another-share'), 'Other shares migrate independently');
-      await plugin.loadState();
-      assert(!plugin.needsImageSizeMigration(share.id), 'Completed migration survives reload');
-      share.id = 'noop-' + kind;
-      plugin.buildScopedIncrementalPlan = async () => ({summary: {}});
-      const uploadsBeforeNoop = uploadCalls;
-      if (kind === 'doc') await plugin.shareDoc(rootId, {includeChildren: true, background: true});
-      else await plugin.shareNotebook(rootId, {background: true});
-      assert.equal(uploadCalls, uploadsBeforeNoop, 'Identical migrated content needs no upload');
-      assert(!plugin.needsImageSizeMigration(share.id), 'A complete successful comparison finishes migration');
-    } finally { migration.close(); }
-  }
 
-  for (const [appVersion, expectedComplete] of [['3.2.9', false], ['3.3.0', true], ['3.8.9', true], ['unknown', false]]) {
-    const versionFixture = host({mobile: true, appVersion, stored: {settings: {siteUrl: 'https://note.etalib.space', apiKey: 'key'}}});
-    try {
-      await versionFixture.plugin.loadState();
-      await versionFixture.plugin.markImageSizeMigrationComplete('share-version');
-      assert.equal(!versionFixture.plugin.needsImageSizeMigration('share-version'), expectedComplete, `${appVersion}: only supported kernels finish migration`);
-    } finally { versionFixture.close(); }
-  }
+      // Verify Settings and Dock render the button
+      plugin.initSettingPanel();
+      assert(plugin.settingEls.sharesWrap.querySelector('[data-action="republish-all-notebooks"]'), 'Settings panel renders republish-all button');
+      const dockEl = reFixture.sandbox.document.createElement('div');
+      plugin.dockElement = dockEl;
+      plugin.renderDock();
+      assert(dockEl.querySelector('[data-action="republish-all-notebooks"]'), 'Dock panel renders republish-all button');
 
-  const olderKernel = host({mobile: true, appVersion: '3.2.9', stored: {settings: {siteUrl: 'https://note.etalib.space', apiKey: 'key'}}});
-  try {
-    await olderKernel.plugin.loadState();
-    await olderKernel.plugin.markImageSizeMigrationComplete('share-upgrade');
-    const newerKernel = host({mobile: true, appVersion: '3.8.9', stored: Object.fromEntries(olderKernel.storage)});
-    try {
-      await newerKernel.plugin.loadState();
-      assert(newerKernel.plugin.needsImageSizeMigration('share-upgrade'), 'Upgrading SiYuan retries exports made with an unsupported kernel');
-      await newerKernel.plugin.markImageSizeMigrationComplete('share-upgrade');
-      assert(!newerKernel.plugin.needsImageSizeMigration('share-upgrade'));
-    } finally { newerKernel.close(); }
-  } finally { olderKernel.close(); }
+      // Cancel does nothing
+      reFixture.setConfirmAccepted(false);
+      await plugin.republishAllNotebooks();
+      assert.equal(confirmCalls.length, 1);
+      assert.equal(uploadedDocsByNb.size, 0, 'Cancelled republish uploads nothing');
+
+      // Accept republishes both notebooks (skipping doc share) even with identical hashes
+      reFixture.setConfirmAccepted(true);
+      await plugin.republishAllNotebooks();
+      assert.deepEqual(plain(uploadedDocsByNb.get(nb1Id)), [doc1Id], 'Notebook 1 docs forced into upload despite matching hashes');
+      assert.deepEqual(plain(uploadedDocsByNb.get(nb2Id)), [doc2Id], 'Notebook 2 docs forced into upload despite matching hashes');
+      assert(notifications.at(-1).includes('2'), 'Completion notification reports 2 notebooks');
+
+      // Partial failure continues to remaining notebooks
+      uploadedDocsByNb.clear();
+      failNb2 = true;
+      await plugin.republishAllNotebooks();
+      assert.deepEqual(plain(uploadedDocsByNb.get(nb1Id)), [doc1Id]);
+      assert(notifications.at(-1).includes('1 succeeded, 1 failed'), 'Partial failure summarizes counts');
+    } finally { reFixture.close(); }
+  }
 
   // The shared export path is used by initial publication and subsequent sync.
   // A pre-3.3 host ignores imgTag and still returns its Markdown unchanged.

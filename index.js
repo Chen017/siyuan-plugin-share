@@ -25,7 +25,6 @@ const STORAGE_SHARES = "shares";
 const STORAGE_SITE_SHARES = "sharesBySite";
 const STORAGE_SHARE_OPTIONS = "shareOptions";
 const STORAGE_INCREMENTAL_CURSOR = "incrementalCursorBySite";
-const STORAGE_IMAGE_SIZE_MIGRATION = "imageSizeMigrationBySite";
 const STORAGE_DOC_BLOCK_COUNTS = "docBlockCountBySite";
 const STORAGE_EXPORT_RETRY_CACHE_INDEX = "exportRetryCacheIndexBySite";
 const STORAGE_AUTO_UPDATE_RUNTIME = "autoUpdateRuntimeBySite";
@@ -46,8 +45,8 @@ const UPLOAD_RETRY_BASE_DELAY = 400;
 const UPLOAD_RETRY_MAX_DELAY = 2000;
 const UPLOAD_MISSING_CHUNK_RETRY_LIMIT = 8;
 const EXPORT_RETRY_CACHE_DIR_NAME = "export-retry-cache";
-// Version 1 entries may contain Markdown exported before imgTag was enabled.
-const EXPORT_RETRY_CACHE_VERSION = 2;
+// Version 3 entries include same-document block anchor injection.
+const EXPORT_RETRY_CACHE_VERSION = 3;
 const AUTO_UPDATE_HISTORY_LIMIT = 2000;
 const AUTO_UPDATE_HISTORY_RENDER_LIMIT = 200;
 const AUTO_UPDATE_HISTORY_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
@@ -1385,6 +1384,614 @@ function insertAdjacentEmojiImageSpacing(markdown) {
   );
 }
 
+const SIYUAN_BLOCK_ID_RE = /^\d{14}-[a-z0-9]{7}$/i;
+const SIYUAN_IAL_LINE_RE = /^\s*(?:>\s*)*\{:([^}\n]*)\}\s*$/;
+const SIYUAN_IAL_ID_RE = /\bid\s*=\s*["'](\d{14}-[a-z0-9]{7})["']/i;
+
+function stripInlineCodeSpansForRefScan(line) {
+  return String(line || "").replace(/`+[^`]*`+/g, " ");
+}
+
+function extractMissingSameDocBlockAnchorIds(markdown) {
+  const source = String(markdown || "");
+  if (!source || !source.includes("#")) return [];
+  const lines = source.split(/\r?\n/);
+  const referenced = [];
+  const seenRef = new Set();
+  const existingIds = new Set();
+  let inFence = false;
+  let fenceChar = "";
+  let fenceLen = 0;
+
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+    const fenceMatch = trimmed.match(/^(?:>\s*)*(`{3,}|~{3,})/);
+    if (fenceMatch) {
+      const marker = fenceMatch[1];
+      if (!inFence) {
+        inFence = true;
+        fenceChar = marker[0];
+        fenceLen = marker.length;
+        continue;
+      }
+      if (marker[0] === fenceChar && marker.length >= fenceLen && trimmed.replace(/^[>\s]+/, "").length === marker.length) {
+        inFence = false;
+        fenceChar = "";
+        fenceLen = 0;
+        continue;
+      }
+    }
+    if (inFence) continue;
+
+    const cleaned = stripInlineCodeSpansForRefScan(rawLine);
+    const idAttrRe = /\bid\s*=\s*["'](\d{14}-[a-z0-9]{7})["']/gi;
+    let idMatch;
+    while ((idMatch = idAttrRe.exec(cleaned)) !== null) {
+      existingIds.add(idMatch[1].toLowerCase());
+    }
+
+    const mdRefRe = /\[[^\]]*\]\(#(\d{14}-[a-z0-9]{7})\)/gi;
+    let refMatch;
+    while ((refMatch = mdRefRe.exec(cleaned)) !== null) {
+      const id = refMatch[1].toLowerCase();
+      if (!seenRef.has(id)) {
+        seenRef.add(id);
+        referenced.push(id);
+      }
+    }
+
+    const htmlRefRe = /\bhref\s*=\s*["']#(\d{14}-[a-z0-9]{7})["']/gi;
+    while ((refMatch = htmlRefRe.exec(cleaned)) !== null) {
+      const id = refMatch[1].toLowerCase();
+      if (!seenRef.has(id)) {
+        seenRef.add(id);
+        referenced.push(id);
+      }
+    }
+  }
+
+  return referenced.filter((id) => !existingIds.has(id));
+}
+
+function normalizeBlockMatchText(text) {
+  let value = String(text || "");
+  if (!value) return "";
+  // Strip SiYuan Kramdown IAL blocks.
+  value = value.replace(/\{:[^}\n]*\}/g, " ");
+  // Convert SiYuan block-ref syntax ((id "anchor")) or ((id 'anchor')) into its anchor text.
+  value = value.replace(/\(\(\d{14}-[a-z0-9]{7}\s+["']([^"']*)["']\)\)/gi, "$1");
+  value = value.replace(/\(\(\d{14}-[a-z0-9]{7}\)\)/gi, " ");
+  // Strip footnote markers like [^1]
+  value = value.replace(/\[\^[^\]]+\]/g, "");
+  // Unwrap Markdown images and links to their visible text.
+  value = value.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1");
+  value = value.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
+  // Strip inline HTML tags without corrupting math comparisons like a<b.
+  value = value.replace(/<\/?[a-zA-Z][a-zA-Z0-9-]*(?:\s+[^>]*)?>/g, " ");
+  // Decode common HTML entities.
+  value = value
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/gi, " ");
+  // Strip Markdown formatting markers.
+  value = value.replace(/[*`~]+/g, "");
+  value = value.replace(/__+/g, "");
+  return value.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function stripBlockPrefix(rawLine) {
+  let line = String(rawLine || "");
+  line = line.replace(/^\s*(?:>\s*)+/, "");
+  line = line.replace(/^\s{0,6}(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/, "");
+  return line;
+}
+
+function classifyBlockStartLine(rawLine) {
+  const unquoted = String(rawLine || "").replace(/^\s*(?:>\s*)+/, "");
+  const trimmed = unquoted.trim();
+  const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)$/);
+  if (headingMatch) {
+    return {
+      kind: "heading",
+      headingLevel: headingMatch[1].length,
+      text: headingMatch[2],
+    };
+  }
+  const listMatch = unquoted.match(/^\s{0,6}(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.*)$/);
+  if (listMatch) {
+    return {
+      kind: "list-item",
+      headingLevel: 0,
+      text: listMatch[1],
+    };
+  }
+  if (/^\s*>/.test(String(rawLine || ""))) {
+    return {kind: "blockquote", headingLevel: 0, text: trimmed};
+  }
+  if (/^\|/.test(trimmed)) {
+    return {kind: "table", headingLevel: 0, text: trimmed};
+  }
+  return {kind: "paragraph", headingLevel: 0, text: trimmed};
+}
+
+function parseKramdownOrderedBlocks(kramdown, docId = "") {
+  const source = String(kramdown || "");
+  if (!source) return [];
+  const docIdLower = String(docId || "").trim().toLowerCase();
+  const lines = source.split(/\r?\n/);
+  const blocks = [];
+  let buffer = [];
+  let inFence = false;
+  let fenceChar = "";
+  let fenceLen = 0;
+  let inMath = false;
+
+  const buildBlockFromLines = (id, blockLines) => {
+    const cleanLines = blockLines.filter((line) => line.trim() !== "");
+    if (!cleanLines.length) return null;
+    const firstRaw = cleanLines[0];
+    const firstTrimmed = firstRaw.trim();
+    if (/^(`{3,}|~{3,})/.test(firstTrimmed)) {
+      const inner = cleanLines.slice(1, cleanLines.length > 1 && /^(`{3,}|~{3,})$/.test(cleanLines[cleanLines.length - 1].trim()) ? -1 : undefined);
+      return {
+        id,
+        kind: "code",
+        headingLevel: 0,
+        normText: normalizeBlockMatchText(inner.join(" ")),
+      };
+    }
+    if (firstTrimmed.startsWith("$$")) {
+      const bodyText = cleanLines.join(" ").replace(/^\$\$|\$\$$/g, "");
+      return {
+        id,
+        kind: "math",
+        headingLevel: 0,
+        normText: normalizeBlockMatchText(bodyText),
+      };
+    }
+    const info = classifyBlockStartLine(firstRaw);
+    if (info.kind === "heading") {
+      return {
+        id,
+        kind: "heading",
+        headingLevel: info.headingLevel,
+        normText: normalizeBlockMatchText(info.text),
+      };
+    }
+    const combinedText = [info.text, ...cleanLines.slice(1).map((l) => stripBlockPrefix(l))].join(" ");
+    return {
+      id,
+      kind: info.kind,
+      headingLevel: 0,
+      normText: normalizeBlockMatchText(combinedText),
+    };
+  };
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    const unquotedTrimmed = line.replace(/^\s*(?:>\s*)+/, "").trim();
+
+    if (!inMath) {
+      const fenceMatch = unquotedTrimmed.match(/^(`{3,}|~{3,})/);
+      if (fenceMatch) {
+        const marker = fenceMatch[1];
+        if (!inFence) {
+          inFence = true;
+          fenceChar = marker[0];
+          fenceLen = marker.length;
+          buffer.push(line);
+          continue;
+        }
+        if (marker[0] === fenceChar && marker.length >= fenceLen && unquotedTrimmed.length === marker.length) {
+          inFence = false;
+          fenceChar = "";
+          fenceLen = 0;
+          buffer.push(line);
+          continue;
+        }
+      }
+    }
+    if (inFence) {
+      buffer.push(line);
+      continue;
+    }
+
+    if (unquotedTrimmed === "$$") {
+      inMath = !inMath;
+      buffer.push(line);
+      continue;
+    }
+    if (inMath) {
+      buffer.push(line);
+      continue;
+    }
+
+    const ialMatch = line.match(SIYUAN_IAL_LINE_RE);
+    if (ialMatch) {
+      const idMatch = ialMatch[1].match(SIYUAN_IAL_ID_RE);
+      const blockId = idMatch ? idMatch[1].toLowerCase() : "";
+      if (blockId && blockId !== docIdLower) {
+        const parsed = buildBlockFromLines(blockId, buffer);
+        if (parsed) blocks.push(parsed);
+      }
+      buffer = [];
+      continue;
+    }
+
+    if (trimmed === "") {
+      if (buffer.length > 0 && buffer[buffer.length - 1].trim() !== "") {
+        // Keep blank lines only if we're not starting a brand-new unrelated block;
+        // in SiYuan Kramdown each block is terminated by its {: id="..."} IAL.
+        buffer.push(line);
+      }
+      continue;
+    }
+
+    buffer.push(line);
+  }
+
+  return blocks;
+}
+
+function findFootnoteDefStartLine(lines) {
+  let inFence = false;
+  let fenceChar = "";
+  let fenceLen = 0;
+  let firstFootnoteLine = lines.length;
+  for (let i = 0; i < lines.length; i += 1) {
+    const trimmed = lines[i].trim();
+    const fenceMatch = trimmed.match(/^(`{3,}|~{3,})/);
+    if (fenceMatch) {
+      const marker = fenceMatch[1];
+      if (!inFence) {
+        inFence = true;
+        fenceChar = marker[0];
+        fenceLen = marker.length;
+        continue;
+      }
+      if (marker[0] === fenceChar && marker.length >= fenceLen && trimmed.length === marker.length) {
+        inFence = false;
+        fenceChar = "";
+        fenceLen = 0;
+        continue;
+      }
+    }
+    if (inFence) continue;
+    if (/^\[\^[^\]]+\]:/.test(lines[i])) {
+      firstFootnoteLine = i;
+      break;
+    }
+  }
+  return firstFootnoteLine;
+}
+
+function parseMarkdownBodyBlocks(lines, bodyEndLine) {
+  const mdBlocks = [];
+  let i = 0;
+  if (lines[0]?.trim() === "---") {
+    for (let j = 1; j < Math.min(bodyEndLine, 40); j += 1) {
+      if (lines[j].trim() === "---") {
+        i = j + 1;
+        break;
+      }
+    }
+  }
+
+  while (i < bodyEndLine) {
+    const rawLine = lines[i];
+    const trimmed = rawLine.trim();
+    if (!trimmed) {
+      i += 1;
+      continue;
+    }
+
+    const unquoted = rawLine.replace(/^\s*(?:>\s*)+/, "");
+    const unquotedTrimmed = unquoted.trim();
+
+    // Fenced code block
+    const fenceMatch = unquotedTrimmed.match(/^(`{3,}|~{3,})/);
+    if (fenceMatch) {
+      const startLine = i;
+      const marker = fenceMatch[1];
+      const inner = [];
+      i += 1;
+      while (i < bodyEndLine) {
+        const curTrimmed = lines[i].replace(/^\s*(?:>\s*)+/, "").trim();
+        if (curTrimmed[0] === marker[0] && curTrimmed.length >= marker.length && new RegExp(`^${marker[0]}{${marker.length},}$`).test(curTrimmed)) {
+          i += 1;
+          break;
+        }
+        inner.push(lines[i]);
+        i += 1;
+      }
+      mdBlocks.push({
+        startLine,
+        endLine: i - 1,
+        firstContentLine: startLine,
+        kind: "code",
+        headingLevel: 0,
+        normText: normalizeBlockMatchText(inner.join(" ")),
+      });
+      continue;
+    }
+
+    // Display math block
+    if (unquotedTrimmed.startsWith("$$")) {
+      const startLine = i;
+      const collected = [unquotedTrimmed];
+      if (unquotedTrimmed === "$$" || !unquotedTrimmed.endsWith("$$") || unquotedTrimmed.length === 2) {
+        i += 1;
+        while (i < bodyEndLine) {
+          const curTrimmed = lines[i].replace(/^\s*(?:>\s*)+/, "").trim();
+          collected.push(curTrimmed);
+          i += 1;
+          if (curTrimmed.endsWith("$$")) break;
+        }
+      } else {
+        i += 1;
+      }
+      const bodyText = collected.join(" ").replace(/^\$\$|\$\$$/g, "");
+      mdBlocks.push({
+        startLine,
+        endLine: i - 1,
+        firstContentLine: startLine,
+        kind: "math",
+        headingLevel: 0,
+        normText: normalizeBlockMatchText(bodyText),
+      });
+      continue;
+    }
+
+    // Heading
+    const headingMatch = unquotedTrimmed.match(/^(#{1,6})\s+(.*)$/);
+    if (headingMatch) {
+      mdBlocks.push({
+        startLine: i,
+        endLine: i,
+        firstContentLine: i,
+        kind: "heading",
+        headingLevel: headingMatch[1].length,
+        normText: normalizeBlockMatchText(headingMatch[2]),
+      });
+      i += 1;
+      continue;
+    }
+
+    // List item (consumes consecutive indented/non-blank continuation lines until blank or next block)
+    const listMatch = unquoted.match(/^\s{0,6}(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.*)$/);
+    if (listMatch) {
+      const startLine = i;
+      const collected = [listMatch[1]];
+      i += 1;
+      while (i < bodyEndLine) {
+        const nextRaw = lines[i];
+        const nextTrimmed = nextRaw.trim();
+        if (!nextTrimmed) break;
+        const nextUnquoted = nextRaw.replace(/^\s*(?:>\s*)+/, "");
+        if (/^\s{0,6}(?:[-*+]|\d+[.)])\s+/.test(nextUnquoted)) break;
+        if (/^(#{1,6}\s+|`{3,}|~{3,}|\$\$)/.test(nextUnquoted.trim())) break;
+        collected.push(nextUnquoted.trim());
+        i += 1;
+      }
+      mdBlocks.push({
+        startLine,
+        endLine: i - 1,
+        firstContentLine: startLine,
+        kind: "list-item",
+        headingLevel: 0,
+        normText: normalizeBlockMatchText(collected.join(" ")),
+      });
+      continue;
+    }
+
+    // Table
+    if (unquotedTrimmed.startsWith("|")) {
+      const startLine = i;
+      const collected = [unquotedTrimmed];
+      i += 1;
+      while (i < bodyEndLine && lines[i].replace(/^\s*(?:>\s*)+/, "").trim().startsWith("|")) {
+        collected.push(lines[i].replace(/^\s*(?:>\s*)+/, "").trim());
+        i += 1;
+      }
+      mdBlocks.push({
+        startLine,
+        endLine: i - 1,
+        firstContentLine: startLine,
+        kind: "table",
+        headingLevel: 0,
+        normText: normalizeBlockMatchText(collected.join(" ")),
+      });
+      continue;
+    }
+
+    // Blockquote or Paragraph
+    const startLine = i;
+    const isQuote = /^\s*>/.test(rawLine);
+    const collected = [stripBlockPrefix(rawLine)];
+    i += 1;
+    while (i < bodyEndLine) {
+      const nextRaw = lines[i];
+      const nextTrimmed = nextRaw.trim();
+      if (!nextTrimmed) break;
+      const nextUnquoted = nextRaw.replace(/^\s*(?:>\s*)+/, "");
+      const nextUnquotedTrimmed = nextUnquoted.trim();
+      if (/^(#{1,6}\s+|`{3,}|~{3,}|\$\$)/.test(nextUnquotedTrimmed)) break;
+      if (/^\s{0,6}(?:[-*+]|\d+[.)])\s+/.test(nextUnquoted)) break;
+      if (isQuote !== /^\s*>/.test(nextRaw)) break;
+      collected.push(stripBlockPrefix(nextRaw));
+      i += 1;
+    }
+    mdBlocks.push({
+      startLine,
+      endLine: i - 1,
+      firstContentLine: startLine,
+      kind: isQuote ? "blockquote" : "paragraph",
+      headingLevel: 0,
+      normText: normalizeBlockMatchText(collected.join(" ")),
+    });
+  }
+
+  return mdBlocks;
+}
+
+function appendInlineAnchorToLine(line, anchorHtml) {
+  const source = String(line || "");
+  if (source.includes(anchorHtml)) return source;
+  const trailingMatch = source.match(/([ \t]+)$/);
+  const trailing = trailingMatch ? trailingMatch[1] : "";
+  const body = trailing ? source.slice(0, -trailing.length) : source;
+  return `${body} ${anchorHtml}${trailing}`;
+}
+
+function injectMissingBlockAnchorsInMarkdown(markdown, orderedBlocks, missingIds) {
+  const source = String(markdown || "");
+  const missing = Array.isArray(missingIds) ? missingIds.filter((id) => SIYUAN_BLOCK_ID_RE.test(id)) : [];
+  if (!source || !missing.length || !Array.isArray(orderedBlocks) || !orderedBlocks.length) {
+    return source;
+  }
+
+  const lineEnding = source.includes("\r\n") ? "\r\n" : "\n";
+  const lines = source.split(/\r?\n/);
+  const bodyEndLine = findFootnoteDefStartLine(lines);
+  const mdBlocks = parseMarkdownBodyBlocks(lines, bodyEndLine);
+  if (!mdBlocks.length) return source;
+
+  const blockIndexById = new Map();
+  orderedBlocks.forEach((block, idx) => {
+    const id = String(block?.id || "").trim().toLowerCase();
+    if (id && !blockIndexById.has(id)) {
+      blockIndexById.set(id, idx);
+    }
+  });
+
+  const nonEmptyOrderedIndices = [];
+  orderedBlocks.forEach((b, idx) => {
+    if (b?.normText) nonEmptyOrderedIndices.push(idx);
+  });
+
+  const findAdjacentNormText = (srcIdx, direction) => {
+    const pos = nonEmptyOrderedIndices.indexOf(srcIdx);
+    if (pos < 0) return "";
+    const targetPos = pos + direction;
+    if (targetPos < 0 || targetPos >= nonEmptyOrderedIndices.length) return "";
+    return orderedBlocks[nonEmptyOrderedIndices[targetPos]]?.normText || "";
+  };
+
+  const inlineAppends = new Map();
+  const beforeInsertions = new Map();
+
+  for (const rawId of missing) {
+    const targetId = String(rawId || "").trim().toLowerCase();
+    const srcIdx = blockIndexById.get(targetId);
+    if (srcIdx === undefined) continue;
+    const targetBlock = orderedBlocks[srcIdx];
+    const targetNorm = String(targetBlock?.normText || "");
+    if (!targetNorm) continue;
+
+    const sameKey = (b) =>
+      b.kind === targetBlock.kind &&
+      b.headingLevel === targetBlock.headingLevel &&
+      b.normText === targetNorm;
+
+    const exactMatches = [];
+    mdBlocks.forEach((b, mdIdx) => {
+      if (sameKey(b)) exactMatches.push(mdIdx);
+    });
+
+    let candidates = exactMatches;
+    if (!candidates.length) {
+      // Relaxed fallback: match normalized text regardless of kind (e.g. blockquote/list formatting differences)
+      mdBlocks.forEach((b, mdIdx) => {
+        if (b.normText === targetNorm) candidates.push(mdIdx);
+      });
+    }
+    if (!candidates.length && targetNorm.length >= 6) {
+      // Prefix/containment fallback when SiYuan alters inline markup slightly on export
+      mdBlocks.forEach((b, mdIdx) => {
+        if (!b.normText) return;
+        if (b.kind === targetBlock.kind && b.headingLevel === targetBlock.headingLevel) {
+          if (b.normText.includes(targetNorm) || targetNorm.includes(b.normText)) {
+            candidates.push(mdIdx);
+          }
+        }
+      });
+    }
+    if (!candidates.length) continue;
+
+    let chosenMdIdx = candidates[0];
+    if (candidates.length > 1) {
+      let srcOccurrence = 0;
+      for (let i = 0; i < srcIdx; i += 1) {
+        if (sameKey(orderedBlocks[i])) srcOccurrence += 1;
+      }
+      const prevNorm = findAdjacentNormText(srcIdx, -1);
+      const nextNorm = findAdjacentNormText(srcIdx, 1);
+      const relPos = orderedBlocks.length > 1 ? srcIdx / (orderedBlocks.length - 1) : 0;
+
+      let bestScore = -Infinity;
+      candidates.forEach((mdIdx, candRank) => {
+        let score = 0;
+        if (candRank === srcOccurrence) score += 2;
+        const mdPrev = mdIdx > 0 ? mdBlocks[mdIdx - 1].normText : "";
+        const mdNext = mdIdx + 1 < mdBlocks.length ? mdBlocks[mdIdx + 1].normText : "";
+        if (prevNorm && mdPrev && (mdPrev === prevNorm || mdPrev.includes(prevNorm) || prevNorm.includes(mdPrev))) {
+          score += 4;
+        }
+        if (nextNorm && mdNext && (mdNext === nextNorm || mdNext.includes(nextNorm) || nextNorm.includes(mdNext))) {
+          score += 4;
+        }
+        const mdRelPos = mdBlocks.length > 1 ? mdIdx / (mdBlocks.length - 1) : 0;
+        score -= Math.abs(mdRelPos - relPos);
+        if (score > bestScore) {
+          bestScore = score;
+          chosenMdIdx = mdIdx;
+        }
+      });
+    }
+
+    const chosen = mdBlocks[chosenMdIdx];
+    const anchorTag = `<span id="${targetId}" class="sps-block-anchor"></span>`;
+    if (chosen.kind === "heading" || chosen.kind === "paragraph" || chosen.kind === "list-item") {
+      const list = inlineAppends.get(chosen.firstContentLine) || [];
+      if (!list.includes(anchorTag)) {
+        list.push(anchorTag);
+        inlineAppends.set(chosen.firstContentLine, list);
+      }
+    } else {
+      const beforeTag = `<span id="${targetId}" class="sps-block-anchor" data-sps-anchor-pos="before"></span>`;
+      const list = beforeInsertions.get(chosen.startLine) || [];
+      if (!list.includes(beforeTag)) {
+        list.push(beforeTag);
+        beforeInsertions.set(chosen.startLine, list);
+      }
+    }
+  }
+
+  if (!inlineAppends.size && !beforeInsertions.size) return source;
+
+  const outLines = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const beforeList = beforeInsertions.get(i);
+    if (beforeList && beforeList.length) {
+      outLines.push(beforeList.join(""));
+      outLines.push("");
+    }
+    let line = lines[i];
+    const appendList = inlineAppends.get(i);
+    if (appendList && appendList.length) {
+      for (const tag of appendList) {
+        line = appendInlineAnchorToLine(line, tag);
+      }
+    }
+    outLines.push(line);
+  }
+  return outLines.join(lineEnding);
+}
+
 function getDocIconKind(iconValue) {
   const icon = normalizeDocIconValue(iconValue);
   if (!icon) return "empty";
@@ -1567,12 +2174,12 @@ class SiYuanSharePlugin extends Plugin {
     };
     this.remoteUploadLimits = null;
     this.remoteFeatures = null;
+    this.isRepublishingAllNotebooks = false;
     this.uploadTuner = {avgSpeed: 0, samples: 0};
     this.shares = [];
     this.siteShares = {};
     this.shareOptions = {};
     this.incrementalCursorBySite = {};
-    this.imageSizeMigrationBySite = {};
     this.docBlockCountBySite = {};
     this.exportRetryCacheIndexBySite = {};
     this.refQuerySchema = null;
@@ -1846,7 +2453,6 @@ class SiYuanSharePlugin extends Plugin {
     await this.removeData(STORAGE_SITE_SHARES);
     await this.removeData(STORAGE_AUTO_UPDATE_RUNTIME);
     await this.removeData(STORAGE_INCREMENTAL_CURSOR);
-    await this.removeData(STORAGE_IMAGE_SIZE_MIGRATION);
     await this.removeData(STORAGE_DOC_BLOCK_COUNTS);
     await this.removeData(STORAGE_EXPORT_RETRY_CACHE_INDEX);
     await this.clearExportRetryCacheFiles();
@@ -4144,6 +4750,10 @@ class SiYuanSharePlugin extends Plugin {
           this.openAutoUpdateStatusDialog();
           return;
         }
+        if (action === "republish-all-notebooks") {
+          await this.republishAllNotebooks();
+          return;
+        }
         if (action === "copy-link") {
           const shareId = target.getAttribute("data-share-id");
           await this.copyShareLink(shareId);
@@ -4360,9 +4970,7 @@ class SiYuanSharePlugin extends Plugin {
     const t = this.t.bind(this);
     let message = err?.message || String(err);
     const lower = message.toLowerCase();
-    if (message === t("siyuanShare.error.imageSizeMigrationAssetsFailed")) {
-      // This error describes missing local assets, not necessarily a network failure.
-    } else if (
+    if (
       lower.includes("api key") ||
       lower.includes("invalid api key") ||
       lower.includes("unauthorized") ||
@@ -5282,7 +5890,10 @@ class SiYuanSharePlugin extends Plugin {
     return {close, update, confirm, setBarVisible};
   }
 
-  createProgressHandle(message, controller, {background = false} = {}) {
+  createProgressHandle(message, controller, {background = false, progress = null} = {}) {
+    if (progress) {
+      return progress;
+    }
     if (!background) {
       return this.openProgressDialog(message, controller);
     }
@@ -5300,7 +5911,6 @@ class SiYuanSharePlugin extends Plugin {
     const siteSharesRaw = (await this.loadData(STORAGE_SITE_SHARES)) || {};
     const shareOptionsRaw = (await this.loadData(STORAGE_SHARE_OPTIONS)) || {};
     const incrementalCursorRaw = (await this.loadData(STORAGE_INCREMENTAL_CURSOR)) || {};
-    const imageSizeMigrationRaw = (await this.loadData(STORAGE_IMAGE_SIZE_MIGRATION)) || {};
     const docBlockCountRaw = (await this.loadData(STORAGE_DOC_BLOCK_COUNTS)) || {};
     const exportRetryCacheIndexRaw = (await this.loadData(STORAGE_EXPORT_RETRY_CACHE_INDEX)) || {};
     const autoUpdateRuntimeRaw = (await this.loadData(STORAGE_AUTO_UPDATE_RUNTIME)) || {};
@@ -5356,7 +5966,6 @@ class SiYuanSharePlugin extends Plugin {
     this.siteShares = siteShares;
     this.shareOptions = shareOptions;
     this.incrementalCursorBySite = incrementalCursorBySite;
-    this.imageSizeMigrationBySite = imageSizeMigrationRaw && typeof imageSizeMigrationRaw === "object" && !Array.isArray(imageSizeMigrationRaw) ? imageSizeMigrationRaw : {};
     this.docBlockCountBySite = docBlockCountBySite;
     this.exportRetryCacheIndexBySite = exportRetryCacheIndexBySite;
     this.autoUpdateRuntimeBySite = this.normalizeAutoUpdateRuntimeBySite(autoUpdateRuntimeRaw);
@@ -6043,46 +6652,6 @@ class SiYuanSharePlugin extends Plugin {
     const siteMap = this.incrementalCursorBySite?.[siteId];
     if (!siteMap || typeof siteMap !== "object") return "";
     return normalizeDocUpdatedStamp(siteMap[shareKey]);
-  }
-
-  needsImageSizeMigration(shareId) {
-    const siteId = this.getActiveSiteId();
-    const key = String(shareId || "").trim();
-    return !siteId || !key || this.imageSizeMigrationBySite?.[siteId]?.[key] !== true;
-  }
-
-  pendingImageSizeMigrationDocs(shareId) {
-    const state = this.imageSizeMigrationBySite?.[this.getActiveSiteId()]?.[String(shareId || "").trim()];
-    return Array.isArray(state?.pendingDocIds) ? normalizeDocIdList(state.pendingDocIds) : null;
-  }
-
-  async markImageSizeMigrationComplete(shareId, pendingDocIds = []) {
-    const siteId = this.getActiveSiteId();
-    const key = String(shareId || "").trim();
-    if (!siteId || !key) return;
-    // Older kernels ignore imgTag. Do not permanently mark those exports as migrated.
-    let version;
-    try {
-      const response = await fetchSyncPost("/api/system/version", {});
-      const match = response?.code === 0 && typeof response.data === "string"
-        ? response.data.match(/^(\d+)\.(\d+)\.(\d+)/) : null;
-      if (!match) return;
-      version = match.slice(1).map(Number);
-    } catch {
-      return;
-    }
-    if (version[0] < 3 || (version[0] === 3 && version[1] < 3)) return;
-    const pending = normalizeDocIdList(pendingDocIds);
-    const site = {...(this.imageSizeMigrationBySite?.[siteId] || {}), [key]: pending.length ? {pendingDocIds: pending} : true};
-    const previous = this.imageSizeMigrationBySite;
-    const updated = {...(previous || {}), [siteId]: site};
-    this.imageSizeMigrationBySite = updated;
-    try {
-      await this.saveData(STORAGE_IMAGE_SIZE_MIGRATION, updated);
-    } catch (error) {
-      if (this.imageSizeMigrationBySite === updated) this.imageSizeMigrationBySite = previous;
-      throw error;
-    }
   }
 
   async setIncrementalCursor(shareId, stamp) {
@@ -7294,6 +7863,10 @@ class SiYuanSharePlugin extends Plugin {
       if (qrUrl) this.showQRCodeDialog(qrUrl);
       return;
     }
+    if (action === "republish-all-notebooks") {
+      void this.republishAllNotebooks().catch(this.showErr);
+      return;
+    }
     const shareId = btn.getAttribute("data-share-id");
     if (!shareId) return;
     void (async () => {
@@ -7447,10 +8020,18 @@ class SiYuanSharePlugin extends Plugin {
       })
       .join("");
 
+    const hasNotebookShare = (Array.isArray(this.shares) ? this.shares : []).some(
+      (s) => s && s.type === SHARE_TYPES.NOTEBOOK && s.id,
+    );
     wrap.innerHTML = `<div class="siyuan-plugin-share__section">
-  <div class="siyuan-plugin-share__title">${escapeHtml(
-    t("siyuanShare.title.shareListCount", {count: this.shares.length}),
-  )}</div>
+  <div class="sps-share-list__header">
+    <div class="siyuan-plugin-share__title">${escapeHtml(
+      t("siyuanShare.title.shareListCount", {count: this.shares.length}),
+    )}</div>
+    <button class="b3-button b3-button--outline sps-republish-all-btn" data-action="republish-all-notebooks"${
+      !hasNotebookShare || this.isRepublishingAllNotebooks ? " disabled" : ""
+    }>${escapeHtml(t("siyuanShare.action.republishAllNotebooks"))}</button>
+  </div>
   <div class="sps-share-list">
     ${items || `<div class="siyuan-plugin-share__muted">${escapeHtml(t("siyuanShare.message.noShareRecords"))}</div>`}
   </div>
@@ -8121,7 +8702,14 @@ class SiYuanSharePlugin extends Plugin {
   }
 
   async buildScopedIncrementalPlan(
-    {scopeDocs = [], exportedDocs = [], assetEntries = [], remoteSnapshot = null, preserveExistingAssets = false} = {},
+    {
+      scopeDocs = [],
+      exportedDocs = [],
+      assetEntries = [],
+      remoteSnapshot = null,
+      preserveExistingAssets = false,
+      forceUploadDocs = false,
+    } = {},
     {controller = null, progress = null} = {},
   ) {
     const t = this.t.bind(this);
@@ -8180,7 +8768,7 @@ class SiYuanSharePlugin extends Plugin {
       }
       const sameContent = remote.contentHash && remote.contentHash === normalizeHashHex(doc.contentHash);
       const sameMeta = remote.metaHash && remote.metaHash === normalizeHashHex(doc.metaHash);
-      if (sameContent && sameMeta) return;
+      if (!forceUploadDocs && sameContent && sameMeta) return;
       updatedDocs += 1;
       uploadDocs.push(doc);
     });
@@ -8580,6 +9168,10 @@ class SiYuanSharePlugin extends Plugin {
       excludedDocIds = [],
       allowRequestError = true,
       background = false,
+      forceFull = false,
+      skipConfirm = false,
+      suppressNotify = false,
+      progress: externalProgress = null,
       controller: externalController = null,
       autoUpdateExpectedChangeSeq = null,
     } = {},
@@ -8587,7 +9179,10 @@ class SiYuanSharePlugin extends Plugin {
     const t = this.t.bind(this);
     if (!isValidDocId(docId)) throw new Error(t("siyuanShare.error.invalidDocId"));
     const controller = externalController || new AbortController();
-    const progress = this.createProgressHandle(t("siyuanShare.progress.creatingShare"), controller, {background});
+    const progress = this.createProgressHandle(t("siyuanShare.progress.creatingShare"), controller, {
+      background,
+      progress: externalProgress,
+    });
     const incrementalCursorStamp = formatDocUpdatedStampFromMs(nowTs());
     try {
       progress.update(t("siyuanShare.progress.verifyingSite"));
@@ -8685,14 +9280,13 @@ class SiYuanSharePlugin extends Plugin {
         scopeDocs = this.alignScopeDocsWithRemoteSnapshot(scopeDocs, remoteSnapshot);
       }
       let candidateDocIds = scopeDocs.map((doc) => String(doc?.docId || "").trim());
-      const pendingMigrationDocs = existingShare?.id ? this.pendingImageSizeMigrationDocs(existingShare.id) : null;
-      if (useIncremental && (!this.needsImageSizeMigration(existingShare.id) || pendingMigrationDocs !== null)) {
+      if (useIncremental && !forceFull) {
         progress.update(t("siyuanShare.progress.analyzingIncrement"));
         const candidateInfo = await this.collectIncrementalCandidateDocIds(scopeDocs, existingShare, {
           controller,
           progress,
         });
-        candidateDocIds = [...(Array.isArray(candidateInfo?.candidateDocIds) ? candidateInfo.candidateDocIds : []), ...(pendingMigrationDocs || [])];
+        candidateDocIds = Array.isArray(candidateInfo?.candidateDocIds) ? candidateInfo.candidateDocIds : [];
         const structChangedDocIds = this.collectStructChangedDocIds(scopeDocs, remoteSnapshot);
         if (structChangedDocIds.length) {
           candidateDocIds = Array.from(new Set([...candidateDocIds, ...structChangedDocIds]));
@@ -8701,10 +9295,10 @@ class SiYuanSharePlugin extends Plugin {
       const candidateSet = new Set(
         candidateDocIds.map((id) => String(id || "").trim()).filter((id) => isValidDocId(id)),
       );
-      let docsToExport = useIncremental
+      let docsToExport = useIncremental && !forceFull
         ? scopeDocs.filter((doc) => candidateSet.has(String(doc?.docId || "").trim()))
         : scopeDocs.slice();
-      if (useIncremental && docsToExport.length === 0) {
+      if (useIncremental && !forceFull && docsToExport.length === 0) {
         const cached = this.getDocBlockCountCache(existingShare?.id);
         if (!cached || Object.keys(cached).length === 0) {
           docsToExport = scopeDocs.slice();
@@ -8712,10 +9306,9 @@ class SiYuanSharePlugin extends Plugin {
       }
 
       let resourceFailures = 0;
-      const failedAssetDocs = new Set();
       let docPayloads = [];
       let assetEntries = [];
-      const allowRetryCache = !useIncremental && (!existingShare?.id || !this.needsImageSizeMigration(existingShare.id));
+      const allowRetryCache = !useIncremental && !forceFull;
       const exportScopeMeta = allowRetryCache
         ? this.buildExportRetryScopeMeta({
             type: SHARE_TYPES.DOC,
@@ -8763,7 +9356,6 @@ class SiYuanSharePlugin extends Plugin {
           const failures = Array.isArray(result.failures) ? result.failures : [];
           resourceFailures += failures.length;
           const docIdValue = String(doc?.docId || "").trim();
-          if (failures.length && docIdValue) failedAssetDocs.add(docIdValue);
           const docTitle =
             String(doc?.title || "").trim() || (docIdValue === docId ? title : t("siyuanShare.label.untitled"));
           const iconValue = await this.resolveIconUpload(doc?.icon, {
@@ -8819,10 +9411,9 @@ class SiYuanSharePlugin extends Plugin {
       });
       if (resourceFailures > 0) {
         console.warn("Some assets failed to download.", resourceFailures);
-        if (!useIncremental && existingShare?.id) throw new Error(t("siyuanShare.error.imageSizeMigrationAssetsFailed"));
       }
       const refDocIds = scopeDocs.map((doc) => String(doc?.docId || ""));
-      if (!background) {
+      if (!background && !skipConfirm) {
         await this.maybeWarnExportReference(exportedMarkdowns, refDocIds);
       }
       throwIfAborted(controller, t("siyuanShare.message.cancelled"));
@@ -8881,6 +9472,7 @@ class SiYuanSharePlugin extends Plugin {
             assetEntries,
             remoteSnapshot,
             preserveExistingAssets: resourceFailures > 0,
+            forceUploadDocs: !!forceFull,
           },
           {controller, progress},
         );
@@ -8895,7 +9487,6 @@ class SiYuanSharePlugin extends Plugin {
       }
       if (background && this.isIncrementalPlanNoop(plan)) {
         if (existingShare?.id) {
-          if (!cachedExport && this.needsImageSizeMigration(existingShare.id) && (pendingMigrationDocs !== null || docsToExport.length === scopeDocs.length)) await this.markImageSizeMigrationComplete(existingShare.id, Array.from(failedAssetDocs));
           await this.setIncrementalCursor(existingShare.id, incrementalCursorStamp);
           if (!useIncremental || docsToExport.length > 0) {
             await this.refreshDocBlockCountCacheForShare(existingShare.id, scopeDocs, {controller});
@@ -8908,7 +9499,7 @@ class SiYuanSharePlugin extends Plugin {
       }
       const detail = this.formatIncrementSummaryDetail(plan.summary) + (useIncremental && resourceFailures ? "\n" + t("siyuanShare.message.missingAssetsPreserved", {count: resourceFailures}) : "");
       let proceed = true;
-      if (!background) {
+      if (!background && !skipConfirm) {
         progress.setBarVisible?.(false);
         try {
           proceed = await progress.confirm({
@@ -9020,7 +9611,6 @@ class SiYuanSharePlugin extends Plugin {
       });
       await this.saveData(STORAGE_SHARE_OPTIONS, this.shareOptions);
       await this.updateSharePasswordCache(share.id, {password, clearPassword});
-      if (uploadComplete && !cachedExport && this.needsImageSizeMigration(share.id) && (pendingMigrationDocs !== null || docsToExport.length === scopeDocs.length)) await this.markImageSizeMigrationComplete(share.id, Array.from(failedAssetDocs));
       await this.setIncrementalCursor(share.id, incrementalCursorStamp);
       if (!useIncremental || docsToExport.length > 0) {
         await this.refreshDocBlockCountCacheForShare(share.id, scopeDocs, {controller});
@@ -9034,12 +9624,12 @@ class SiYuanSharePlugin extends Plugin {
       const url = this.getShareUrl(share);
       this.renderSettingCurrent();
       this.refreshDocTreeMarksLater();
-      if (!background) {
+      if (!background && !suppressNotify) {
         this.notify(useIncremental && resourceFailures ? t("siyuanShare.message.missingAssetsPreserved", {count: resourceFailures}) : t("siyuanShare.message.shareCreated", {value: url || title}));
         if (url) await this.tryCopyToClipboard(url);
       }
     } finally {
-      progress?.close();
+      if (!externalProgress) progress?.close();
     }
   }
 
@@ -9054,6 +9644,10 @@ class SiYuanSharePlugin extends Plugin {
       excludedDocIds = [],
       allowRequestError = true,
       background = false,
+      forceFull = false,
+      skipConfirm = false,
+      suppressNotify = false,
+      progress: externalProgress = null,
       controller: externalController = null,
       autoUpdateExpectedChangeSeq = null,
     } = {},
@@ -9063,6 +9657,7 @@ class SiYuanSharePlugin extends Plugin {
     const controller = externalController || new AbortController();
     const progress = this.createProgressHandle(t("siyuanShare.progress.creatingNotebookShare"), controller, {
       background,
+      progress: externalProgress,
     });
     const incrementalCursorStamp = formatDocUpdatedStampFromMs(nowTs());
     try {
@@ -9128,14 +9723,13 @@ class SiYuanSharePlugin extends Plugin {
         scopeDocs = this.alignScopeDocsWithRemoteSnapshot(scopeDocs, remoteSnapshot);
       }
       let candidateDocIds = scopeDocs.map((doc) => String(doc?.docId || "").trim());
-      const pendingMigrationDocs = existingShare?.id ? this.pendingImageSizeMigrationDocs(existingShare.id) : null;
-      if (useIncremental && (!this.needsImageSizeMigration(existingShare.id) || pendingMigrationDocs !== null)) {
+      if (useIncremental && !forceFull) {
         progress.update(t("siyuanShare.progress.analyzingIncrement"));
         const candidateInfo = await this.collectIncrementalCandidateDocIds(scopeDocs, existingShare, {
           controller,
           progress,
         });
-        candidateDocIds = [...(Array.isArray(candidateInfo?.candidateDocIds) ? candidateInfo.candidateDocIds : []), ...(pendingMigrationDocs || [])];
+        candidateDocIds = Array.isArray(candidateInfo?.candidateDocIds) ? candidateInfo.candidateDocIds : [];
         const structChangedDocIds = this.collectStructChangedDocIds(scopeDocs, remoteSnapshot);
         if (structChangedDocIds.length) {
           candidateDocIds = Array.from(new Set([...candidateDocIds, ...structChangedDocIds]));
@@ -9144,10 +9738,10 @@ class SiYuanSharePlugin extends Plugin {
       const candidateSet = new Set(
         candidateDocIds.map((id) => String(id || "").trim()).filter((id) => isValidDocId(id)),
       );
-      let docsToExport = useIncremental
+      let docsToExport = useIncremental && !forceFull
         ? scopeDocs.filter((doc) => candidateSet.has(String(doc?.docId || "").trim()))
         : scopeDocs.slice();
-      if (useIncremental && docsToExport.length === 0) {
+      if (useIncremental && !forceFull && docsToExport.length === 0) {
         const cached = this.getDocBlockCountCache(existingShare?.id);
         if (!cached || Object.keys(cached).length === 0) {
           docsToExport = scopeDocs.slice();
@@ -9158,9 +9752,8 @@ class SiYuanSharePlugin extends Plugin {
       let assetEntries = [];
       const exportedMarkdowns = [];
       let failureCount = 0;
-      const failedAssetDocs = new Set();
       const iconUploadMap = new Map();
-      const allowRetryCache = !useIncremental && (!existingShare?.id || !this.needsImageSizeMigration(existingShare.id));
+      const allowRetryCache = !useIncremental && !forceFull;
       const exportScopeMeta = allowRetryCache
         ? this.buildExportRetryScopeMeta({
             type: SHARE_TYPES.NOTEBOOK,
@@ -9208,7 +9801,6 @@ class SiYuanSharePlugin extends Plugin {
           const failures = Array.isArray(result.failures) ? result.failures : [];
           failureCount += failures.length;
           const docIdValue = String(doc?.docId || "").trim();
-          if (failures.length && docIdValue) failedAssetDocs.add(docIdValue);
           const iconValue = await this.resolveIconUpload(doc?.icon, {
             docId: docIdValue,
             notebookId,
@@ -9262,10 +9854,9 @@ class SiYuanSharePlugin extends Plugin {
       });
       if (failureCount > 0) {
         console.warn("Some assets failed to download.", failureCount);
-        if (!useIncremental && existingShare?.id) throw new Error(t("siyuanShare.error.imageSizeMigrationAssetsFailed"));
       }
       const refDocIds = scopeDocs.map((doc) => String(doc?.docId || ""));
-      if (!background) {
+      if (!background && !skipConfirm) {
         await this.maybeWarnExportReference(exportedMarkdowns, refDocIds);
       }
       throwIfAborted(controller, t("siyuanShare.message.cancelled"));
@@ -9307,6 +9898,7 @@ class SiYuanSharePlugin extends Plugin {
             assetEntries,
             remoteSnapshot,
             preserveExistingAssets: failureCount > 0,
+            forceUploadDocs: !!forceFull,
           },
           {controller, progress},
         );
@@ -9321,7 +9913,6 @@ class SiYuanSharePlugin extends Plugin {
       }
       if (background && this.isIncrementalPlanNoop(plan)) {
         if (existingShare?.id) {
-          if (!cachedExport && this.needsImageSizeMigration(existingShare.id) && (pendingMigrationDocs !== null || docsToExport.length === scopeDocs.length)) await this.markImageSizeMigrationComplete(existingShare.id, Array.from(failedAssetDocs));
           await this.setIncrementalCursor(existingShare.id, incrementalCursorStamp);
           if (!useIncremental || docsToExport.length > 0) {
             await this.refreshDocBlockCountCacheForShare(existingShare.id, scopeDocs, {controller});
@@ -9334,7 +9925,7 @@ class SiYuanSharePlugin extends Plugin {
       }
       const detail = this.formatIncrementSummaryDetail(plan.summary) + (useIncremental && failureCount ? "\n" + t("siyuanShare.message.missingAssetsPreserved", {count: failureCount}) : "");
       let proceed = true;
-      if (!background) {
+      if (!background && !skipConfirm) {
         progress.setBarVisible?.(false);
         try {
           proceed = await progress.confirm({
@@ -9441,7 +10032,6 @@ class SiYuanSharePlugin extends Plugin {
       });
       await this.saveData(STORAGE_SHARE_OPTIONS, this.shareOptions);
       await this.updateSharePasswordCache(share.id, {password, clearPassword});
-      if (uploadComplete && !cachedExport && this.needsImageSizeMigration(share.id) && (pendingMigrationDocs !== null || docsToExport.length === scopeDocs.length)) await this.markImageSizeMigrationComplete(share.id, Array.from(failedAssetDocs));
       await this.setIncrementalCursor(share.id, incrementalCursorStamp);
       if (!useIncremental || docsToExport.length > 0) {
         await this.refreshDocBlockCountCacheForShare(share.id, scopeDocs, {controller});
@@ -9454,12 +10044,12 @@ class SiYuanSharePlugin extends Plugin {
       }
       const url = this.getShareUrl(share);
       this.refreshDocTreeMarksLater();
-      if (!background) {
+      if (!background && !suppressNotify) {
         this.notify(useIncremental && failureCount ? t("siyuanShare.message.missingAssetsPreserved", {count: failureCount}) : t("siyuanShare.message.shareCreated", {value: url || title}));
         if (url) await this.tryCopyToClipboard(url);
       }
     } finally {
-      progress?.close();
+      if (!externalProgress) progress?.close();
     }
   }
 
@@ -9665,6 +10255,10 @@ class SiYuanSharePlugin extends Plugin {
       includeChildren = null,
       excludedDocIds = null,
       background = false,
+      forceFull = false,
+      skipConfirm = false,
+      suppressNotify = false,
+      progress = null,
       controller = null,
       autoUpdateExpectedChangeSeq = null,
     } = {},
@@ -9717,6 +10311,10 @@ class SiYuanSharePlugin extends Plugin {
           excludedDocIds: excludedDocIdsValue,
           allowRequestError: false,
           background,
+          forceFull,
+          skipConfirm,
+          suppressNotify,
+          progress,
           controller,
           autoUpdateExpectedChangeSeq,
         });
@@ -9737,6 +10335,10 @@ class SiYuanSharePlugin extends Plugin {
           excludedDocIds: excludedDocIdsValue,
           allowRequestError: false,
           background,
+          forceFull,
+          skipConfirm,
+          suppressNotify,
+          progress,
           controller,
           autoUpdateExpectedChangeSeq,
         });
@@ -9753,6 +10355,129 @@ class SiYuanSharePlugin extends Plugin {
       this.markAutoUpdateManualSuccess(shareIdKey);
       this.suspendAutoUpdateRuntimeForShare(shareIdKey, {clearRetry: true, clearSyncing: true});
       this.autoUpdateAbortByManualSet.delete(shareIdKey);
+    }
+  }
+
+  async republishAllNotebooks() {
+    const t = this.t.bind(this);
+    if (this.isRepublishingAllNotebooks) {
+      this.notify(t("siyuanShare.message.republishAllAlreadyRunning"));
+      return;
+    }
+    await this.verifyRemote();
+    await this.syncRemoteShares({silent: true});
+    await this.refreshNotebookOptions({silent: true});
+    const notebookShares = (Array.isArray(this.shares) ? this.shares : []).filter(
+      (share) => share && share.type === SHARE_TYPES.NOTEBOOK && share.id,
+    );
+    if (!notebookShares.length) {
+      this.notify(t("siyuanShare.message.noNotebookShares"));
+      return;
+    }
+    const ok = await new Promise((resolve) => {
+      confirm(
+        t("siyuanShare.confirm.republishAllNotebooksTitle"),
+        t("siyuanShare.confirm.republishAllNotebooksMessage", {count: notebookShares.length}),
+        () => resolve(true),
+        () => resolve(false),
+      );
+    });
+    if (!ok) return;
+
+    this.isRepublishingAllNotebooks = true;
+    const controller = new AbortController();
+    const total = notebookShares.length;
+    const progress = this.openProgressDialog(
+      t("siyuanShare.progress.republishingAllNotebooks", {
+        index: 1,
+        total,
+        name: notebookShares[0].title || notebookShares[0].notebookId || notebookShares[0].id,
+      }),
+      controller,
+    );
+    const failures = [];
+    let succeeded = 0;
+    try {
+      for (let i = 0; i < total; i += 1) {
+        const share = notebookShares[i];
+        throwIfAborted(controller, t("siyuanShare.message.cancelled"));
+        const name = String(share.title || share.notebookId || share.id);
+        const headerText = t("siyuanShare.progress.republishingAllNotebooks", {
+          index: i + 1,
+          total,
+          name,
+        });
+        progress.update({
+          text: headerText,
+          percent: (i / total) * 100,
+          detail: "",
+        });
+        const subProgress = {
+          close: () => {},
+          setBarVisible: (visible) => progress.setBarVisible?.(visible),
+          confirm: async () => true,
+          update: (next, percent = null, detail = "") => {
+            let subText = next;
+            let subPct = percent;
+            let subDetail = detail;
+            if (next && typeof next === "object") {
+              subText = next.text;
+              subPct = next.percent;
+              subDetail = next.detail;
+            }
+            const numericPct = subPct !== null && subPct !== undefined && subPct !== "" ? Number(subPct) : NaN;
+            const frac = Number.isFinite(numericPct)
+              ? Math.max(0, Math.min(1, numericPct / 100))
+              : 0.15;
+            const overallPct = ((i + frac) / total) * 100;
+            const detailParts = [subText ? String(subText) : "", subDetail ? String(subDetail) : ""].filter(Boolean);
+            progress.update({
+              text: headerText,
+              percent: overallPct,
+              detail: detailParts.join(" — "),
+            });
+          },
+        };
+        try {
+          await this.updateShare(share.id, {
+            forceFull: true,
+            skipConfirm: true,
+            suppressNotify: true,
+            controller,
+            progress: subProgress,
+          });
+          succeeded += 1;
+        } catch (err) {
+          if (isAbortError(err)) throw err;
+          console.warn("republishAllNotebooks failed for share", share.id, err);
+          failures.push({name, error: err});
+        }
+      }
+      progress.update({
+        text: t("siyuanShare.progress.republishingAllNotebooks", {
+          index: total,
+          total,
+          name: notebookShares[total - 1]?.title || "",
+        }),
+        percent: 100,
+        detail: "",
+      });
+    } finally {
+      progress?.close();
+      this.isRepublishingAllNotebooks = false;
+      this.renderSettingShares();
+      this.renderDock();
+      this.renderSettingCurrent();
+    }
+    if (failures.length === 0) {
+      this.notify(t("siyuanShare.message.republishAllDone", {count: succeeded}));
+    } else {
+      this.notify(
+        t("siyuanShare.message.republishAllPartial", {
+          succeeded,
+          failed: failures.length,
+        }),
+      );
     }
   }
 
@@ -10396,6 +11121,7 @@ class SiYuanSharePlugin extends Plugin {
     this.remoteVerifiedAt = 0;
     this.remoteUploadLimits = null;
     this.remoteFeatures = null;
+    this.isRepublishingAllNotebooks = false;
     await this.persistActiveRemoteStatus({clear: true});
     this.shares = [];
     if (activeSiteId) {
@@ -10505,12 +11231,71 @@ class SiYuanSharePlugin extends Plugin {
     }
   }
 
+  async fetchDocOrderedBlocksForAnchors(docId) {
+    const cleanDocId = String(docId || "").trim();
+    if (!cleanDocId) return [];
+    try {
+      const resp = await fetchSyncPost("/api/block/getBlockKramdown", {id: cleanDocId});
+      if (resp && resp.code === 0 && typeof resp?.data?.kramdown === "string" && resp.data.kramdown.trim()) {
+        const parsed = parseKramdownOrderedBlocks(resp.data.kramdown, cleanDocId);
+        if (parsed.length) return parsed;
+      }
+    } catch {
+      // Fallback to SQL query below.
+    }
+    const safeId = cleanDocId.replace(/'/g, "''");
+    const rows = await this.querySqlRows(
+      `SELECT id, type, subtype, content, markdown FROM blocks WHERE root_id = '${safeId}' AND id != '${safeId}' ORDER BY sort ASC`,
+    );
+    if (!Array.isArray(rows) || !rows.length) return [];
+    const out = [];
+    for (const row of rows) {
+      const id = String(row?.id || "").trim().toLowerCase();
+      if (!SIYUAN_BLOCK_ID_RE.test(id)) continue;
+      const type = String(row?.type || "").trim().toLowerCase();
+      const subtype = String(row?.subtype || "").trim().toLowerCase();
+      let kind = "paragraph";
+      let headingLevel = 0;
+      if (type === "h") {
+        kind = "heading";
+        headingLevel = Math.max(1, Math.min(6, Number.parseInt(subtype.replace(/^h/i, ""), 10) || 1));
+      } else if (type === "i") {
+        kind = "list-item";
+      } else if (type === "m") {
+        kind = "math";
+      } else if (type === "c") {
+        kind = "code";
+      } else if (type === "b") {
+        kind = "blockquote";
+      } else if (type === "t") {
+        kind = "table";
+      }
+      const rawText = String(row?.markdown || row?.content || "");
+      const normText = normalizeBlockMatchText(kind === "heading" ? rawText.replace(/^#{1,6}\s+/, "") : rawText);
+      if (!normText) continue;
+      out.push({id, kind, headingLevel, normText});
+    }
+    return out;
+  }
+
   async exportDocMarkdown(docId) {
     const resp = await fetchSyncPost("/api/export/exportMdContent", {id: docId, imgTag: true});
     if (!resp || resp.code !== 0) throw new Error(resp?.msg || this.t("siyuanShare.error.exportMarkdownFailed"));
+    let content = resp?.data?.content || "";
+    const missingIds = extractMissingSameDocBlockAnchorIds(content);
+    if (missingIds.length > 0) {
+      try {
+        const orderedBlocks = await this.fetchDocOrderedBlocksForAnchors(docId);
+        if (orderedBlocks.length > 0) {
+          content = injectMissingBlockAnchorsInMarkdown(content, orderedBlocks, missingIds);
+        }
+      } catch (err) {
+        console.warn("Failed to inject missing same-doc block anchors", err);
+      }
+    }
     return {
       hPath: resp?.data?.hPath || "",
-      content: resp?.data?.content || "",
+      content,
     };
   }
 
@@ -10868,6 +11653,10 @@ class SiYuanSharePlugin extends Plugin {
       })
       .join("");
 
+    const hasNotebookShare = (Array.isArray(this.shares) ? this.shares : []).some(
+      (s) => s && s.type === SHARE_TYPES.NOTEBOOK && s.id,
+    );
+
     this.dockElement.innerHTML = `
 <div class="siyuan-plugin-share__section">
   <div class="siyuan-plugin-share__title">${escapeHtml(t("siyuanShare.section.connectionSettings"))}</div>
@@ -10896,9 +11685,14 @@ class SiYuanSharePlugin extends Plugin {
 </div>
 
 <div class="siyuan-plugin-share__section">
-  <div class="siyuan-plugin-share__title">${escapeHtml(
-    t("siyuanShare.title.shareListCount", {count: this.shares.length}),
-  )}</div>
+  <div class="sps-share-list__header">
+    <div class="siyuan-plugin-share__title">${escapeHtml(
+      t("siyuanShare.title.shareListCount", {count: this.shares.length}),
+    )}</div>
+    <button class="b3-button b3-button--outline sps-republish-all-btn" data-action="republish-all-notebooks"${
+      !hasNotebookShare || this.isRepublishingAllNotebooks ? " disabled" : ""
+    }>${escapeHtml(t("siyuanShare.action.republishAllNotebooks"))}</button>
+  </div>
   <table class="siyuan-plugin-share__table">
     <thead>
       <tr>

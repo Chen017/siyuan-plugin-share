@@ -297,6 +297,15 @@ async function page(raw, {failMermaid = false, slowGraphviz = false} = {}) {
     assert(!untrustedMath.w.document.querySelector('.markdown-body').textContent.includes('FAKE_PLACEHOLDER'));
     assert.equal(untrustedMath.w.document.querySelector('.katex math').querySelector('annotation').textContent, 'x^2');
   } finally { untrustedMath.close(); }
+  const blockRefNote = await page('### **Definition** <span id="20261119083945-cy31h7h" class="sps-block-anchor"></span>\n\nAn orientation of $S$.\n\nSee [definition](#20261119083945-cy31h7h).');
+  try {
+    const body = blockRefNote.w.document.querySelector('.markdown-body');
+    const anchorSpan = blockRefNote.w.document.getElementById('20261119083945-cy31h7h');
+    assert(anchorSpan && anchorSpan.classList.contains('sps-block-anchor'), 'Injected block anchor span survives sanitization');
+    assert.equal(anchorSpan.closest('h3').textContent.trim(), 'Definition', 'Block anchor span adds no visible characters to heading');
+    assert.equal(blockRefNote.w.document.querySelector('.share-toc-link .share-toc-text').textContent.trim(), 'Definition', 'TOC heading label stays clean');
+    assert(body.querySelector('a[href="#20261119083945-cy31h7h"] + .sps-block-ref-action'), 'Rendered block ref gets preview action button');
+  } finally { blockRefNote.close(); }
   const mixed = await page('```echarts\n{"series":[]}\n```\n\n```dot\ndigraph { A -> B }\n```', {slowGraphviz: true});
   try {
     assert(mixed.events.indexOf('echarts-rendered') >= 0);

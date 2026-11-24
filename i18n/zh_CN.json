@@ -36,7 +36,6 @@
   "siyuanShare.error.remoteRequestFailed": "远程请求失败 ({status})",
   "siyuanShare.error.resourceDownloadCanceled": "资源下载已取消。",
   "siyuanShare.error.resourceDownloadFailed": "获取资源失败 ({status})",
-  "siyuanShare.error.imageSizeMigrationAssetsFailed": "图片尺寸迁移时有附件获取失败，本次更新已停止，请检查资源后重试。",
   "siyuanShare.message.missingAssetsPreserved": "有 {count} 个本地附件读取失败，线上已有附件会保留。",
   "siyuanShare.error.resourcePathInvalid": "资源路径无效。",
   "siyuanShare.error.shareCreateFailed": "分享创建失败，请重试。",
@@ -203,5 +202,13 @@
   "siyuanShare.title.autoUpdateQueue": "队列",
   "siyuanShare.title.autoUpdateQuiet": "静默",
   "siyuanShare.title.autoUpdateRetry": "重试",
-  "siyuanShare.title.autoUpdateHistory": "历史"
+  "siyuanShare.title.autoUpdateHistory": "历史",
+  "siyuanShare.action.republishAllNotebooks": "一键重新全部分享笔记本",
+  "siyuanShare.confirm.republishAllNotebooksTitle": "确认重新全部分享笔记本？",
+  "siyuanShare.confirm.republishAllNotebooksMessage": "将强制重新导出并更新所有已分享的 {count} 个笔记本（跳过增量检测，覆盖同步全部文档内容）。是否继续？",
+  "siyuanShare.progress.republishingAllNotebooks": "正在强制重传笔记本 ({index}/{total})：{name}",
+  "siyuanShare.message.republishAllAlreadyRunning": "正在批量重新分享笔记本，请稍候。",
+  "siyuanShare.message.noNotebookShares": "暂无已分享的笔记本。",
+  "siyuanShare.message.republishAllDone": "已全部强制重新分享 {count} 个笔记本。",
+  "siyuanShare.message.republishAllPartial": "批量重新分享完成：成功 {succeeded} 个，失败 {failed} 个。"
 }

@@ -4795,3 +4795,39 @@ body:is(.layout-app,.layout-share,.layout-public,.layout-auth) { background: var
 body.layout-share .reader-frame { background: var(--content-bg); }
 body.layout-share .reader-frame :is(.kb-sidebar,.share-toc) { background: var(--sidebar-bg); }
 .confirm-dialog, .sps-footnote-window { background: var(--overlay-bg); }
+
+.sps-block-anchor {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  vertical-align: baseline;
+  pointer-events: none;
+}
+.sps-block-anchor-wrapper {
+  margin: 0 !important;
+  padding: 0 !important;
+  height: 0;
+  line-height: 0;
+  overflow: hidden;
+}
+.sps-block-ref-action {
+  margin-left: 0.16em;
+  margin-right: 0.12em;
+}
+@keyframes sps-block-jump-flash {
+  0% { background-color: rgba(90, 123, 255, 0.24); box-shadow: 0 0 0 4px rgba(90, 123, 255, 0.16); border-radius: 6px; }
+  65% { background-color: rgba(90, 123, 255, 0.12); box-shadow: 0 0 0 4px rgba(90, 123, 255, 0.08); border-radius: 6px; }
+  100% { background-color: transparent; box-shadow: none; }
+}
+.sps-block-jump-highlight {
+  animation: sps-block-jump-flash 1.8s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sps-block-jump-highlight {
+    animation: none;
+    outline: 2px solid var(--primary);
+    outline-offset: 4px;
+    border-radius: 6px;
+  }
+}

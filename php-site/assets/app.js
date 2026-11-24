@@ -199,6 +199,11 @@
   let markdownInitRetryCount = 0;
   const markdownInitRetryLimit = 40;
   const FOOTNOTE_ICON_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h4"/></svg>';
+  const BLOCK_JUMP_ICON_SVG = '<svg class="sps-footnote-line-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>';
+  const SIYUAN_BLOCK_ID_RE = /^\d{14}-[a-z0-9]{7}$/i;
+  const blockJumpHighlightTimers = new WeakMap();
+  let pendingAnchorHash = "";
+  let initialBlockHashHandled = false;
   const footnoteWindows = new Set();
   const footnoteActionWindows = new WeakMap();
   const footnoteWindowActions = new WeakMap();
@@ -1375,6 +1380,15 @@
     cloneRoot
       .querySelectorAll("[data-sps-footnote-preview]")
       .forEach((node) => node.removeAttribute("data-sps-footnote-preview"));
+    cloneRoot.querySelectorAll(".sps-block-ref-action").forEach((button) => {
+      button.remove();
+    });
+    cloneRoot
+      .querySelectorAll("[data-sps-block-ref-preview]")
+      .forEach((node) => node.removeAttribute("data-sps-block-ref-preview"));
+    cloneRoot
+      .querySelectorAll(".sps-block-anchor, .sps-block-anchor-wrapper")
+      .forEach((node) => node.remove());
 
     const sourceCharts = Array.from(
       sourceRoot.querySelectorAll(".md-diagram--echarts"),
@@ -1432,6 +1446,140 @@
     clone.removeAttribute("id");
     clone.removeAttribute("data-footnote-index");
     return clone.innerHTML;
+  };
+
+  const normalizeBlockAnchors = (container) => {
+    if (!container) return;
+    container.querySelectorAll("[id]").forEach((node) => {
+      const id = String(node.getAttribute("id") || "").trim();
+      if (!SIYUAN_BLOCK_ID_RE.test(id)) return;
+      if (node.closest("svg")) return;
+      if (node.tagName === "SPAN" || !node.textContent.trim()) {
+        node.classList.add("sps-block-anchor");
+        if (node.style?.display === "none") {
+          node.style.removeProperty("display");
+        }
+        const parent = node.parentElement;
+        if (parent && parent.tagName === "P") {
+          const hasVisibleContent = Array.from(parent.childNodes).some((child) => {
+            if (child.nodeType === 3) return Boolean(child.nodeValue && child.nodeValue.trim());
+            if (child.nodeType === 1) {
+              return !child.classList.contains("sps-block-anchor") && Boolean(child.textContent.trim() || child.querySelector("img, video, iframe, svg, canvas, table, math"));
+            }
+            return false;
+          });
+          if (!hasVisibleContent) {
+            parent.classList.add("sps-block-anchor-wrapper");
+          }
+        }
+      }
+    });
+  };
+
+  const resolveBlockAnchorHost = (anchorEl) => {
+    if (!anchorEl) return null;
+    const isEmptyAnchor =
+      anchorEl.classList?.contains("sps-block-anchor") ||
+      (anchorEl.tagName === "SPAN" && !anchorEl.textContent.trim());
+    if (!isEmptyAnchor) return anchorEl;
+    const parent = anchorEl.parentElement;
+    if (parent?.classList?.contains("sps-block-anchor-wrapper")) {
+      let cursor = parent.nextElementSibling;
+      while (cursor && cursor.classList?.contains("sps-block-anchor-wrapper")) {
+        cursor = cursor.nextElementSibling;
+      }
+      if (cursor) return cursor;
+      cursor = parent.previousElementSibling;
+      while (cursor && cursor.classList?.contains("sps-block-anchor-wrapper")) {
+        cursor = cursor.previousElementSibling;
+      }
+      return cursor || parent;
+    }
+    return (
+      anchorEl.closest("h1, h2, h3, h4, h5, h6, li, blockquote, pre, tr, .katex-block, p") ||
+      parent ||
+      anchorEl
+    );
+  };
+
+  const stripDuplicateIdsOutsideSvg = (root) => {
+    if (!root) return;
+    if (root instanceof Element && !root.closest("svg")) {
+      root.removeAttribute("id");
+    }
+    root.querySelectorAll("[id]").forEach((node) => {
+      if (!node.closest("svg")) node.removeAttribute("id");
+    });
+  };
+
+  const buildBlockRefPreviewHtml = (anchorEl) => {
+    const host = resolveBlockAnchorHost(anchorEl);
+    if (!host) return "";
+    const cloneCleanBlock = (sourceNode) => {
+      const clone = sourceNode.cloneNode(true);
+      syncRichMediaFromSource(sourceNode, clone);
+      stripDuplicateIdsOutsideSvg(clone);
+      clone.classList?.remove("sps-block-jump-highlight");
+      return clone;
+    };
+    if (/^H[1-6]$/i.test(host.tagName)) {
+      const level = Number(host.tagName.slice(1)) || 6;
+      const wrapper = document.createElement("div");
+      wrapper.appendChild(cloneCleanBlock(host));
+      let cursor = host.nextElementSibling;
+      while (cursor) {
+        if (cursor.matches("hr.footnotes-sep, .footnotes, .markdown-footnotes")) break;
+        if (/^H[1-6]$/i.test(cursor.tagName)) {
+          const nextLevel = Number(cursor.tagName.slice(1)) || 6;
+          if (nextLevel <= level) break;
+        }
+        if (!cursor.classList?.contains("sps-block-anchor-wrapper")) {
+          wrapper.appendChild(cloneCleanBlock(cursor));
+        }
+        cursor = cursor.nextElementSibling;
+      }
+      return wrapper.innerHTML;
+    }
+    if (host.tagName === "LI") {
+      return cloneCleanBlock(host).innerHTML;
+    }
+    return cloneCleanBlock(host).outerHTML;
+  };
+
+  const scrollToShareAnchorTarget = (targetId, {pushHistory = false, highlight = true} = {}) => {
+    const cleanId = String(targetId || "").replace(/^#/, "").trim();
+    if (!cleanId) return null;
+    const targetEl = document.getElementById(cleanId);
+    if (!targetEl) return null;
+    const isBlockId = SIYUAN_BLOCK_ID_RE.test(cleanId);
+    const host = isBlockId ? (resolveBlockAnchorHost(targetEl) || targetEl) : targetEl;
+    const rawMargin = window.getComputedStyle(host).scrollMarginTop;
+    const marginTop = Number.parseFloat(rawMargin || "0");
+    const baseOffset = document.body.classList.contains("layout-share") ? 120 : 0;
+    const offset = Math.max(baseOffset, Number.isFinite(marginTop) ? marginTop : 0);
+    const top = Math.max(0, host.getBoundingClientRect().top + window.scrollY - offset);
+    window.scrollTo({top, behavior: scrollBehavior()});
+    if (highlight) {
+      const prevTimer = blockJumpHighlightTimers.get(host);
+      if (prevTimer) clearTimeout(prevTimer);
+      host.classList.remove("sps-block-jump-highlight");
+      void host.offsetWidth;
+      host.classList.add("sps-block-jump-highlight");
+      const timer = window.setTimeout(() => {
+        host.classList.remove("sps-block-jump-highlight");
+        if (blockJumpHighlightTimers.get(host) === timer) {
+          blockJumpHighlightTimers.delete(host);
+        }
+      }, 1800);
+      blockJumpHighlightTimers.set(host, timer);
+    }
+    const nextHash = `#${cleanId}`;
+    if (pushHistory && window.location.hash !== nextHash) {
+      history.pushState({spsHash: cleanId}, "", nextHash);
+    } else if (!pushHistory && window.location.hash !== nextHash) {
+      history.replaceState({spsHash: cleanId}, "", nextHash);
+    }
+    return host;
   };
 
   const getFootnoteAnchorPointFromEvent = (event) => {
@@ -1759,8 +1907,8 @@
     };
   };
 
-  const openFootnoteInNewTab = (index, contentHtml) => {
-    const title = index ? `Footnote ${index}` : "Footnote";
+  const openFootnoteInNewTab = (index, contentHtml, options = {}) => {
+    const title = String(options?.title || "").trim() || (index ? `Footnote ${index}` : "Footnote");
     const tab = window.open("", "_blank");
     if (!tab || !tab.document) return;
     const assetsBaseUrl = getShareAssetsBaseUrl();
@@ -1906,12 +2054,15 @@
             y: Number(options.anchorPoint.y),
           }
         : null;
+    const displayTitle = String(options?.title || "").trim() || (index ? `Footnote ${index}` : "Footnote");
+    const targetBlockId = String(options?.targetBlockId || "").trim();
     const windowEl = document.createElement("section");
     windowEl.className = "sps-footnote-window";
     windowEl.dataset.footnoteIndex = String(index || "");
+    if (targetBlockId) windowEl.dataset.blockRefTarget = targetBlockId;
     windowEl.dataset.pinned = "0";
     windowEl.setAttribute("role", "dialog");
-    windowEl.setAttribute("aria-label", index ? `Footnote ${index}` : "Footnote");
+    windowEl.setAttribute("aria-label", displayTitle);
     bringFootnoteWindowToFront(windowEl);
 
     const header = document.createElement("div");
@@ -1919,10 +2070,20 @@
 
     const title = document.createElement("div");
     title.className = "sps-footnote-window__title";
-    title.textContent = index ? `Footnote ${index}` : "Footnote";
+    title.textContent = displayTitle;
 
     const actions = document.createElement("div");
     actions.className = "sps-footnote-window__actions";
+
+    let btnJump = null;
+    if (targetBlockId) {
+      btnJump = document.createElement("button");
+      btnJump.type = "button";
+      btnJump.className = "sps-footnote-window__btn";
+      btnJump.innerHTML = BLOCK_JUMP_ICON_SVG;
+      btnJump.setAttribute("title", "Jump to block");
+      btnJump.setAttribute("aria-label", "Jump to block");
+    }
 
     const btnOpen = document.createElement("button");
     btnOpen.type = "button";
@@ -1948,7 +2109,8 @@
     btnClose.setAttribute("title", "Close");
     btnClose.setAttribute("aria-label", "Close");
 
-    actions.append(btnOpen, btnPin, btnClose);
+    if (btnJump) actions.append(btnJump, btnOpen, btnPin, btnClose);
+    else actions.append(btnOpen, btnPin, btnClose);
     header.append(title, actions);
 
     const body = document.createElement("div");
@@ -1972,11 +2134,22 @@
       if (pinned) bringFootnoteWindowToFront(windowEl);
     };
 
+    if (btnJump) {
+      btnJump.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (windowEl.dataset.pinned !== "1") {
+          closeFootnoteWindow(windowEl);
+        }
+        scrollToShareAnchorTarget(targetBlockId, {pushHistory: true, highlight: true});
+      });
+    }
+
     btnOpen.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
       bringFootnoteWindowToFront(windowEl);
-      openFootnoteInNewTab(index, contentHtml || "");
+      openFootnoteInNewTab(index, contentHtml || "", {title: displayTitle});
     });
 
     btnPin.addEventListener("click", (event) => {
@@ -2003,6 +2176,24 @@
       const anchor = event.target?.closest?.("a");
       if (!anchor) return;
       const href = anchor.getAttribute("href") || "";
+      if (href.startsWith("#") && !href.startsWith("#fnref")) {
+        const blockTargetId = href.slice(1).trim();
+        if (SIYUAN_BLOCK_ID_RE.test(blockTargetId)) {
+          const targetEl = document.getElementById(blockTargetId);
+          if (!targetEl) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const nextHtml = buildBlockRefPreviewHtml(targetEl);
+          if (!nextHtml) return;
+          const nextAnchor = resolveFootnoteAnchorPoint(event, anchor);
+          createFootnoteWindow(0, nextHtml, {
+            anchorPoint: nextAnchor,
+            title: anchor.textContent.trim() || "Reference",
+            targetBlockId: blockTargetId,
+          });
+          return;
+        }
+      }
       if (!href.startsWith("#fn")) return;
       if (href.startsWith("#fnref")) return;
       event.preventDefault();
@@ -2361,9 +2552,10 @@
 
   const applyFootnotePreviewToContainer = (container) => {
     if (!container) return;
-      const items = Array.from(
-        container.querySelectorAll(".footnotes li, .markdown-footnotes li"),
-      );
+    normalizeBlockAnchors(container);
+    const items = Array.from(
+      container.querySelectorAll(".footnotes li, .markdown-footnotes li"),
+    );
     items.forEach((item, idx) => {
       getFootnoteIndexForItem(item, idx);
     });
@@ -2395,6 +2587,33 @@
       action.setAttribute("aria-haspopup", "dialog");
       sup.parentNode?.insertBefore(action, sup);
     });
+
+    const blockRefs = Array.from(container.querySelectorAll('a[href^="#"]'));
+    blockRefs.forEach((anchor) => {
+      const href = String(anchor.getAttribute("href") || "");
+      if (!href || href.startsWith("#fn")) return;
+      const targetId = href.slice(1).trim();
+      if (!SIYUAN_BLOCK_ID_RE.test(targetId)) return;
+      if (!document.getElementById(targetId)) return;
+      if (anchor.dataset.spsBlockRefPreview === "1") return;
+      anchor.dataset.spsBlockRefPreview = "1";
+      anchor.dataset.spsBlockRefTarget = targetId;
+      anchor.classList.add("sps-block-ref-link");
+      if (anchor.nextElementSibling?.classList?.contains("sps-block-ref-action")) {
+        return;
+      }
+      const action = document.createElement("button");
+      action.type = "button";
+      action.className = "sps-footnote-action sps-block-ref-action";
+      action.innerHTML = FOOTNOTE_ICON_SVG;
+      action.dataset.spsFootnoteAction = "1";
+      action.dataset.spsBlockRefTarget = targetId;
+      action.dataset.spsBlockRefLabel = anchor.textContent.trim();
+      action.setAttribute("aria-label", "Preview referenced block");
+      action.setAttribute("aria-expanded", "false");
+      action.setAttribute("aria-haspopup", "dialog");
+      anchor.insertAdjacentElement("afterend", action);
+    });
   };
 
   const initShareFootnotePreview = () => {
@@ -2407,11 +2626,18 @@
 
     if (!footnotePreviewBound) {
       footnotePreviewBound = true;
-      const actionFor = target => {
+      const actionFor = (target) => {
         const direct = target?.closest?.(".sps-footnote-action");
         if (direct) return direct;
         const reference = target?.closest?.("sup.footnote-ref, .footnote-ref");
-        return reference?.previousElementSibling?.matches(".sps-footnote-action") ? reference.previousElementSibling : null;
+        if (reference?.previousElementSibling?.matches?.(".sps-footnote-action")) {
+          return reference.previousElementSibling;
+        }
+        const blockRef = target?.closest?.("a.sps-block-ref-link");
+        if (blockRef?.nextElementSibling?.matches?.(".sps-block-ref-action")) {
+          return blockRef.nextElementSibling;
+        }
+        return null;
       };
       const openPreview = (action, hover) => {
         clearTimeout(footnoteOpenTimer);
@@ -2421,13 +2647,33 @@
           if (!hover) preview.dataset.hoverPreview = "0";
           return preview;
         }
-        const item = findFootnoteItemForAction(action);
-        if (!item) return null;
-        Array.from(footnoteWindows).forEach(panel => {
+        const blockTargetId = String(action?.dataset?.spsBlockRefTarget || "").trim();
+        let previewIndex = 0;
+        let previewHtml = "";
+        let windowOptions = null;
+        if (blockTargetId) {
+          const targetEl = document.getElementById(blockTargetId);
+          if (!targetEl) return null;
+          previewHtml = buildBlockRefPreviewHtml(targetEl);
+          if (!previewHtml) return null;
+          const rect = action.getBoundingClientRect();
+          windowOptions = {
+            anchorPoint: {x: rect.left, y: rect.bottom},
+            title: String(action.dataset.spsBlockRefLabel || "").trim() || "Reference",
+            targetBlockId: blockTargetId,
+          };
+        } else {
+          const item = findFootnoteItemForAction(action);
+          if (!item) return null;
+          previewIndex = getFootnoteIndexForItem(item, 0);
+          previewHtml = buildFootnoteContentHtml(item);
+          const rect = action.getBoundingClientRect();
+          windowOptions = {anchorPoint: {x: rect.left, y: rect.bottom}};
+        }
+        Array.from(footnoteWindows).forEach((panel) => {
           if (panel.dataset.pinned !== "1") closeFootnoteWindow(panel);
         });
-        const rect = action.getBoundingClientRect();
-        preview = createFootnoteWindow(getFootnoteIndexForItem(item, 0), buildFootnoteContentHtml(item), {anchorPoint: {x: rect.left, y: rect.bottom}});
+        preview = createFootnoteWindow(previewIndex, previewHtml, windowOptions);
         preview.id = `footnote-preview-${++footnoteWindowSeq}`;
         preview.dataset.hoverPreview = hover ? "1" : "0";
         footnoteActionWindows.set(action, preview);
@@ -2474,16 +2720,33 @@
       });
       document.addEventListener("click", (event) => {
         const action = event.target?.closest?.(".sps-footnote-action");
-        if (!action) return;
-        const item = findFootnoteItemForAction(action);
-        if (!item) return;
-        event.preventDefault();
-        event.stopPropagation();
-        const preview = openPreview(action, false);
-        if (event.detail === 0 && preview) {
-          preview.tabIndex = -1;
-          preview.focus({preventScroll: true});
+        if (action) {
+          const blockTargetId = String(action.dataset.spsBlockRefTarget || "").trim();
+          if (!blockTargetId && !findFootnoteItemForAction(action)) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const preview = openPreview(action, false);
+          if (event.detail === 0 && preview) {
+            preview.tabIndex = -1;
+            preview.focus({preventScroll: true});
+          }
+          return;
         }
+        const blockLink = event.target?.closest?.('.markdown-body a[href^="#"]');
+        if (!blockLink || blockLink.closest(".sps-footnote-window")) return;
+        const href = String(blockLink.getAttribute("href") || "");
+        if (!href || href.startsWith("#fn")) return;
+        const targetId = href.slice(1).trim();
+        if (!SIYUAN_BLOCK_ID_RE.test(targetId)) return;
+        if (!document.getElementById(targetId)) return;
+        event.preventDefault();
+        clearTimeout(footnoteOpenTimer);
+        hoveredFootnoteAction = null;
+        Array.from(footnoteWindows).forEach((windowEl) => {
+          if (windowEl.dataset.pinned === "1") return;
+          closeFootnoteWindow(windowEl);
+        });
+        scrollToShareAnchorTarget(targetId, {pushHistory: true, highlight: true});
       });
 
       document.addEventListener("mousedown", (event) => {
@@ -2859,6 +3122,15 @@
 
     let requestId = 0;
     let controller = null;
+    const getDocKey = (rawUrl) => {
+      try {
+        const parsed = new URL(rawUrl, window.location.href);
+        return `${parsed.pathname}${parsed.search}`;
+      } catch {
+        return `${window.location.pathname}${window.location.search}`;
+      }
+    };
+    let currentDocKey = getDocKey(window.location.href);
 
     const cssEscape =
       (window.CSS && typeof window.CSS.escape === "function" && window.CSS.escape) ||
@@ -2906,6 +3178,7 @@
       } else {
         history.replaceState({spsDocId: payload?.docId || ""}, "", url);
       }
+      currentDocKey = getDocKey(url);
       setActiveDoc(payload?.docId || "");
       readerRevealDocument(payload?.docId || "");
       const heading = document.querySelector(".kb-main .kb-title");
@@ -2913,10 +3186,12 @@
       readerAnnounce(payload?.docId ? `Opened: ${payload.title || "Document"}` : "Returned to notebook");
       initReaderWelcome();
       const hash = url.includes("#") ? url.slice(url.indexOf("#")) : "";
+      pendingAnchorHash = hash ? hash.slice(1) : "";
       if (hash) {
         const target = document.getElementById(hash.slice(1));
         if (target) {
-          target.scrollIntoView({behavior: "auto", block: "start"});
+          scrollToShareAnchorTarget(hash.slice(1), {pushHistory: false, highlight: SIYUAN_BLOCK_ID_RE.test(hash.slice(1))});
+          pendingAnchorHash = "";
         }
       } else {
         window.scrollTo({top: 0, behavior: "auto"});
@@ -3007,6 +3282,15 @@
 
     window.addEventListener("popstate", () => {
       if (!document.body.classList.contains("layout-share")) return;
+      const nextDocKey = getDocKey(window.location.href);
+      if (nextDocKey === currentDocKey) {
+        clearFootnoteWindows();
+        const hashId = window.location.hash.replace(/^#/, "").trim();
+        if (hashId && SIYUAN_BLOCK_ID_RE.test(hashId)) {
+          scrollToShareAnchorTarget(hashId, {pushHistory: false, highlight: true});
+        }
+        return;
+      }
       loadDoc(window.location.href, {pushState: false});
     });
   };
@@ -5724,6 +6008,19 @@ const initImageViewer = () => {
       }
       try {
         initShareFootnotePreview();
+      } catch (err) {
+        console.error(err);
+      }
+      try {
+        const targetHash = pendingAnchorHash || (!initialBlockHashHandled ? window.location.hash.replace(/^#/, "").trim() : "");
+        pendingAnchorHash = "";
+        initialBlockHashHandled = true;
+        if (targetHash && (SIYUAN_BLOCK_ID_RE.test(targetHash) || document.getElementById(targetHash))) {
+          scrollToShareAnchorTarget(targetHash, {
+            pushHistory: false,
+            highlight: SIYUAN_BLOCK_ID_RE.test(targetHash),
+          });
+        }
       } catch (err) {
         console.error(err);
       }

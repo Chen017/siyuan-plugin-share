@@ -42,7 +42,6 @@
   "siyuanShare.error.remoteRequestFailed": "Remote request failed ({status}).",
   "siyuanShare.error.resourceDownloadCanceled": "Asset download canceled.",
   "siyuanShare.error.resourceDownloadFailed": "Failed to fetch asset ({status}).",
-  "siyuanShare.error.imageSizeMigrationAssetsFailed": "Some assets could not be fetched during image size migration. The update was stopped; check the assets and try again.",
   "siyuanShare.message.missingAssetsPreserved": "Could not read {count} local attachment(s). Existing online attachments will be kept.",
   "siyuanShare.error.resourcePathInvalid": "Invalid asset path.",
   "siyuanShare.error.shareCreateFailed": "Failed to create share. Try again.",
@@ -203,5 +202,13 @@
   "siyuanShare.title.shareListCount": "Share list ({count})",
   "siyuanShare.title.shareManagement": "Share management",
   "siyuanShare.qr.title": "Share QR Code",
-  "siyuanShare.qr.download": "Download QR Code"
+  "siyuanShare.qr.download": "Download QR Code",
+  "siyuanShare.action.republishAllNotebooks": "Republish all notebooks",
+  "siyuanShare.confirm.republishAllNotebooksTitle": "Republish all shared notebooks?",
+  "siyuanShare.confirm.republishAllNotebooksMessage": "This will force re-export and overwrite all {count} shared notebook(s), bypassing incremental change detection. Continue?",
+  "siyuanShare.progress.republishingAllNotebooks": "Republishing notebook ({index}/{total}): {name}",
+  "siyuanShare.message.republishAllAlreadyRunning": "A full notebook republish is already running.",
+  "siyuanShare.message.noNotebookShares": "No shared notebooks found.",
+  "siyuanShare.message.republishAllDone": "Force-republished all {count} shared notebook(s).",
+  "siyuanShare.message.republishAllPartial": "Republish complete: {succeeded} succeeded, {failed} failed."
 }
