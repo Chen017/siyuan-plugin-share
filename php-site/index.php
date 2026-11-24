@@ -195,14 +195,6 @@ function get_bool_setting(string $key, bool $default = false): bool {
     return (int)$value === 1;
 }
 
-function escape_inline_style_content(string $css): string {
-    return str_ireplace('</style', '<\/style', $css);
-}
-
-function escape_inline_script_content(string $js): string {
-    return str_ireplace('</script', '<\/script', $js);
-}
-
 function default_storage_limit_bytes(): int {
     $value = (int)get_setting('default_storage_limit_bytes', '0');
     return max(0, $value);
@@ -405,12 +397,6 @@ function render_page(string $title, string $content, ?array $user = null, string
     echo "<link rel='stylesheet' href='" . htmlspecialchars(site_asset_url('controls.css'), ENT_QUOTES, 'UTF-8') . "'>";
     $styleUrl = htmlspecialchars(site_asset_url($layout === 'share' ? 'reader-style.css' : 'style.css'), ENT_QUOTES, 'UTF-8');
     echo "<link rel='stylesheet' href='{$styleUrl}'>";
-    $siteCustomCssEnabled = get_bool_setting('site_custom_css_enabled', true);
-    $siteCustomCss = (string)get_setting('site_custom_css', '');
-    if ($siteCustomCssEnabled && trim($siteCustomCss) !== '') {
-        $safeCustomCss = escape_inline_style_content($siteCustomCss);
-        echo "<style id='site-custom-css'>\n{$safeCustomCss}\n</style>";
-    }
     $siteHeadHtml = (string)get_setting('site_head_html', '');
     if ($siteHeadHtml !== '') {
         echo $siteHeadHtml;
@@ -505,12 +491,6 @@ function render_page(string $title, string $content, ?array $user = null, string
     }
     $versionJson = htmlspecialchars(json_encode($diagramVersions, JSON_UNESCAPED_SLASHES), ENT_QUOTES, 'UTF-8');
     echo "<script defer src='{$appJsUrl}' data-diagram-versions='{$versionJson}'></script>";
-    $siteCustomJsEnabled = get_bool_setting('site_custom_js_enabled', false);
-    $siteCustomJs = (string)get_setting('site_custom_js', '');
-    if ($siteCustomJsEnabled && trim($siteCustomJs) !== '') {
-        $safeCustomJs = escape_inline_script_content($siteCustomJs);
-        echo "<script id='site-custom-js'>\nwindow.addEventListener('DOMContentLoaded', function () {\n{$safeCustomJs}\n});\n</script>";
-    }
     if ($layout === 'share') {
         $pdfJsUrl = htmlspecialchars(site_asset_url('pdf-export.js'), ENT_QUOTES, 'UTF-8');
         $pdfCssUrl = htmlspecialchars(site_asset_url('pdf-export.css'), ENT_QUOTES, 'UTF-8');

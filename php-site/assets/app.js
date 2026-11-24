@@ -504,7 +504,9 @@
       const scrollBox = body;
       const hideFootnotesForToc =
         container.getAttribute("data-sps-hide-footnotes") === "1" ||
-        document.body.classList.contains("sps-footnote-tab");
+        document.body.classList.contains("sps-footnote-tab") ||
+        (document.body.classList.contains("layout-share") &&
+          !document.body.classList.contains("pdf-export-preview"));
       const FOOTNOTE_ROOT_SELECTOR = ".footnotes > ol > li, .markdown-footnotes > ol > li";
       const parseFootnoteIndex = (value) => {
         const raw = String(value || "").trim();
@@ -695,6 +697,7 @@
 
 
       const onContentLinkClick = (event) => {
+        if (hideFootnotesForToc) return;
         const anchor = event.target?.closest?.("a");
         if (!anchor) return;
         const href = anchor.getAttribute("href") || "";
@@ -2719,14 +2722,28 @@
         if (action && !footnoteActionWindows.get(action)?.contains(event.relatedTarget) && actionFor(event.relatedTarget) !== action) queueClose(action);
       });
       document.addEventListener("click", (event) => {
-        const action = event.target?.closest?.(".sps-footnote-action");
+        let action = event.target?.closest?.(".sps-footnote-action");
+        let openedFromLink = false;
+        if (!action && document.body.classList.contains("layout-share") && !document.body.classList.contains("pdf-export-preview")) {
+          const fnLink = event.target?.closest?.('a[href^="#fn"]');
+          if (fnLink && !fnLink.closest(".sps-footnote-window")) {
+            const href = String(fnLink.getAttribute("href") || "");
+            if (href.startsWith("#fn") && !href.startsWith("#fnref")) {
+              const paired = actionFor(fnLink);
+              if (paired && !String(paired.dataset.spsBlockRefTarget || "").trim()) {
+                action = paired;
+                openedFromLink = true;
+              }
+            }
+          }
+        }
         if (action) {
           const blockTargetId = String(action.dataset.spsBlockRefTarget || "").trim();
           if (!blockTargetId && !findFootnoteItemForAction(action)) return;
           event.preventDefault();
           event.stopPropagation();
           const preview = openPreview(action, false);
-          if (event.detail === 0 && preview) {
+          if (!openedFromLink && event.detail === 0 && preview) {
             preview.tabIndex = -1;
             preview.focus({preventScroll: true});
           }
@@ -3572,18 +3589,6 @@ const initImageViewer = () => {
               </svg>
             </button>
             <button class="image-viewer-btn image-viewer-btn-text" type="button" data-viewer-one-to-one aria-label="Actual size (1:1)" title="Actual size (1:1)">1:1</button>
-            <button class="image-viewer-btn" type="button" data-viewer-rotate-ccw aria-label="Rotate counterclockwise" title="Rotate counterclockwise">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M3 12a9 9 0 1 0 3-6.708" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                <polyline points="3 4 3 10 9 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </button>
-            <button class="image-viewer-btn" type="button" data-viewer-rotate-cw aria-label="Rotate clockwise" title="Rotate clockwise">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M21 12a9 9 0 1 1-3-6.708" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                <polyline points="21 4 21 10 15 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </button>
             <button class="image-viewer-btn" type="button" data-viewer-download aria-label="Download image" title="Download image">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -3620,21 +3625,12 @@ const initImageViewer = () => {
     const actions = viewer.querySelector('.image-viewer-actions');
     const closeButton = actions.querySelector('button[data-viewer-close]');
     viewer.querySelector('.image-viewer-ui').prepend(closeButton);
-    const more = document.createElement('details');
-    more.className = 'image-viewer-more';
-    const moreLabel = document.createElement('summary');
-    moreLabel.textContent = 'More';
-    moreLabel.setAttribute('aria-label', 'More image actions');
-    more.append(moreLabel, actions.querySelector('[data-viewer-rotate-ccw]'), actions.querySelector('[data-viewer-rotate-cw]'));
-    actions.append(more);
     const stage = viewer.querySelector("[data-viewer-stage]");
     const image = viewer.querySelector("[data-viewer-img]");
     const zoomOut = viewer.querySelector("[data-viewer-zoom-out]");
     const zoomIn = viewer.querySelector("[data-viewer-zoom-in]");
     const zoomLabel = viewer.querySelector("[data-viewer-zoom]");
     const oneToOne = viewer.querySelector("[data-viewer-one-to-one]");
-    const rotateCw = viewer.querySelector("[data-viewer-rotate-cw]");
-    const rotateCcw = viewer.querySelector("[data-viewer-rotate-ccw]");
     const download = viewer.querySelector("[data-viewer-download]");
     const prevBtn = viewer.querySelector("[data-viewer-prev]");
     const nextBtn = viewer.querySelector("[data-viewer-next]");
@@ -3666,7 +3662,6 @@ const initImageViewer = () => {
     let scale = 1;
     let translateX = 0;
     let translateY = 0;
-    let rotation = 0;
     let oneToOneActive = false;
     let oneToOneScale = 1;
     let oneToOneRestore = null;
@@ -3721,7 +3716,7 @@ const initImageViewer = () => {
 
     const applyTransform = () => {
       if (!image) return;
-      image.style.transform = `translate(${translateX}px, ${translateY}px) rotate(${rotation}deg) scale(${scale})`;
+      image.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
       updateZoomLabel();
       scheduleNavPosition();
     };
@@ -3756,7 +3751,6 @@ const initImageViewer = () => {
       scale = 1;
       translateX = 0;
       translateY = 0;
-      rotation = 0;
       clearOneToOne();
       applyTransform();
     };
@@ -3796,15 +3790,6 @@ const initImageViewer = () => {
       } else {
         resetZoom();
       }
-    };
-
-    const rotateBy = (degrees) => {
-      rotation += degrees;
-      applyTransform();
-      requestAnimationFrame(() => {
-        clampTranslation();
-        applyTransform();
-      });
     };
 
     const updateThumbs = () => {
@@ -3959,8 +3944,6 @@ const initImageViewer = () => {
     if (zoomIn) zoomIn.addEventListener("click", () => setScale(scale + 0.25));
     if (zoomOut) zoomOut.addEventListener("click", () => setScale(scale - 0.25));
     if (oneToOne) oneToOne.addEventListener("click", toggleOneToOne);
-    if (rotateCw) rotateCw.addEventListener("click", () => rotateBy(90));
-    if (rotateCcw) rotateCcw.addEventListener("click", () => rotateBy(-90));
     if (download) download.addEventListener("click", () => {
       const src = image?.currentSrc || image?.getAttribute("src");
       if (!src) return;
@@ -4123,7 +4106,6 @@ const initImageViewer = () => {
       if (viewer.hidden) return;
       if (event.key === "Escape") {
         event.preventDefault();
-        if (more.open) { more.open = false; moreLabel.focus(); return; }
         closeViewer();
       } else if (event.key === "ArrowLeft") {
         setIndex(index - 1);

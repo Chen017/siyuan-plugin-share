@@ -232,10 +232,6 @@ function seed_default_settings(PDO $pdo): void {
     ensure_setting($pdo, 'site_base_url', '');
     ensure_setting($pdo, 'reader_home_url', '');
     ensure_setting($pdo, 'site_head_html', '');
-    ensure_setting($pdo, 'site_custom_css_enabled', '1');
-    ensure_setting($pdo, 'site_custom_css', '');
-    ensure_setting($pdo, 'site_custom_js_enabled', '0');
-    ensure_setting($pdo, 'site_custom_js', '');
     seed_pdf_export_settings($pdo);
     mcp_seed_default_settings($pdo);
 }

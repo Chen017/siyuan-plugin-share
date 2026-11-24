@@ -26,7 +26,7 @@ if (!$coreOnly) {
 }
 if ($coreOnly) {
     $queries['settings'] = "SELECT key,value FROM settings WHERE key IN ('site_base_url','reader_home_url','site_head_html',
-        'site_custom_css_enabled','site_custom_css','site_custom_js_enabled','site_custom_js','default_storage_limit_bytes','admin_auth_mode')
+        'default_storage_limit_bytes','admin_auth_mode')
         OR key LIKE 'pdf_export_%' ORDER BY key";
     $noteReference = $pdo->prepare('SELECT 1 FROM share_docs WHERE instr(markdown, ?) > 0 OR instr(markdown, ?) > 0 OR instr(markdown, ?) > 0 LIMIT 1');
     $uploads = realpath(dirname(dirname($path)) . '/uploads');

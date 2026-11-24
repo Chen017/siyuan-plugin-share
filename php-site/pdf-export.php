@@ -90,7 +90,7 @@ function pdf_export_setting_number(float $value): string {
 }
 
 function render_pdf_export_limit_inputs(array $keys, array $limits): string {
-    $html = '<div class="grid" style="margin-top:12px">';
+    $html = '<div class="settings-grid--two">';
     $fields = pdf_export_fields();
     foreach ($keys as $key) {
         $field = $fields[$key];
@@ -98,7 +98,7 @@ function render_pdf_export_limit_inputs(array $keys, array $limits): string {
         $min = $field['min'] ?? 1;
         $whole = $field['whole'] ?? ($scale === 1);
         $id = 'pdf-export-' . $key;
-        $html .= '<div><label for="' . $id . '">' . $field['label'] . '</label><input class="input" id="' . $id . '" name="limits[' . $key . ']" type="number" required step="' . ($whole ? '1' : 'any')
+        $html .= '<div class="setting-field"><label for="' . $id . '">' . $field['label'] . '</label><input class="input" id="' . $id . '" name="limits[' . $key . ']" type="number" required step="' . ($whole ? '1' : 'any')
             . '" min="' . pdf_export_setting_number($min / $scale) . '" max="' . pdf_export_setting_number($field['max'] / $scale)
             . '" value="' . pdf_export_setting_number($limits[$key] / $scale) . '"></div>';
     }
@@ -108,23 +108,21 @@ function render_pdf_export_limit_inputs(array $keys, array $limits): string {
 function render_pdf_export_settings(): string {
     $settings = pdf_export_settings();
     $html = '<section class="card settings-section" id="pdf-export-settings"><h2>Visitor PDF export</h2>';
-    $html .= '<p class="muted">Set the time window and document allowance. Resource limits are preset.</p>';
+    $html .= '<p class="muted">Set the rolling window and document allowance for guest PDF exports.</p>';
     $html .= '<form class="settings-form" method="post" action="' . base_path() . '/admin/pdf-export-settings" data-pdf-settings-form>';
     $html .= render_hidden_inputs(['csrf' => csrf_token()]);
     $html .= '<label class="choice-row"><input type="checkbox" name="pdf_export_enabled" value="1"' . ($settings['enabled'] ? ' checked' : '') . '> Allow visitors to export PDF</label>';
     $html .= render_pdf_export_limit_inputs(['window_seconds', 'requests'], $settings['limits']);
-    $html .= '<p class="muted">Each visitor cookie has its own rolling allowance. Shared networks do not share a personal quota. Each document in a batch counts once; retrying it within the same task does not count again. Cookies identify browser visitors approximately, not people.</p>';
-    $html .= '<p class="muted">An identical fingerprint from another cookie requires one verification. It does not share or reset the personal quota.</p>';
-    $html .= '<details data-pdf-advanced style="margin-top:16px"><summary>Advanced settings (preset)</summary><p class="muted">These limits protect server resources. Sizes use MiB. Existing lower memory limits remain effective.</p>';
+    $html .= '<p class="field-hint">Per-browser rolling quota. Each exported document counts once per window.</p>';
+    $html .= '<details class="settings-disclosure" data-pdf-advanced><summary>Advanced settings (preset)</summary><p class="field-hint">Resource caps in MiB and seconds. Lower server limits still apply.</p>';
     $html .= render_pdf_export_limit_inputs(array_values(array_diff(array_keys(pdf_export_fields()), ['window_seconds', 'requests'])), $settings['limits']);
-    $html .= '<details data-pdf-proxy-settings style="margin-top:16px"><summary>Reverse proxy client IP</summary><p class="muted">Only listed proxy peers are trusted. The proxy must overwrite the client-IP header. Visitor cookies continue to own personal quotas.</p>';
-    $html .= '<label for="pdf-trusted-proxies">Trusted proxy IPs (one per line or comma-separated)</label><textarea class="input" id="pdf-trusted-proxies" name="pdf_export_trusted_proxies" rows="3" placeholder="127.0.0.1&#10;::1">' . htmlspecialchars(implode("\n", $settings['trusted_proxies'])) . '</textarea>';
-    $html .= '<label for="pdf-ip-header">Client-IP header overwritten by the proxy</label><select class="input" id="pdf-ip-header" name="pdf_export_ip_header">';
+    $html .= '<details class="settings-disclosure" data-pdf-proxy-settings><summary>Reverse proxy client IP</summary><div class="setting-field"><label for="pdf-trusted-proxies">Trusted proxy IPs</label><textarea class="input code-input" id="pdf-trusted-proxies" name="pdf_export_trusted_proxies" rows="3" placeholder="127.0.0.1&#10;::1">' . htmlspecialchars(implode("\n", $settings['trusted_proxies'])) . '</textarea><p class="field-hint">One exact IPv4 or IPv6 peer address per line or comma-separated.</p></div>';
+    $html .= '<div class="setting-field"><label for="pdf-ip-header">Client-IP header</label><select class="input" id="pdf-ip-header" name="pdf_export_ip_header">';
     foreach (['HTTP_X_REAL_IP' => 'X-Real-IP', 'HTTP_CF_CONNECTING_IP' => 'CF-Connecting-IP'] as $key => $label) {
         $html .= '<option value="' . $key . '"' . ($settings['ip_header'] === $key ? ' selected' : '') . '>' . $label . '</option>';
     }
-    $html .= '</select><p class="muted">Use exact IPv4 or IPv6 peer addresses seen by PHP. Wildcards, networks and hostnames are not accepted.</p></details></details>';
-    $html .= '<div style="margin-top:16px"><button class="button primary" type="submit">Save PDF settings</button></div></form></section>';
+    $html .= '</select></div></details></details>';
+    $html .= '<div class="settings-actions"><button class="button primary" type="submit">Save PDF settings</button></div></form></section>';
     return $html;
 }
 

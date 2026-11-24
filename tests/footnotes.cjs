@@ -58,6 +58,15 @@ const pointer = (target, type, relatedTarget = null) => {
   await delay(210);
   assert(!card.isConnected);
   assert.equal(d.activeElement, action, 'Keyboard close returns focus to the reference');
+  const fnRefLink = d.querySelector('sup.footnote-ref a[href="#fn1"]');
+  assert(fnRefLink);
+  fnRefLink.click();
+  await delay(20);
+  const clickCard = d.querySelector('.sps-footnote-window');
+  assert(clickCard && clickCard.textContent.includes('A short but useful explanation.'), 'Clicking [1] directly opens the floating preview card');
+  clickCard.querySelector('[aria-label="Close"]').click();
+  await delay(210);
+  assert(!clickCard.isConnected);
   pointer(action, 'pointerover');
   await delay(380);
   card = d.querySelector('.sps-footnote-window');
@@ -125,5 +134,22 @@ const pointer = (target, type, relatedTarget = null) => {
   } finally {
     bw.close();
   }
-  console.log('Footnotes passed: hover delay/cancellation, pointer travel, adaptive height, click reuse, pinning, focus return, same-doc block ref preview/jump and navigation cleanup.');
+
+  // Web reader TOC excludes footnote headings when footnotes are hidden on reader pages.
+  const tocDom = new JSDOM(`<body class="layout-share"><div class="share-shell"><aside class="kb-sidebar"><div data-share-toc="doc"><div class="share-toc-body"></div></div></aside><main class="kb-main"><div class="markdown-body" data-md-id="doc" data-sps-rendered="1"><h2>Main Heading</h2><p>Body<sup class="footnote-ref"><a href="#fn1">[1]</a></sup></p><hr class="footnotes-sep"><section class="footnotes"><ol><li id="fn1"><h3>Footnote Proposition</h3><p>Hidden footnote body.</p></li></ol></section></div></main></div></body>`, {url: 'https://reader.test/s/book/doc', runScripts: 'outside-only', pretendToBeVisual: true, virtualConsole: new VirtualConsole()});
+  const tw = tocDom.window, td = tw.document;
+  tw.matchMedia = q => ({matches: q.includes('hover: hover'), addEventListener() {}});
+  tw.scrollTo = () => {};
+  tw.HTMLElement.prototype.scrollIntoView = () => {};
+  tw.HTMLElement.prototype.scrollTo = () => {};
+  try {
+    tw.eval(source);
+    await delay(60);
+    const tocText = td.querySelector('.share-toc-body').textContent;
+    assert(tocText.includes('Main Heading'), 'Main heading remains in reader TOC');
+    assert(!tocText.includes('Footnote Proposition'), 'Footnote heading is excluded from web reader TOC');
+  } finally {
+    tw.close();
+  }
+  console.log('Footnotes passed: hover delay/cancellation, pointer travel, adaptive height, click reuse, click [1] preview, TOC exclusion, pinning, focus return, same-doc block ref preview/jump and navigation cleanup.');
 })().finally(() => w.close()).catch(error => {console.error(error); process.exitCode = 1;});

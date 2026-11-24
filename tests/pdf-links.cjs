@@ -79,14 +79,16 @@ const MIME_TYPES = {
                     <a href="#20261119083945-cy31h7h">Inline block ref</a> |
                     <a href="#20261119095000-math111">Standalone block ref</a> |
                     <a href="#section-two">Heading ref</a> |
-                    <sup class="footnote-ref"><a href="#fn1" id="fnref1">[1]</a></sup> |
+                    <button type="button" class="sps-footnote-action" aria-label="Preview footnote">icon</button><sup class="footnote-ref"><a href="#fn1" id="fnref1">[1]</a></sup> |
                     <a href="/s/demo-share/20261119083700-docroot#20261119083945-cy31h7h">Explicit same-doc ref</a> |
                     <a href="#20261119099999-other01">Cross-doc ref</a> |
                     <a href="#20261119099999-blk0002">Cross-doc block ref</a> |
                     <a href="#20261119099999-missing">Unresolved ref</a> |
+                    <a href="#20261119099999-hidden1">Hidden target ref</a> |
                     <a href="./20261119099999-other01#20261119099999-blk0003">Relative doc ref</a> |
                     <a href="https://example.com/guide">External website</a>
                   </p>
+                  <div style="display: none;"><span id="20261119099999-hidden1" class="sps-block-anchor"></span></div>
                   <p style="margin-top: 1150px;">Spacer paragraph on page two boundary.</p>
                   <h2 id="section-two">Section Two</h2>
                   <p>Target inline paragraph <span id="20261119083945-cy31h7h" class="sps-block-anchor"></span></p>
@@ -128,9 +130,28 @@ const MIME_TYPES = {
     page.on('pageerror', (err) => pageErrors.push(err.message));
     await page.goto('http://reader.test/s/demo-share/export');
     await page.waitForFunction(() => window.__pdfBytes || window.__pdfError, null, { timeout: 60000 });
-    const pdfError = await page.evaluate(() => window.__pdfError || null);
-    assert.equal(pdfError, null, `PDF export failed: ${pdfError}`);
+    const pageError = await page.evaluate(() => window.__pdfError || null);
+    assert.equal(pageError, null, `PDF export failed: ${pageError}`);
     assert.deepEqual(pageErrors, []);
+
+    const pdfCssProbe = await page.frameLocator('iframe').locator('body').evaluate(() => {
+      const probe = document.createElement('div');
+      probe.className = 'pdf-document pdf-download-document';
+      probe.innerHTML = '<div class="markdown-body"><button type="button" class="sps-footnote-action">x</button><hr class="footnotes-sep"><section class="footnotes"><ol><li>fn</li></ol></section></div>';
+      document.body.append(probe);
+      try {
+        return {
+          footnoteActionDisplay: getComputedStyle(probe.querySelector('.sps-footnote-action')).display,
+          footnotesDisplay: getComputedStyle(probe.querySelector('.footnotes')).display,
+          footnotesSepDisplay: getComputedStyle(probe.querySelector('.footnotes-sep')).display,
+        };
+      } finally {
+        probe.remove();
+      }
+    });
+    assert.equal(pdfCssProbe.footnoteActionDisplay, 'none', 'PDF export hides .sps-footnote-action icon');
+    assert.notEqual(pdfCssProbe.footnotesDisplay, 'none', 'PDF export keeps .footnotes visible');
+    assert.notEqual(pdfCssProbe.footnotesSepDisplay, 'none', 'PDF export keeps hr.footnotes-sep visible');
 
     const bytes = Buffer.from(await page.evaluate(() => window.__pdfBytes));
     const raw = bytes.toString('latin1');
@@ -158,6 +179,7 @@ const MIME_TYPES = {
       'http://reader.test/s/demo-share/20261119099999-other01',
       'http://reader.test/s/demo-share/20261119099999-other01#20261119099999-blk0002',
       'http://reader.test/s/demo-share/20261119083700-docroot#20261119099999-missing',
+      'http://reader.test/s/demo-share/20261119083700-docroot#20261119099999-hidden1',
       'http://reader.test/s/demo-share/20261119099999-other01#20261119099999-blk0003',
       'https://example.com/guide',
     ];

@@ -549,7 +549,9 @@ class Regression(AdminShareTests, SelectedFixTests, PdfCookieTests, PdfReleaseTe
         try:
             self.assertEqual(admin.request('/admin/settings', settings)[0], 302)
             page = Client(self.base).request('/s/' + self.share()['slug'])[2]
-            for marker in [b'site-custom-css', b'window.testCustom = true;', b'name="test-head"']: self.assertIn(marker, page)
+            self.assertIn(b'name="test-head"', page)
+            for removed in [b'site-custom-css', b'site-custom-js', b'window.testCustom = true;']:
+                self.assertNotIn(removed, page)
             self.assertEqual(admin.request('/admin/settings', {**settings, 'csrf': 'invalid'})[0], 400)
         finally:
             for row in original:

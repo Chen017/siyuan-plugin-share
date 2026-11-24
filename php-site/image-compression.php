@@ -474,14 +474,13 @@ function render_image_compression_admin_section(): string {
     $base = htmlspecialchars(base_path(), ENT_QUOTES, 'UTF-8');
     $statusUrl = $task['status'] === 'running' ? ' data-status-url="' . htmlspecialchars(base_path() . '/admin/images/status', ENT_QUOTES, 'UTF-8') . '"' : '';
     $html = '<section class="card settings-section" id="image-compression" aria-labelledby="image-compression-heading"' . $statusUrl . '>';
-    $html .= '<h2 id="image-compression-heading">Image compression</h2><p class="muted">New uploads are optimized automatically. Review existing PNG, JPEG and WebP images in the background; you can leave this page after starting.</p>';
-    $html .= '<p class="field-hint">PNG optimization may change colors slightly. Animated images and images requiring special color or orientation handling are preserved. Images are replaced only when the result is smaller.</p>';
+    $html .= '<h2 id="image-compression-heading">Image compression</h2><p class="muted">New uploads are optimized automatically. Review existing PNG, JPEG and WebP files in the background.</p>';
     $html .= '<dl class="image-compression-stats">';
     foreach (['total' => ['Total images', $stats['total_images']], 'compressed' => ['Smaller images', $stats['compressed_images']],
         'pending' => ['Pending review', $stats['pending_images']], 'saved' => ['Space saved', format_bytes((float)$stats['saved_bytes'])]] as $id => [$label, $value]) {
         $html .= '<div><dt>' . $label . '</dt><dd id="img-stat-' . $id . '">' . htmlspecialchars((string)$value) . '</dd></div>';
     }
-    $html .= '</dl><details><summary>Optimization support</summary><p class="muted">';
+    $html .= '</dl><details class="settings-disclosure"><summary>Optimization support</summary><p class="muted">';
     $tools = [];
     foreach (['pngquant', 'jpegoptim', 'cwebp'] as $name) $tools[] = $name . ': ' . ($stats['tools'][$name]['available'] ? 'available' : 'unavailable');
     $tools[] = 'PNG fallback: ' . ($stats['tools']['gd']['png'] ? 'available' : 'unavailable');

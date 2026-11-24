@@ -617,10 +617,19 @@
         }
         return targetEl;
       };
+      const isNodeHidden = (node) => {
+        for (let cur = node; cur && cur.nodeType === 1; cur = cur.parentElement) {
+          if (getComputedStyle(cur).display === 'none') return true;
+          if (cur === container) break;
+        }
+        return getComputedStyle(node).visibility === 'hidden';
+      };
       const measureTarget = (targetEl) => {
         const host = resolveAnchorHost(targetEl);
+        if (isNodeHidden(targetEl) || isNodeHidden(host)) return null;
         let rect = host.getBoundingClientRect();
         if (rect.width === 0 && rect.height === 0) rect = targetEl.getBoundingClientRect();
+        if (rect.width === 0 && rect.height === 0) return null;
         return { top: Math.max(0, rect.top - origin), height: Math.max(0, rect.height) };
       };
       const resolveLinkDestination = (anchor) => {
@@ -630,7 +639,10 @@
           const fragment = rawHref.slice(1).trim();
           if (!fragment) return null;
           const targetEl = findTarget(fragment);
-          if (targetEl) return { internal: measureTarget(targetEl) };
+          if (targetEl) {
+            const measured = measureTarget(targetEl);
+            if (measured) return { internal: measured };
+          }
           const key = decodeFragment(fragment).toLowerCase();
           if (Object.prototype.hasOwnProperty.call(externalRefs, key)) {
             return { url: new URL(externalRefs[key], location.origin).href };
@@ -643,7 +655,10 @@
         if (resolved.origin === sourceUrl.origin && resolved.pathname === sourceUrl.pathname && resolved.search === sourceUrl.search && resolved.hash.length > 1) {
           const fragment = resolved.hash.slice(1);
           const targetEl = findTarget(fragment);
-          if (targetEl) return { internal: measureTarget(targetEl) };
+          if (targetEl) {
+            const measured = measureTarget(targetEl);
+            if (measured) return { internal: measured };
+          }
           const key = decodeFragment(fragment).toLowerCase();
           if (Object.prototype.hasOwnProperty.call(externalRefs, key)) {
             return { url: new URL(externalRefs[key], location.origin).href };

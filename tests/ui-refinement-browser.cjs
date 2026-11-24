@@ -42,9 +42,7 @@ const textContrast = node => {
   const viewer=page.getByRole('dialog',{name:'Image viewer',exact:true});
   await viewer.waitFor();
   assert(await viewer.locator('button[data-viewer-close]').evaluate(n=>document.activeElement===n));
-  const more=viewer.locator('summary');await more.focus();await more.press('Enter');
-  assert(await viewer.locator('details').evaluate(n=>n.open));
-  await more.press('Escape');assert(await viewer.isVisible());assert(!(await viewer.locator('details').evaluate(n=>n.open)));
+  assert.equal(await viewer.locator('.image-viewer-more, [data-viewer-rotate-cw], [data-viewer-rotate-ccw]').count(), 0);
   await viewer.locator('button[data-viewer-close]').click();await viewer.waitFor({state:'hidden'});
   assert(await image.evaluate(n=>document.activeElement===n));
   await page.emulateMedia({reducedMotion:'no-preference'});

@@ -161,7 +161,7 @@ async function page(raw, {failMermaid = false, slowGraphviz = false} = {}) {
     assert.equal(viewer.hidden, false);
     assert.equal(plain.w.document.activeElement, close);
     assert.equal(close.parentElement.className, 'image-viewer-ui');
-    assert(viewer.querySelector('details [data-viewer-rotate-cw]'));
+    assert.equal(viewer.querySelector('.image-viewer-more, [data-viewer-rotate-cw], [data-viewer-rotate-ccw]'), null);
     assert.equal(viewer.querySelector('.image-viewer-thumb').getAttribute('aria-pressed'), 'true');
     const last = viewer.querySelector('.image-viewer-thumb'); last.focus();
     last.dispatchEvent(new plain.w.KeyboardEvent('keydown', {key: 'Tab', bubbles: true, cancelable: true}));

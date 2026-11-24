@@ -157,27 +157,27 @@ if ($path === '/dashboard') {
 
 if ($path === '/admin') {
     $user = require_admin();
-    $content = '<div class="admin-page-heading"><div><p class="admin-eyebrow">Preferences</p><h1>Site settings</h1><p class="muted">Reading, storage and appearance.</p></div></div><div class="card settings-section" id="settings"><h2>Storage</h2>';
-    foreach (['error', 'info'] as $kind) if ($message = flash($kind)) $content .= '<p class="flash">' . htmlspecialchars($message) . '</p>';
+    $headHtml = (string)get_setting('site_head_html', '');
+    $headNormalized = str_replace(["\r\n", "\r"], "\n", trim($headHtml));
+    $headLines = $headNormalized !== '' ? substr_count($headNormalized, "\n") + 1 : 0;
+    $headStatus = $headLines > 0
+        ? 'Configured · ' . $headLines . ' ' . ($headLines === 1 ? 'line' : 'lines')
+        : 'Not configured';
+    $content = '<div class="admin-page-heading"><div><p class="admin-eyebrow">Preferences</p><h1>Site settings</h1><p class="muted">Storage, public links and head markup.</p></div></div><div class="card settings-section" id="settings"><h2>General</h2>';
+    foreach (['error', 'info'] as $kind) if ($message = flash($kind)) $content .= '<p class="flash' . ($kind === 'error' ? ' error' : '') . '" role="status">' . htmlspecialchars($message) . '</p>';
     $content .= '<form class="settings-form" method="post" action="' . $base . '/admin/settings">' . render_hidden_inputs(['csrf' => csrf_token()]);
-    $content .= '<label for="storage-limit">Storage limit <span class="field-unit">(MB)</span></label><input id="storage-limit" aria-describedby="storage-limit-hint" class="input" type="number" min="0" name="default_storage_limit_mb" value="' . mb_from_bytes(default_storage_limit_bytes()) . '"><p class="field-hint" id="storage-limit-hint">0 means unlimited. Stored notes and attachments count toward the limit.</p><section class="settings-group"><h2>Reading & links</h2>';
-    $content .= '<label for="site-base-url">Website URL / share link prefix</label><input class="input" id="site-base-url" name="site_base_url" type="url" value="' . htmlspecialchars((string)get_setting('site_base_url', ''), ENT_QUOTES) . '"><details><summary>About the share link prefix</summary><p>Use the public website address, including any subdirectory. This is useful when HTTPS terminates at a reverse proxy. Leave empty to use the request address.</p></details>';
-    $content .= '<label for="reader-home-url">Reader home URL</label><input class="input" id="reader-home-url" type="url" name="reader_home_url" value="' . htmlspecialchars((string)get_setting('reader_home_url', ''), ENT_QUOTES) . '"><p class="muted">Other shares show Home. Documents and anchors within the home share do not. Leave empty to disable.</p>';
-    $content .= '</section><section class="settings-group"><h2>Appearance & customization</h2><label for="site-head-html">HTML Head insertion</label><textarea class="input code-input" id="site-head-html" name="site_head_html" rows="4">' . htmlspecialchars((string)get_setting('site_head_html', '')) . '</textarea><p class="muted">Inserted into the document head. Use only code you trust.</p>';
-    foreach (['css' => true, 'js' => false] as $kind => $default) {
-        $upper = strtoupper($kind);
-        $enabled = get_bool_setting('site_custom_' . $kind . '_enabled', $default);
-        $content .= '<label class="choice-row"><input type="checkbox" name="site_custom_' . $kind . '_enabled" value="1"' . ($enabled ? ' checked' : '') . '> Enable custom ' . $upper . '</label>';
-        $content .= '<label for="custom-' . $kind . '">Custom ' . $upper . '</label><textarea class="input code-input" id="custom-' . $kind . '" name="site_custom_' . $kind . '" rows="8">' . htmlspecialchars((string)get_setting('site_custom_' . $kind, '')) . '</textarea>';
-        $example = $kind === 'css' ? 'body.layout-share .markdown-body { max-width: 980px; }' : 'document.querySelectorAll(".markdown-body a").forEach((link) => { link.rel = "noopener"; });';
-        $content .= '<details><summary>Custom ' . $upper . ' help and example</summary><p>' . ($kind === 'css' ? 'Scope selectors to body.layout-share or body.layout-app. Rules load after the site stylesheet.' : 'JavaScript runs after DOMContentLoaded. It is disabled by default. Use only trusted scripts.') . '</p><pre class="help-code">' . htmlspecialchars($example) . '</pre></details>';
-    }
-    $content .= '</section><button class="button primary" type="submit">Save settings</button></form></div>';
+    $content .= '<div class="setting-field"><label for="storage-limit">Storage limit <span class="field-unit">(MB)</span></label><input id="storage-limit" aria-describedby="storage-limit-hint" class="input input--short" type="number" min="0" name="default_storage_limit_mb" value="' . mb_from_bytes(default_storage_limit_bytes()) . '"><p class="field-hint" id="storage-limit-hint">0 means unlimited. Notes and attachments count toward this limit.</p></div>';
+    $content .= '<div class="setting-field"><label for="site-base-url">Website URL</label><input class="input" id="site-base-url" name="site_base_url" type="url" placeholder="https://example.com" value="' . htmlspecialchars((string)get_setting('site_base_url', ''), ENT_QUOTES) . '"><p class="field-hint">Public link prefix used for shares. Leave empty to use the request address.</p></div>';
+    $content .= '<div class="setting-field"><label for="reader-home-url">Reader home URL</label><input class="input" id="reader-home-url" name="reader_home_url" type="url" placeholder="https://example.com/s/home" value="' . htmlspecialchars((string)get_setting('reader_home_url', ''), ENT_QUOTES) . '"><p class="field-hint">Optional Home button target shown on other shares. Leave empty to disable.</p></div>';
+    $content .= '<section class="settings-group"><h2>HTML Head</h2>';
+    $content .= '<details class="code-setting-row"><summary class="code-setting-summary"><span class="code-setting-meta"><span class="code-setting-title">Head HTML insertion</span><span class="field-hint">Inserted into &lt;head&gt; on site pages. Use only trusted markup.</span></span><span class="code-setting-actions"><span class="code-setting-status' . ($headLines > 0 ? ' is-configured' : '') . '">' . $headStatus . '</span><span class="button code-setting-toggle"><span class="code-setting-toggle__open">Edit</span><span class="code-setting-toggle__close">Close</span></span></span></summary>';
+    $content .= '<div class="code-setting-editor"><label class="sr-only" for="site-head-html">Head HTML insertion</label><textarea class="input code-input" id="site-head-html" name="site_head_html" rows="5" placeholder="&lt;meta ...&gt; or &lt;link ...&gt;">' . htmlspecialchars($headHtml, ENT_QUOTES, 'UTF-8') . '</textarea></div></details>';
+    $content .= '</section><div class="settings-actions"><button class="button primary" type="submit">Save settings</button></div></form></div>';
     $content .= render_image_compression_admin_section();
     $content .= render_pdf_export_settings();
     $key = (string)($_SESSION['api_key_plain'] ?? '');
     unset($_SESSION['api_key_plain']);
-    $content .= '<details class="plugin-connection card" id="plugin-connection"' . ($key !== '' ? ' open' : '') . '><summary>Plugin connection</summary><p class="muted">The SiYuan plugin uses a connection key to authenticate synchronization. Existing connections keep working. Generating a new key disconnects the old one.</p>';
+    $content .= '<details class="plugin-connection card" id="plugin-connection"' . ($key !== '' ? ' open' : '') . '><summary>Plugin connection</summary><p class="muted">The SiYuan plugin uses a connection key to authenticate synchronization. Generating a new key disconnects the old one.</p>';
     if ($key !== '') $content .= '<label class="field-label">New connection key<code class="connection-key">' . htmlspecialchars($key) . '</code></label><p class="field-hint">Copy this into the plugin now. It is shown only once.</p>';
     else $content .= '<p class="muted">' . (!empty($user['api_key_last4']) ? 'Connected · key ending ' . htmlspecialchars((string)$user['api_key_last4']) : 'No plugin connection yet') . '</p>';
     $confirm = !empty($user['api_key_last4']) ? ' data-confirm-message="Replace the connection key? Update it in your SiYuan plugin to reconnect."' : '';
@@ -195,16 +195,19 @@ if ($path === '/admin/settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         flash('error', 'Enter a valid HTTP or HTTPS home URL without credentials.');
         redirect('/admin#settings');
     }
-    $css = str_replace(["\r\n", "\r"], "\n", (string)($_POST['site_custom_css'] ?? ''));
-    $js = str_replace(["\r\n", "\r"], "\n", (string)($_POST['site_custom_js'] ?? ''));
-    if (strlen($css) > 200000 || strlen($js) > 200000) {
-        flash('error', 'Custom CSS and JavaScript must each be at most 200 KB.');
+    $headHtml = trim((string)($_POST['site_head_html'] ?? ''));
+    if (strlen($headHtml) > 200000) {
+        flash('error', 'Head HTML insertion must be at most 200 KB.');
         redirect('/admin#settings');
     }
-    foreach (['reader_home_url' => $home, 'default_storage_limit_bytes' => (string)bytes_from_mb(max(0, (int)($_POST['default_storage_limit_mb'] ?? 0))),
-        'site_base_url' => trim((string)($_POST['site_base_url'] ?? '')), 'site_head_html' => trim((string)($_POST['site_head_html'] ?? '')),
-        'site_custom_css' => $css, 'site_custom_js' => $js, 'site_custom_css_enabled' => isset($_POST['site_custom_css_enabled']) ? '1' : '0',
-        'site_custom_js_enabled' => isset($_POST['site_custom_js_enabled']) ? '1' : '0'] as $key => $value) set_setting($key, $value);
+    foreach ([
+        'reader_home_url' => $home,
+        'default_storage_limit_bytes' => (string)bytes_from_mb(max(0, (int)($_POST['default_storage_limit_mb'] ?? 0))),
+        'site_base_url' => trim((string)($_POST['site_base_url'] ?? '')),
+        'site_head_html' => $headHtml,
+    ] as $key => $value) {
+        set_setting($key, $value);
+    }
     flash('info', 'Site settings saved.');
     redirect('/admin#settings');
 }
