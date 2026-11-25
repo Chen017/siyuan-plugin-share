@@ -81,11 +81,11 @@ jobs:
             set -eu
             umask 077
             exec 9>/root/.siyuan-share-deploy.lock
-            flock -n 9
+            flock -n 9 || { echo 'Another deployment is already running.' >&2; exit 1; }
             cd /root/siyuan-plugin-share
-            test "$(git branch --show-current)" = main
-            git diff --quiet
-            git diff --cached --quiet
+            test "$(git branch --show-current)" = main || { echo 'VPS checkout is not on main.' >&2; exit 1; }
+            git diff --quiet -- . ':!php-site/config.php' || { echo 'VPS working tree has unexpected unstaged changes outside php-site/config.php:' >&2; git diff --name-only -- . ':!php-site/config.php' >&2; exit 1; }
+            git diff --cached --quiet || { echo 'VPS working tree has staged changes:' >&2; git diff --cached --name-only >&2; exit 1; }
             git fetch origin main
             test "$(git rev-parse origin/main)" = '${{ github.sha }}' || { echo 'Main changed after regression; refusing an untested deployment.' >&2; exit 1; }
             git merge --ff-only origin/main

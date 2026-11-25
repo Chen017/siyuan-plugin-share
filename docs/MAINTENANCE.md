@@ -101,7 +101,7 @@ python scripts/package.py --output .test-output/package --version test
 | --- | --- |
 | `php83-regression.yml` | PR、手动或被调用。无缓存拉取并构建 PHP 镜像，验证打包、文档链接、发布标签、API、Nginx、SVG 和 PDF 真实浏览器预览及下载、备份及部署保护。 |
 | `frontend-regression.yml` | PR、手动或被调用。检查语法与清单，运行插件和阅读器 DOM 回归、Markdown/Mermaid 异常输入、Chromium 标题与图表检查、PDFium 文字层检查及模拟发布；缓存 npm/pip 下载，不缓存测试结果。 |
-| `deploy.yml` | `main` push 或手动触发；两套可复用回归通过后 SSH 部署。远端必须处于干净的 main，且远端 origin/main 必须等于通过测试的提交，否则拒绝部署。部署成功后比较最新正式 Release；插件有功能变更时调用发布工作流，不重复测试同一提交。 |
+| `deploy.yml` | `main` push 或手动触发；两套可复用回归通过后 SSH 部署。远端必须处于干净的 main（允许保留实例本地修改的 php-site/config.php），且远端 origin/main 必须等于通过测试的提交，否则拒绝部署。部署成功后比较最新正式 Release；插件有功能变更时调用发布工作流，不重复测试同一提交。 |
 | `github-release.yml` | 手动触发或由部署工作流调用。手动发布先运行两套回归；自动发布复用部署前对同一提交的测试结果。校验版本、已有 Release 和 Tag；已有 Tag 必须指向本次提交，新 Tag 在归档构建后创建，两个 ZIP 上传到草稿后才公开。 |
 
 PR 的两套回归与合并后的部署回归分别验证 PR 提交和实际 main 提交；不要简单删除后者。普通分支推送不自动测试，需要提前验证时可手动运行两套工作流；正式部署仍会完整测试。PHP 构建保留 `--pull --no-cache`，以覆盖新拉取的基础镜像及系统包。基础 PHP 镜像已带 mbstring、PDO 和 PDO SQLite，构建时先验证扩展可用，只编译缺失的 GD 和 zip；基础镜像变化时不得直接删除验证。CSS 压缩通过 `scripts/minify-css.cjs` 调用 clean-css，与原 CLI 使用同一引擎，避免额外的文件匹配与监听依赖。CI 和 VPS 各自在不同机器构建镜像：共享镜像需要额外存储、传输和权限，当前没有为此增加复杂度。CI 下载缓存不是依赖锁文件；npm 直接依赖版本已固定，传递依赖仍可能变化。
