@@ -28,6 +28,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG = """<?php
 return [
     'chunk_cleanup_probability' => 0,
+    'mcp_internal_token' => 'test-internal-gateway-token-64hex',
+    'mcp_internal_user_id' => 1,
 ];
 """
 DIAGNOSTICS = re.compile(
@@ -757,6 +759,58 @@ class McpIntegrationTests(unittest.TestCase):
         st, _, _ = admin.post_form('/admin/mcp/stats-reset', {})
         self.assertEqual(st, 302)
         self.assertEqual(len(self.sql_query('SELECT * FROM mcp_usage_stats')), 0)
+
+    def test_04_internal_static_token_auth(self):
+        admin = self.login_admin()
+        status, _, _ = admin.post_form('/admin/mcp/settings', {'mcp_enabled': '1'})
+        self.assertEqual(status, 302)
+
+        stateless = HttpClient(self.base, use_cookies=False)
+
+        # Wrong internal header must still fail with 401
+        st_bad, _, _ = stateless.request(
+            '/mcp',
+            json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'}),
+            headers={
+                'Content-Type': 'application/json',
+                'X-MCP-Internal-Token': 'wrong-token',
+            },
+            method='POST',
+        )
+        self.assertEqual(st_bad, 401)
+
+        # Valid internal header authenticates without OAuth Bearer token
+        st_ok, _, raw_list = stateless.request(
+            '/mcp',
+            json.dumps({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'}),
+            headers={
+                'Content-Type': 'application/json',
+                'X-MCP-Internal-Token': 'test-internal-gateway-token-64hex',
+            },
+            method='POST',
+        )
+        self.assertEqual(st_ok, 200)
+        tools = json.loads(raw_list)['result']['tools']
+        self.assertEqual(len(tools), 5)
+
+        st_call, _, raw_call = stateless.request(
+            '/mcp',
+            json.dumps({
+                'jsonrpc': '2.0',
+                'id': 3,
+                'method': 'tools/call',
+                'params': {'name': 'list_shares', 'arguments': {}},
+            }),
+            headers={
+                'Content-Type': 'application/json',
+                'X-MCP-Internal-Token': 'test-internal-gateway-token-64hex',
+            },
+            method='POST',
+        )
+        self.assertEqual(st_call, 200)
+        res = json.loads(raw_call)['result']
+        self.assertFalse(res['isError'])
+        self.assertIn('shares', res['structuredContent'])
 
 
 def main():

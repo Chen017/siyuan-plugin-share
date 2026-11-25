@@ -461,6 +461,24 @@ function mcp_www_authenticate_header(?string $error = null): string {
 }
 
 function mcp_authenticate_bearer_request(): array {
+    global $config;
+    $configuredInternal = trim((string)($config['mcp_internal_token'] ?? ''));
+    $providedInternal = trim((string)($_SERVER['HTTP_X_MCP_INTERNAL_TOKEN'] ?? ''));
+    if ($configuredInternal !== '' && $providedInternal !== '' && hash_equals($configuredInternal, $providedInternal)) {
+        $internalUid = max(1, (int)($config['mcp_internal_user_id'] ?? 1));
+        $pdo = db();
+        $userStmt = $pdo->prepare('SELECT * FROM users WHERE id = :uid AND role = "admin" AND disabled = 0 LIMIT 1');
+        $userStmt->execute([':uid' => $internalUid]);
+        $user = $userStmt->fetch(PDO::FETCH_ASSOC);
+        if ($user) {
+            return [
+                'token' => ['token_hash' => mcp_hash_secret($configuredInternal), 'id' => 0],
+                'client' => ['id' => 0, 'client_id' => 'internal_gateway'],
+                'user' => $user,
+            ];
+        }
+    }
+
     $rawToken = mcp_extract_bearer_token();
     if ($rawToken === '') {
         mcp_debug_log((string)($_SERVER['REQUEST_METHOD'] ?? 'POST'), '/mcp', 401, 0, null, null, 'missing_bearer');

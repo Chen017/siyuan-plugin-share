@@ -7,4 +7,7 @@ return [
     'session_lifetime_days' => 30,
     // 'db_path' => __DIR__ . '/storage/app.db',
     // 'uploads_dir' => __DIR__ . '/uploads',
+    // Optional static token for a trusted localhost MCP gateway (strip X-MCP-Internal-Token on public reverse proxies):
+    // 'mcp_internal_token' => '',
+    // 'mcp_internal_user_id' => 1,
 ];
