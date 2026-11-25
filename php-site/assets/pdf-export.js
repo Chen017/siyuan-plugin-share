@@ -557,8 +557,11 @@
     const tail = document.createElement('div');
     tail.style.cssText = 'height:8px;clear:both';
     root.append(tail);
+    const renderScale = 3; // 288 DPI (3 * 96 CSS px/in)
+    const imageQuality = .92;
+    const pagesPerBatch = 1;
     let worker = window.html2pdf().set({
-      margin: [16, 14], image: { type: 'jpeg', quality: .98 },
+      margin: [16, 14], image: { type: 'jpeg', quality: imageQuality },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait', compress: true },
       enableLinks: false, // Link positions below use the same variable page offsets.
       // Page planning below uses the final text lines and object bounds. Disable
@@ -704,11 +707,11 @@
       progress(.25, `Rendering pages 0 / ${pages.length}…`);
       let pdf;
       for (let page = 0; page < pages.length;) {
-        const last = Math.min(page + 2, pages.length);
+        const last = Math.min(page + pagesPerBatch, pages.length);
         // toCanvas detaches its overlay. Reuse this exact paginated layout so
         // later pages cannot be reflowed or measured differently.
         if (!container.isConnected) document.body.append(worker.prop.overlay);
-        worker = worker.set({ html2canvas: { scale: 2, backgroundColor: '#ffffff', useCORS: true, allowTaint: false, logging: false,
+        worker = worker.set({ html2canvas: { scale: renderScale, backgroundColor: '#ffffff', useCORS: true, allowTaint: false, logging: false,
           ignoreElements: (element) => element === documentBody || element === preview,
           windowWidth: innerWidth, scrollX: 0, scrollY: 0, y: pages[page].start, width: size.inner.px.width,
           height: pages[last - 1].end - pages[page].start } }).toCanvas();
@@ -716,12 +719,17 @@
         const canvas = await worker.get('canvas');
         const batchStart = pages[page].start;
         for (; page < last; page++) {
-          const top = Math.round((pages[page].start - batchStart) * 2);
-          const bottom = Math.min(canvas.height, Math.round((pages[page].end - batchStart) * 2));
-          const slice = document.createElement('canvas');
-          slice.width = canvas.width;
-          slice.height = bottom - top;
-          slice.getContext('2d').drawImage(canvas, 0, top, slice.width, slice.height, 0, 0, slice.width, slice.height);
+          const top = Math.round((pages[page].start - batchStart) * renderScale);
+          const maxPageCanvasHeight = Math.floor(canvas.width * size.inner.ratio);
+          const bottom = Math.min(canvas.height, top + maxPageCanvasHeight, Math.round((pages[page].end - batchStart) * renderScale));
+          const needsSlice = top > 0 || bottom < canvas.height;
+          let slice = canvas;
+          if (needsSlice) {
+            slice = document.createElement('canvas');
+            slice.width = canvas.width;
+            slice.height = Math.max(1, bottom - top);
+            slice.getContext('2d').drawImage(canvas, 0, top, slice.width, slice.height, 0, 0, slice.width, slice.height);
+          }
           if (!pdf) {
             worker.prop.canvas = slice;
             worker = worker.toPdf();
@@ -729,9 +737,9 @@
             pdf = await worker.get('pdf');
           } else {
             pdf.addPage();
-            pdf.addImage(slice.toDataURL('image/jpeg', .98), 'JPEG', 14, 16, size.inner.width, slice.height * size.inner.width / slice.width);
+            pdf.addImage(slice.toDataURL('image/jpeg', imageQuality), 'JPEG', 14, 16, size.inner.width, slice.height * size.inner.width / slice.width);
           }
-          slice.width = slice.height = 0;
+          if (needsSlice) slice.width = slice.height = 0;
         }
         canvas.width = canvas.height = 0;
         progress(.25 + .65 * page / pages.length, `Rendering pages ${page} / ${pages.length}…`);
