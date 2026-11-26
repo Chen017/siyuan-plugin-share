@@ -194,6 +194,7 @@
   };
   let imageViewerReady = false;
   let shareNavReady = false;
+  let markdownCopyReady = false;
   let shareDynamicToken = 0;
   let markdownInitRetryTimer = null;
   let markdownInitRetryCount = 0;
@@ -4342,7 +4343,8 @@ const initImageViewer = () => {
 
         const open = state.push("html_block", "", 0);
         open.block = true;
-        open.content = `<div class="md-alert md-alert--${classKey}">\n`;
+        const titleAttr = titleRaw ? ` data-sps-callout-title="${md.utils.escapeHtml(titleRaw)}"` : "";
+        open.content = `<div class="md-alert md-alert--${classKey}" data-sps-callout-type="${typeKey.toUpperCase()}"${titleAttr}>\n`;
         const titleToken = state.push("html_block", "", 0);
         titleToken.block = true;
         titleToken.content = buildTitleHtml(titleRaw, meta);
@@ -4527,7 +4529,7 @@ const initImageViewer = () => {
         md.use(window.markdownitContainer, type, {
           render: (tokens, idx) => {
             if (tokens[idx].nesting === 1) {
-              return `<div class="md-alert md-alert--${type}">`;
+              return `<div class="md-alert md-alert--${type}" data-sps-container-type="${type}">`;
             }
             return "</div>";
           },
@@ -4664,6 +4666,8 @@ const initImageViewer = () => {
         if (!mermaidSource) return;
         const block = document.createElement("div");
         block.className = "mermaid";
+        block.dataset.spsMdLang = lang;
+        block.dataset.spsMdSource = source;
         block.textContent = mermaidSource;
         replaceCodeBlock(code, block);
       });
@@ -4698,6 +4702,8 @@ const initImageViewer = () => {
         const wrapper = document.createElement("div");
         wrapper.className = "md-diagram md-diagram--echarts";
         wrapper.setAttribute("data-sps-echarts-source", encodeURIComponent(source));
+        wrapper.dataset.spsMdLang = "echarts";
+        wrapper.dataset.spsMdSource = source;
         const chartEl = document.createElement("div");
         chartEl.className = "md-echarts";
         wrapper.appendChild(chartEl);
@@ -4746,7 +4752,8 @@ const initImageViewer = () => {
       container.querySelectorAll("pre code").forEach((code) => {
         const lang = getLanguage(code);
         if (lang !== "abc") return;
-        let source = code.textContent || "";
+        const originalSource = code.textContent || "";
+        let source = originalSource;
         let options = {};
         const lines = source.split(/\r?\n/);
         if (lines.length && lines[0].trim().startsWith("%%params")) {
@@ -4760,6 +4767,8 @@ const initImageViewer = () => {
         }
         const wrapper = document.createElement("div");
         wrapper.className = "md-diagram md-diagram--abc";
+        wrapper.dataset.spsMdLang = "abc";
+        wrapper.dataset.spsMdSource = originalSource;
         const target = document.createElement("div");
         const targetId = nextDiagramId("abc");
         target.id = targetId;
@@ -4789,6 +4798,8 @@ const initImageViewer = () => {
         const source = code.textContent || "";
         const wrapper = document.createElement("div");
         wrapper.className = "md-diagram md-diagram--graphviz";
+        wrapper.dataset.spsMdLang = lang;
+        wrapper.dataset.spsMdSource = source;
         const target = document.createElement("div");
         target.className = "md-graphviz";
         wrapper.appendChild(target);
@@ -4827,6 +4838,8 @@ const initImageViewer = () => {
         }
         const wrapper = document.createElement("div");
         wrapper.className = "md-diagram md-diagram--flowchart";
+        wrapper.dataset.spsMdLang = "flowchart";
+        wrapper.dataset.spsMdSource = source;
         const target = document.createElement("div");
         const targetId = nextDiagramId("flowchart");
         target.id = targetId;
@@ -4848,9 +4861,11 @@ const initImageViewer = () => {
       });
     };
 
-    const showDiagramSource = (block, source, kind) => {
+    const showDiagramSource = (block, source, kind, mdLang = kind, mdSource = source) => {
       const wrapper = document.createElement("div");
       wrapper.className = `md-diagram md-diagram--${kind}`;
+      wrapper.dataset.spsMdLang = mdLang ?? "";
+      wrapper.dataset.spsMdSource = mdSource ?? "";
       const message = document.createElement("p");
       message.className = "muted";
       message.textContent = "Diagram preview unavailable. Source is shown below and stays on this site.";
@@ -4864,8 +4879,10 @@ const initImageViewer = () => {
 
     const renderPlantUml = (container) => {
       container.querySelectorAll("pre code").forEach((code) => {
-        if (!["plantuml", "puml", "uml"].includes(getLanguage(code))) return;
-        showDiagramSource(code.closest("pre") || code, code.textContent || "", "plantuml");
+        const lang = getLanguage(code);
+        if (!["plantuml", "puml", "uml"].includes(lang)) return;
+        const source = code.textContent || "";
+        showDiagramSource(code.closest("pre") || code, source, "plantuml", lang, source);
       });
     };
 
@@ -4880,7 +4897,9 @@ const initImageViewer = () => {
 
       const showMermaidSource = (block) => {
         const source = block.dataset.mermaidSource || block.textContent || "";
-        showDiagramSource(block, source, "mermaid");
+        const mdSource = block.dataset.spsMdSource ?? source;
+        const mdLang = block.dataset.spsMdLang ?? "mermaid";
+        showDiagramSource(block, source, "mermaid", mdLang, mdSource);
       };
 
       const isMermaidErrorSvg = (svg) => {
@@ -4944,6 +4963,8 @@ const initImageViewer = () => {
           const block = document.createElement("div");
           block.className = "mermaid";
           block.dataset.mermaidSource = source;
+          block.dataset.spsMdLang = lang || "mermaid";
+          block.dataset.spsMdSource = source;
           block.textContent = source;
           if (pre) {
             pre.replaceWith(block);
@@ -5009,6 +5030,8 @@ const initImageViewer = () => {
         const block = document.createElement("div");
         block.className = "mermaid";
         block.dataset.mermaidSource = source;
+        block.dataset.spsMdLang = lang || "mermaid";
+        block.dataset.spsMdSource = source;
         block.textContent = source;
         if (pre) {
           pre.replaceWith(block);
@@ -5023,6 +5046,10 @@ const initImageViewer = () => {
       );
       if (!uniqueBlocks.length) return;
       uniqueBlocks.forEach((block) => {
+        if (!block.dataset.spsMdSource) {
+          block.dataset.spsMdLang = block.dataset.spsMdLang || "mermaid";
+          block.dataset.spsMdSource = block.dataset.mermaidSource || block.textContent || "";
+        }
         block.setAttribute("data-processed", "true");
         renderMermaidBlock(block);
       });
@@ -5073,6 +5100,9 @@ const initImageViewer = () => {
         const raw = code.textContent || "";
         const wrapper = document.createElement("div");
         wrapper.className = "code-block";
+        wrapper.dataset.spsCodeLang = code.hasAttribute("data-sps-orig-lang")
+          ? (code.dataset.spsOrigLang || "")
+          : (lang || "");
         const header = document.createElement("div");
         header.className = "code-header";
         const langLabel = document.createElement("span");
@@ -5405,6 +5435,9 @@ const initImageViewer = () => {
                 block.classList.contains("mermaid")
               ) {
                 return;
+              }
+              if (!block.hasAttribute("data-sps-orig-lang")) {
+                block.dataset.spsOrigLang = getLanguage(block);
               }
               if (block.classList.contains("hljs")) {
                 return;
@@ -6067,6 +6100,1206 @@ const initImageViewer = () => {
   );
 
 
+  const COPY_IGNORED_SELECTOR =
+    "script, style, template, noscript, [hidden], .sps-footnote-action, .sps-block-ref-action, .sps-block-anchor, .sps-block-anchor-wrapper, .footnote-backref, [data-footnote-backref], a[href^=\"#fnref\"], .code-header, .code-lines, .iframe-fullscreen-toggle, .share-document-actions, .kb-breadcrumbs, textarea.markdown-source";
+  const COPY_HIDDEN_FOOTNOTES_SELECTOR =
+    "hr.footnotes-sep, .footnotes, .markdown-footnotes, .sps-footnote-registry";
+  const COPY_ATOMIC_VOID_SELECTOR =
+    "hr, img, video, iframe, svg, canvas, math, input, .katex, .katex-block, .katex-display, .katex-error, .mermaid, .md-diagram";
+  const COPY_CALLOUT_DEFAULT_LABELS = {
+    NOTE: "Note",
+    TIP: "Tip",
+    IMPORTANT: "Important",
+    WARNING: "Warning",
+    CAUTION: "Caution",
+    INFO: "Info",
+  };
+  const COPY_BLOCK_TAG_SET = new Set([
+    "P", "DIV", "H1", "H2", "H3", "H4", "H5", "H6", "BLOCKQUOTE", "UL", "OL", "LI",
+    "PRE", "TABLE", "HR", "DL", "DT", "DD", "DETAILS", "SECTION", "ARTICLE",
+    "HEADER", "MAIN", "ASIDE", "FIGURE", "FIGCAPTION",
+  ]);
+  const COPY_STRIP_LANG_SET = new Set([
+    "", "undefined", "text", "plain", "plaintext", "nohighlight", "hljs",
+  ]);
+
+  const getCopyNodeElement = (node) =>
+    node ? (node.nodeType === 1 ? node : node.parentElement) : null;
+
+  const isEditableOrSourceNode = (node) => {
+    const el = getCopyNodeElement(node);
+    if (!el) return false;
+    return Boolean(
+      el.isContentEditable ||
+      el.closest("input, textarea, select, .markdown-source, [contenteditable]:not([contenteditable='false'])")
+    );
+  };
+
+  const rangeIntersectsNode = (range, node) => {
+    if (!range || !node) return false;
+    if (typeof range.intersectsNode === "function") {
+      try {
+        return range.intersectsNode(node);
+      } catch {
+        // fall through to boundary comparison
+      }
+    }
+    try {
+      const ViewRange = node.ownerDocument?.defaultView?.Range || Range;
+      const nodeRange = node.ownerDocument.createRange();
+      nodeRange.selectNodeContents(node);
+      return (
+        range.compareBoundaryPoints(ViewRange.END_TO_START, nodeRange) < 0 &&
+        range.compareBoundaryPoints(ViewRange.START_TO_END, nodeRange) > 0
+      );
+    } catch {
+      return false;
+    }
+  };
+
+  const findArticleCopyScope = (range) => {
+    if (!range || range.collapsed) return null;
+    const startEl = getCopyNodeElement(range.startContainer);
+    const endEl = getCopyNodeElement(range.endContainer);
+    if (!startEl || !endEl) return null;
+    if (isEditableOrSourceNode(startEl) || isEditableOrSourceNode(endEl)) return null;
+    if (startEl.closest(".share-article.is-markdown") || endEl.closest(".share-article.is-markdown")) {
+      return null;
+    }
+    const startMd = startEl.closest(".markdown-body");
+    const endMd = endEl.closest(".markdown-body");
+    if (startMd && startMd === endMd) {
+      return {scopeRoot: startMd, markdownBody: startMd};
+    }
+    const startArticle = startEl.closest(".share-article:not(.is-markdown)");
+    const endArticle = endEl.closest(".share-article:not(.is-markdown)");
+    const startMain = startEl.closest(".kb-main");
+    const endMain = endEl.closest(".kb-main");
+    const container =
+      startArticle && startArticle === endArticle
+        ? startArticle
+        : startMain && startMain === endMain
+          ? startMain
+          : null;
+    if (!container) return null;
+    if (container.closest(".share-article.is-markdown") || container.querySelector(".share-article.is-markdown")) {
+      return null;
+    }
+    const mdBody = container.querySelector(".markdown-body");
+    if (!mdBody || !rangeIntersectsNode(range, mdBody)) return null;
+    return {scopeRoot: container, markdownBody: mdBody};
+  };
+
+  const isKatexRootElement = (node) =>
+    Boolean(node instanceof Element && node.matches(".katex-block, .katex-display, .katex, .katex-error"));
+
+  const findCopyAtomicRoot = (node, scopeRoot) => {
+    const el = getCopyNodeElement(node);
+    if (!el || !scopeRoot || (!scopeRoot.contains(el) && el !== scopeRoot)) return null;
+    const diagram = el.closest(
+      ".mermaid[data-sps-md-source], .md-diagram[data-sps-md-source], div.mermaid[data-mermaid-source], .md-diagram"
+    );
+    if (diagram && scopeRoot.contains(diagram)) return diagram;
+    const katex =
+      el.closest(".katex-block") ||
+      el.closest(".katex-display") ||
+      el.closest(".katex") ||
+      el.closest(".katex-error");
+    if (katex && scopeRoot.contains(katex)) return katex;
+    const fnRef = el.closest("sup.footnote-ref");
+    if (fnRef && scopeRoot.contains(fnRef)) return fnRef;
+    return null;
+  };
+
+  const hasAtomicVisualContent = (node) => {
+    if (!node) return false;
+    if ((node.textContent || "").trim() !== "") return true;
+    return typeof node.querySelector === "function" && Boolean(node.querySelector("svg, img, math, hr"));
+  };
+
+  const snapAtomicStart = (normalized, root) => {
+    const doc = root.ownerDocument;
+    const katexHtml = isKatexRootElement(root) ? root.querySelector(".katex-html") : null;
+    const katexMathml = isKatexRootElement(root) ? root.querySelector(".katex-mathml") : null;
+    if (katexHtml) {
+      if (katexHtml === normalized.startContainer || katexHtml.contains(normalized.startContainer)) {
+        const tail = doc.createRange();
+        tail.setStart(normalized.startContainer, normalized.startOffset);
+        tail.setEnd(katexHtml, katexHtml.childNodes.length);
+        if (hasAtomicVisualContent(tail.cloneContents())) normalized.setStartBefore(root);
+        else normalized.setStartAfter(root);
+        return;
+      }
+      if (katexMathml && (katexMathml === normalized.startContainer || katexMathml.contains(normalized.startContainer))) {
+        normalized.setStartBefore(root);
+        return;
+      }
+      const tail = doc.createRange();
+      tail.setStart(normalized.startContainer, normalized.startOffset);
+      tail.setEnd(root, root.childNodes.length);
+      const frag = tail.cloneContents();
+      if (frag.querySelector?.(".katex-html") || hasAtomicVisualContent(frag)) {
+        normalized.setStartBefore(root);
+      } else {
+        normalized.setStartAfter(root);
+      }
+      return;
+    }
+    const tail = doc.createRange();
+    tail.setStart(normalized.startContainer, normalized.startOffset);
+    tail.setEnd(root, root.childNodes.length);
+    if (hasAtomicVisualContent(tail.cloneContents())) normalized.setStartBefore(root);
+    else normalized.setStartAfter(root);
+  };
+
+  const snapAtomicEnd = (normalized, root) => {
+    const doc = root.ownerDocument;
+    const ViewRange = doc.defaultView?.Range || Range;
+    const katexHtml = isKatexRootElement(root) ? root.querySelector(".katex-html") : null;
+    const katexMathml = isKatexRootElement(root) ? root.querySelector(".katex-mathml") : null;
+    if (katexHtml) {
+      if (katexHtml === normalized.endContainer || katexHtml.contains(normalized.endContainer)) {
+        const head = doc.createRange();
+        head.setStart(katexHtml, 0);
+        head.setEnd(normalized.endContainer, normalized.endOffset);
+        if (hasAtomicVisualContent(head.cloneContents())) normalized.setEndAfter(root);
+        else normalized.setEndBefore(root);
+        return;
+      }
+      if (katexMathml && (katexMathml === normalized.endContainer || katexMathml.contains(normalized.endContainer))) {
+        const head = doc.createRange();
+        head.setStart(katexMathml, 0);
+        head.setEnd(normalized.endContainer, normalized.endOffset);
+        if (hasAtomicVisualContent(head.cloneContents())) normalized.setEndAfter(root);
+        else normalized.setEndBefore(root);
+        return;
+      }
+      const endPt = doc.createRange();
+      endPt.setStart(normalized.endContainer, normalized.endOffset);
+      endPt.collapse(true);
+      const htmlStart = doc.createRange();
+      htmlStart.setStart(katexHtml, 0);
+      htmlStart.collapse(true);
+      if (endPt.compareBoundaryPoints(ViewRange.START_TO_START, htmlStart) <= 0) {
+        normalized.setEndBefore(root);
+        return;
+      }
+      const head = doc.createRange();
+      head.setStart(katexHtml, 0);
+      head.setEnd(normalized.endContainer, normalized.endOffset);
+      if (hasAtomicVisualContent(head.cloneContents())) normalized.setEndAfter(root);
+      else normalized.setEndBefore(root);
+      return;
+    }
+    const head = doc.createRange();
+    head.setStart(root, 0);
+    head.setEnd(normalized.endContainer, normalized.endOffset);
+    if (hasAtomicVisualContent(head.cloneContents())) normalized.setEndAfter(root);
+    else normalized.setEndBefore(root);
+  };
+
+  const normalizeSelectionRange = (range, scopeRoot) => {
+    const normalized = range.cloneRange();
+    const startRoot = findCopyAtomicRoot(normalized.startContainer, scopeRoot);
+    const endRoot = findCopyAtomicRoot(normalized.endContainer, scopeRoot);
+    if (startRoot && startRoot === endRoot) {
+      if (isKatexRootElement(startRoot)) {
+        snapAtomicStart(normalized, startRoot);
+        if (normalized.collapsed) return null;
+        snapAtomicEnd(normalized, startRoot);
+      } else if (!normalized.collapsed) {
+        normalized.setStartBefore(startRoot);
+        normalized.setEndAfter(startRoot);
+      }
+      return normalized.collapsed ? null : normalized;
+    }
+    if (startRoot) {
+      snapAtomicStart(normalized, startRoot);
+      if (normalized.collapsed) return null;
+    }
+    if (endRoot) {
+      snapAtomicEnd(normalized, endRoot);
+      if (normalized.collapsed) return null;
+    }
+    return normalized.collapsed ? null : normalized;
+  };
+
+  const hasMeaningfulSelectionSlice = (sliceRange, ignoreTaskCheckbox = false) => {
+    if (!sliceRange || sliceRange.collapsed) return false;
+    const frag = sliceRange.cloneContents();
+    const selector = ignoreTaskCheckbox
+      ? `${COPY_IGNORED_SELECTOR}, input.task-list-item-checkbox`
+      : COPY_IGNORED_SELECTOR;
+    frag.querySelectorAll(selector).forEach((n) => n.remove());
+    if ((frag.textContent || "").trim() !== "") return true;
+    return Boolean(frag.querySelector("img, svg, math, hr, video, iframe, canvas, input"));
+  };
+
+  const isFullElementSelected = (range, element, {ignoreTaskCheckbox = false} = {}) => {
+    if (!range || !element) return false;
+    const doc = element.ownerDocument;
+    const ViewRange = doc.defaultView?.Range || Range;
+    const elemRange = doc.createRange();
+    elemRange.selectNodeContents(element);
+    if (element === range.startContainer || element.contains(range.startContainer)) {
+      const before = doc.createRange();
+      before.setStart(element, 0);
+      before.setEnd(range.startContainer, range.startOffset);
+      if (hasMeaningfulSelectionSlice(before, ignoreTaskCheckbox)) return false;
+    } else if (range.compareBoundaryPoints(ViewRange.START_TO_START, elemRange) > 0) {
+      return false;
+    }
+    if (element === range.endContainer || element.contains(range.endContainer)) {
+      const after = doc.createRange();
+      after.setStart(range.endContainer, range.endOffset);
+      after.setEnd(element, element.childNodes.length);
+      if (hasMeaningfulSelectionSlice(after, false)) return false;
+    } else if (range.compareBoundaryPoints(ViewRange.END_TO_END, elemRange) < 0) {
+      return false;
+    }
+    return true;
+  };
+
+  const isEmptyBoundaryBlock = (el) => {
+    if (!(el instanceof Element)) return false;
+    if (!el.matches("p, h1, h2, h3, h4, h5, h6, li, blockquote, pre, tr, dt, dd, div, ul, ol, dl, table, thead, tbody, tfoot")) {
+      return false;
+    }
+    if (el.matches(".katex, .katex-block, .katex-display, .katex-error, .mermaid, .md-diagram")) {
+      return false;
+    }
+    if (el.querySelector(COPY_ATOMIC_VOID_SELECTOR)) return false;
+    if (el.tagName === "PRE") return (el.textContent || "") === "";
+    return (el.textContent || "").trim() === "";
+  };
+
+  const pruneEmptyBoundaryBlocks = (container, fromStart) => {
+    while (true) {
+      let node = fromStart ? container.firstChild : container.lastChild;
+      if (node && node.nodeType === 3 && !(node.nodeValue || "").trim()) {
+        const sibling = fromStart ? node.nextSibling : node.previousSibling;
+        if (sibling && sibling.nodeType === 1) node = sibling;
+      }
+      if (!node || node.nodeType !== 1) break;
+      if (node.matches("ul, ol, dl, table, thead, tbody, tfoot, blockquote, .md-alert, .code-block, .code-body, .kb-header, .kb-title-row, .share-article, .markdown-body, div:not(.katex-block):not(.md-diagram):not(.mermaid)")) {
+        pruneEmptyBoundaryBlocks(node, fromStart);
+      }
+      if (isEmptyBoundaryBlock(node)) {
+        node.remove();
+        continue;
+      }
+      break;
+    }
+  };
+
+  const wrapFragmentInElement = (frag, wrapper) => {
+    const next = wrapper.ownerDocument.createDocumentFragment();
+    wrapper.appendChild(frag);
+    next.appendChild(wrapper);
+    return next;
+  };
+
+  const getTableCellAlign = (cell) => {
+    if (!cell) return "";
+    const align = String(cell.style?.textAlign || cell.getAttribute("align") || "").trim().toLowerCase();
+    return ["left", "center", "right"].includes(align) ? align : "";
+  };
+
+  const extractTableColAligns = (tableEl) => {
+    const firstRow =
+      tableEl.querySelector(":scope > thead > tr") ||
+      tableEl.querySelector(":scope > tbody > tr, :scope > tr");
+    if (!firstRow) return [];
+    return Array.from(firstRow.children)
+      .filter((c) => c.tagName === "TH" || c.tagName === "TD")
+      .map(getTableCellAlign);
+  };
+
+  const computeSelectedOlStart = (ol, range) => {
+    const baseStart = Number.parseInt(ol.getAttribute("start") || "1", 10);
+    const startBase = Number.isFinite(baseStart) ? baseStart : 1;
+    const items = Array.from(ol.children).filter((c) => c.tagName === "LI");
+    const doc = ol.ownerDocument;
+    for (let i = 0; i < items.length; i += 1) {
+      const li = items[i];
+      if (!rangeIntersectsNode(range, li)) continue;
+      if (li === range.startContainer || li.contains(range.startContainer)) {
+        const tail = doc.createRange();
+        tail.setStart(range.startContainer, range.startOffset);
+        tail.setEnd(li, li.childNodes.length);
+        if (!hasMeaningfulSelectionSlice(tail, true)) continue;
+      }
+      return startBase + i;
+    }
+    return startBase;
+  };
+
+  const reconstructAncestorContext = (fragment, normalized, scopeRoot) => {
+    const commonEl = getCopyNodeElement(normalized.commonAncestorContainer);
+    if (!commonEl || (!scopeRoot.contains(commonEl) && commonEl !== scopeRoot)) return fragment;
+    let cur = fragment;
+    let outerEl = null;
+
+    const heading = commonEl.closest("h1, h2, h3, h4, h5, h6");
+    if (heading && !heading.classList.contains("kb-title") && scopeRoot.contains(heading) && isFullElementSelected(normalized, heading)) {
+      let node = commonEl;
+      while (node && node !== heading) {
+        cur = wrapFragmentInElement(cur, node.cloneNode(false));
+        node = node.parentElement;
+      }
+      cur = wrapFragmentInElement(cur, heading.cloneNode(false));
+      outerEl = heading;
+    }
+
+    const liveTable = !outerEl ? commonEl.closest("table") : null;
+    if (liveTable && scopeRoot.contains(liveTable)) {
+      if (commonEl.closest("td, th")) {
+        outerEl = commonEl.closest("td, th");
+      } else if (commonEl.tagName === "TR") {
+        const cells = Array.from(cur.children).filter((c) => c.tagName === "TD" || c.tagName === "TH");
+        if (cells.length === 1) {
+          const single = liveTable.ownerDocument.createDocumentFragment();
+          while (cells[0].firstChild) single.appendChild(cells[0].firstChild);
+          cur = single;
+          outerEl = commonEl;
+        } else if (cells.length >= 2) {
+          cur = wrapFragmentInElement(cur, commonEl.cloneNode(false));
+          const tableWrap = liveTable.cloneNode(false);
+          tableWrap.dataset.spsPartialRow = "1";
+          cur = wrapFragmentInElement(cur, tableWrap);
+          outerEl = liveTable;
+        }
+      } else if (["THEAD", "TBODY", "TFOOT"].includes(commonEl.tagName)) {
+        cur = wrapFragmentInElement(cur, commonEl.cloneNode(false));
+        const tableWrap = liveTable.cloneNode(false);
+        if (commonEl.tagName !== "THEAD") {
+          tableWrap.dataset.spsColAligns = JSON.stringify(extractTableColAligns(liveTable));
+        }
+        cur = wrapFragmentInElement(cur, tableWrap);
+        outerEl = liveTable;
+      } else if (commonEl.tagName === "TABLE") {
+        const tableWrap = liveTable.cloneNode(false);
+        if (!cur.querySelector("thead")) {
+          tableWrap.dataset.spsColAligns = JSON.stringify(extractTableColAligns(liveTable));
+        }
+        cur = wrapFragmentInElement(cur, tableWrap);
+        outerEl = liveTable;
+      }
+    }
+
+    if (!outerEl && commonEl.tagName === "DL" && scopeRoot.contains(commonEl)) {
+      cur = wrapFragmentInElement(cur, commonEl.cloneNode(false));
+      outerEl = commonEl;
+    }
+
+    const insideFootnoteList = Boolean(commonEl.closest(".footnotes, .markdown-footnotes, .sps-footnote-registry"));
+    if (!outerEl && !insideFootnoteList) {
+      if (commonEl.tagName === "UL" || commonEl.tagName === "OL") {
+        const listWrap = commonEl.cloneNode(false);
+        if (commonEl.tagName === "OL") {
+          listWrap.setAttribute("start", String(computeSelectedOlStart(commonEl, normalized)));
+        }
+        cur = wrapFragmentInElement(cur, listWrap);
+        outerEl = commonEl;
+      } else {
+        const li = commonEl.closest("li");
+        if (li && scopeRoot.contains(li) && isFullElementSelected(normalized, li, {ignoreTaskCheckbox: true})) {
+          let node = commonEl;
+          while (node && node !== li) {
+            cur = wrapFragmentInElement(cur, node.cloneNode(false));
+            node = node.parentElement;
+          }
+          const liWrap = li.cloneNode(false);
+          if (li.classList.contains("task-list-item") && !cur.querySelector("input[type='checkbox']")) {
+            const cb = li.querySelector(
+              ":scope > input.task-list-item-checkbox, :scope > p:first-child > input.task-list-item-checkbox, :scope > label:first-child > input.task-list-item-checkbox, :scope > input[type='checkbox']"
+            );
+            if (cb) {
+              const cbClone = cb.cloneNode(true);
+              cbClone.checked = cb.checked;
+              const targetHolder = cur.firstElementChild?.tagName === "P" ? cur.firstElementChild : liWrap;
+              if (targetHolder === liWrap) {
+                liWrap.appendChild(cbClone);
+                liWrap.appendChild(cur);
+              } else {
+                targetHolder.prepend(cbClone);
+                liWrap.appendChild(cur);
+              }
+            } else {
+              liWrap.appendChild(cur);
+            }
+          } else {
+            liWrap.appendChild(cur);
+          }
+          const doc = li.ownerDocument;
+          cur = doc.createDocumentFragment();
+          cur.appendChild(liWrap);
+          const parentList = li.parentElement;
+          if (parentList && (parentList.tagName === "UL" || parentList.tagName === "OL")) {
+            const listWrap = parentList.cloneNode(false);
+            if (listWrap.tagName === "OL") {
+              const baseStart = Number.parseInt(parentList.getAttribute("start") || "1", 10);
+              const startBase = Number.isFinite(baseStart) ? baseStart : 1;
+              const siblings = Array.from(parentList.children).filter((c) => c.tagName === "LI");
+              const idx = Math.max(0, siblings.indexOf(li));
+              listWrap.setAttribute("start", String(startBase + idx));
+            }
+            cur = wrapFragmentInElement(cur, listWrap);
+            outerEl = parentList;
+          } else {
+            const ul = doc.createElement("ul");
+            cur = wrapFragmentInElement(cur, ul);
+            outerEl = li;
+          }
+        }
+      }
+    }
+
+    let cursor = outerEl ? outerEl.parentElement : commonEl;
+    while (cursor && cursor !== scopeRoot) {
+      if (cursor.tagName === "BLOCKQUOTE") {
+        if (cursor === commonEl || isFullElementSelected(normalized, cursor)) {
+          cur = wrapFragmentInElement(cur, cursor.cloneNode(false));
+        } else {
+          break;
+        }
+      } else if (cursor.classList?.contains("md-alert")) {
+        const hasTitle = Boolean(cur.querySelector(".md-alert__title"));
+        const liveHasTitle = Boolean(cursor.querySelector(":scope > .md-alert__title"));
+        if (hasTitle || isFullElementSelected(normalized, cursor) || (!liveHasTitle && cursor === commonEl)) {
+          cur = wrapFragmentInElement(cur, cursor.cloneNode(false));
+        } else {
+          break;
+        }
+      }
+      cursor = cursor.parentElement;
+    }
+
+    return cur;
+  };
+
+  const escapeTablePipes = (value) => {
+    const str = String(value || "");
+    let out = "";
+    let backslashes = 0;
+    for (let i = 0; i < str.length; i += 1) {
+      const ch = str[i];
+      if (ch === "\\") {
+        backslashes += 1;
+        out += ch;
+      } else if (ch === "|") {
+        out += backslashes % 2 === 0 ? "\\|" : "|";
+        backslashes = 0;
+      } else {
+        backslashes = 0;
+        out += ch;
+      }
+    }
+    return out;
+  };
+
+  const extractKatexSource = (el) => {
+    const ann = el.querySelector('annotation[encoding="application/x-tex"]') || el.querySelector("annotation");
+    if (ann) return ann.textContent || "";
+    if (el.classList.contains("katex-error")) return el.textContent || "";
+    const htmlEl = el.querySelector(".katex-html");
+    return (htmlEl ? htmlEl.textContent : el.textContent) || "";
+  };
+
+  const formatCodeFence = (source, lang = "") => {
+    const body = String(source || "").replace(/\r?\n$/, "");
+    let maxRun = 2;
+    const matches = body.match(/`+/g);
+    if (matches) {
+      for (const m of matches) {
+        if (m.length > maxRun) maxRun = m.length;
+      }
+    }
+    const fence = "`".repeat(maxRun + 1);
+    const safeLang = String(lang || "").trim();
+    return body === "" ? `${fence}${safeLang}\n${fence}` : `${fence}${safeLang}\n${body}\n${fence}`;
+  };
+
+  const getCodeElementLanguage = (el) => {
+    if (!el) return "";
+    if (el.hasAttribute("data-sps-code-lang")) {
+      return el.dataset.spsCodeLang || "";
+    }
+    const code = el.tagName === "PRE" ? el.querySelector(":scope > code") : el.querySelector("pre:not(.code-lines) > code");
+    if (!code) return "";
+    for (const cls of Array.from(code.classList || [])) {
+      let lang = "";
+      if (cls.startsWith("language-")) lang = cls.slice(9).toLowerCase();
+      else if (cls.startsWith("lang-")) lang = cls.slice(5).toLowerCase();
+      if (lang && !COPY_STRIP_LANG_SET.has(lang)) return lang;
+    }
+    return "";
+  };
+
+  const wrapInlineMarker = (text, marker) => {
+    if (!text) return [];
+    const match = /^([ \t\r\n]*)([\s\S]*?)([ \t\r\n]*)$/.exec(text);
+    const lead = match ? match[1] : "";
+    const core = match ? match[2] : text;
+    const trail = match ? match[3] : "";
+    if (!core) {
+      if (lead || trail) {
+        const hasNl = lead.includes("\n") || trail.includes("\n");
+        return [{text: hasNl ? "\n" : " ", isBreak: hasNl}];
+      }
+      return [];
+    }
+    const parts = [];
+    if (lead) {
+      const hasNl = lead.includes("\n");
+      parts.push({text: hasNl ? "\n" : " ", isBreak: hasNl});
+    }
+    parts.push({text: `${marker}${core}${marker}`, raw: true});
+    if (trail) {
+      const hasNl = trail.includes("\n");
+      parts.push({text: hasNl ? "\n" : " ", isBreak: hasNl});
+    }
+    return parts;
+  };
+
+  const joinInlineSegments = (segments, trim = true) => {
+    let out = "";
+    let afterBreak = false;
+    let lastWasNonRaw = false;
+    for (const seg of segments) {
+      if (!seg || !seg.text) continue;
+      if (seg.isBreak) {
+        out = out.replace(/[ \t]+$/, "");
+        out += seg.text;
+        afterBreak = true;
+        lastWasNonRaw = false;
+        continue;
+      }
+      if (!seg.raw) {
+        let t = seg.text;
+        if (afterBreak) t = t.replace(/^[ \t]+/, "");
+        if (lastWasNonRaw && out.endsWith(" ") && t.startsWith(" ")) t = t.slice(1);
+        if (!t) continue;
+        out += t;
+        afterBreak = false;
+        lastWasNonRaw = true;
+      } else {
+        out += seg.text;
+        afterBreak = false;
+        lastWasNonRaw = false;
+      }
+    }
+    return trim ? out.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, "") : out;
+  };
+
+  const resolveCopyHref = (rawHref) => {
+    const raw = String(rawHref || "").trim();
+    if (!raw) return "";
+    if (raw.startsWith("#") || /^[a-zA-Z][a-zA-Z0-9+.-]*:/i.test(raw)) return raw;
+    try {
+      return new URL(raw, window.location.href).href;
+    } catch {
+      return raw;
+    }
+  };
+
+  const resolveCopyImgSrc = (rawSrc) => {
+    const raw = String(rawSrc || "").trim();
+    if (!raw) return "";
+    if (/^(?:data:|https?:)/i.test(raw)) return raw;
+    try {
+      return new URL(raw, window.location.href).href;
+    } catch {
+      return raw;
+    }
+  };
+
+  const formatMarkdownDest = (url) =>
+    /[\s()<>]/.test(url) ? `<${url.replace(/[<>]/g, encodeURIComponent)}>` : url;
+
+  const isCopyBlockElement = (node) => {
+    if (!(node instanceof Element)) return false;
+    if (COPY_BLOCK_TAG_SET.has(node.tagName)) return true;
+    return node.matches(
+      ".katex-block, .katex-display, .md-alert, .code-block, .mermaid, .md-diagram, .footnotes, .markdown-footnotes, .sps-footnote-registry, .media-scroll, .iframe-shell, .iframe-fit, .share-article, .kb-header, .kb-title-row, .markdown-body"
+    );
+  };
+
+  const collectInlineSegments = (nodes, ctx, out) => {
+    for (const node of Array.from(nodes || [])) {
+      if (node.nodeType === 3) {
+        const collapsed = (node.nodeValue || "").replace(/[ \t\r\n\f\v]+/g, " ");
+        if (collapsed) {
+          out.push({text: ctx.inTableCell ? escapeTablePipes(collapsed) : collapsed, raw: false});
+        }
+        continue;
+      }
+      if (node.nodeType !== 1) continue;
+      if (ctx.skipNodes?.has(node)) continue;
+      if (node.matches(COPY_IGNORED_SELECTOR)) continue;
+
+      if (node.matches(".katex-block, .katex-display")) {
+        const tex = extractKatexSource(node).trim();
+        if (tex) {
+          const single = tex.replace(/\r?\n+/g, " ");
+          out.push({
+            text: `$$${ctx.inTableCell ? escapeTablePipes(single) : single}$$`,
+            raw: true,
+          });
+        }
+        continue;
+      }
+      if (node.matches(".katex, .katex-error")) {
+        const tex = extractKatexSource(node).trim().replace(/\r?\n+/g, " ");
+        if (tex) {
+          out.push({
+            text: `$${ctx.inTableCell ? escapeTablePipes(tex) : tex}$`,
+            raw: true,
+          });
+        }
+        continue;
+      }
+      if (node.tagName === "BR") {
+        out.push({text: ctx.inTableCell ? "<br>" : "\n", raw: true, isBreak: true});
+        continue;
+      }
+      if (node.tagName === "CODE") {
+        let code = (node.textContent || "").replace(/\r?\n/g, " ");
+        if (!code) continue;
+        if (ctx.inTableCell) code = escapeTablePipes(code);
+        let maxRun = 0;
+        const runs = code.match(/`+/g);
+        if (runs) {
+          for (const r of runs) if (r.length > maxRun) maxRun = r.length;
+        }
+        const ticks = "`".repeat(maxRun + 1);
+        const pad =
+          code.startsWith("`") ||
+          code.endsWith("`") ||
+          (code.startsWith(" ") && code.endsWith(" ") && /[^ ]/.test(code));
+        out.push({text: pad ? `${ticks} ${code} ${ticks}` : `${ticks}${code}${ticks}`, raw: true});
+        continue;
+      }
+      if (node.tagName === "IMG") {
+        const rawSrc = (node.getAttribute("src") || "").trim();
+        if (!rawSrc || !isSafeShareUrl(rawSrc, {tag: "img", attr: "src"})) {
+          const altOnly = node.getAttribute("alt") || "";
+          if (altOnly) out.push({text: altOnly, raw: false});
+          continue;
+        }
+        const src = resolveCopyImgSrc(rawSrc);
+        const alt = (node.getAttribute("alt") || "").replace(/\]/g, "\\]").replace(/\r?\n/g, " ");
+        const title = node.getAttribute("title") || "";
+        const titlePart = title ? ` "${title.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"` : "";
+        out.push({text: `![${alt}](${formatMarkdownDest(src)}${titlePart})`, raw: true});
+        continue;
+      }
+      if (node.tagName === "SUP" && node.classList.contains("footnote-ref")) {
+        const link = node.querySelector("a[href^='#fn']") || node;
+        const idx = parseFootnoteIndexLoose(link.getAttribute("href") || node.textContent || "");
+        const label = idx > 0 ? String(idx) : (node.textContent || "").trim().replace(/^\[|\]$/g, "");
+        if (label) out.push({text: `[^${label}]`, raw: true});
+        continue;
+      }
+      if (node.tagName === "A") {
+        const inner = serializeInlineNodes(node.childNodes, ctx);
+        const rawHref = (node.getAttribute("href") || "").trim();
+        if (!rawHref || !isSafeShareUrl(rawHref, {tag: "a", attr: "href"})) {
+          if (inner) out.push({text: inner, raw: true});
+          continue;
+        }
+        const href = resolveCopyHref(rawHref);
+        const title = node.getAttribute("title") || "";
+        if (!title && inner.trim() === rawHref && /^https?:\/\//i.test(rawHref)) {
+          out.push({text: rawHref, raw: true});
+          continue;
+        }
+        const titlePart = title ? ` "${title.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"` : "";
+        out.push({text: `[${inner}](${formatMarkdownDest(href)}${titlePart})`, raw: true});
+        continue;
+      }
+      if (node.tagName === "MARK" && node.classList.contains("kb-search-hl")) {
+        collectInlineSegments(node.childNodes, ctx, out);
+        continue;
+      }
+      if (node.matches("strong, b")) {
+        const inner = serializeInlineNodesRawKeepEdge(node.childNodes, ctx);
+        out.push(...wrapInlineMarker(inner, "**"));
+        continue;
+      }
+      if (node.matches("em, i")) {
+        const inner = serializeInlineNodesRawKeepEdge(node.childNodes, ctx);
+        out.push(...wrapInlineMarker(inner, "*"));
+        continue;
+      }
+      if (node.matches("del, s, strike")) {
+        const inner = serializeInlineNodesRawKeepEdge(node.childNodes, ctx);
+        out.push(...wrapInlineMarker(inner, "~~"));
+        continue;
+      }
+      if (node.tagName === "INS") {
+        const inner = serializeInlineNodesRawKeepEdge(node.childNodes, ctx);
+        out.push(...wrapInlineMarker(inner, "++"));
+        continue;
+      }
+      if (node.tagName === "MARK") {
+        const inner = serializeInlineNodesRawKeepEdge(node.childNodes, ctx);
+        out.push(...wrapInlineMarker(inner, "=="));
+        continue;
+      }
+      if (node.tagName === "SUB") {
+        const inner = serializeInlineNodes(node.childNodes, ctx);
+        if (inner) out.push({text: /\s/.test(inner) ? `<sub>${inner}</sub>` : `~${inner}~`, raw: true});
+        continue;
+      }
+      if (node.tagName === "SUP") {
+        const inner = serializeInlineNodes(node.childNodes, ctx);
+        if (inner) out.push({text: /\s/.test(inner) ? `<sup>${inner}</sup>` : `^${inner}^`, raw: true});
+        continue;
+      }
+      if (node.tagName === "KBD") {
+        const inner = serializeInlineNodes(node.childNodes, ctx);
+        if (inner) out.push({text: `<kbd>${inner}</kbd>`, raw: true});
+        continue;
+      }
+      collectInlineSegments(node.childNodes, ctx, out);
+    }
+  };
+
+  const serializeInlineNodesRawKeepEdge = (nodes, ctx) => {
+    const segs = [];
+    collectInlineSegments(nodes, ctx, segs);
+    return joinInlineSegments(segs, false);
+  };
+
+  const serializeInlineNodes = (nodes, ctx) => {
+    const segs = [];
+    collectInlineSegments(nodes, ctx, segs);
+    return joinInlineSegments(segs);
+  };
+
+  const prefixQuoteLines = (text) =>
+    String(text || "")
+      .split("\n")
+      .map((line) => (line === "" ? ">" : `> ${line}`))
+      .join("\n");
+
+  const serializeTableCell = (cell, ctx) => {
+    const cellCtx = {...ctx, inTableCell: true};
+    const hasBlock = Array.from(cell.children).some(isCopyBlockElement);
+    const raw = hasBlock ? serializeBlockChildren(cell.childNodes, cellCtx) : serializeInlineNodes(cell.childNodes, cellCtx);
+    return raw.trim().replace(/\r?\n+/g, "<br>");
+  };
+
+  const serializeTableElement = (tableEl, ctx) => {
+    const allRows = Array.from(tableEl.querySelectorAll("tr")).filter((tr) => tr.closest("table") === tableEl);
+    if (!allRows.length) return "";
+    const rowCellsText = (tr) =>
+      Array.from(tr.children)
+        .filter((c) => c.tagName === "TH" || c.tagName === "TD")
+        .map((cell) => serializeTableCell(cell, ctx));
+    const padRow = (cells, width) => {
+      const padded = cells.slice();
+      while (padded.length < width) padded.push("");
+      return `| ${padded.join(" | ")} |`;
+    };
+
+    if (tableEl.dataset.spsPartialRow === "1") {
+      const cells = rowCellsText(allRows[0]);
+      return cells.length ? padRow(cells, cells.length) : "";
+    }
+
+    const theadRows = allRows.filter((tr) => tr.parentElement?.tagName === "THEAD");
+    const nonTheadRows = allRows.filter((tr) => tr.parentElement?.tagName !== "THEAD");
+    let colAligns = [];
+    try {
+      const parsed = JSON.parse(tableEl.dataset.spsColAligns || "[]");
+      if (Array.isArray(parsed)) colAligns = parsed;
+    } catch {
+      colAligns = [];
+    }
+
+    if (!theadRows.length && allRows.length === 1) {
+      const cells = Array.from(allRows[0].children).filter((c) => c.tagName === "TH" || c.tagName === "TD");
+      if (!cells.length) return "";
+      const allTh = cells.every((c) => c.tagName === "TH");
+      const texts = cells.map((cell) => serializeTableCell(cell, ctx));
+      if (!allTh) return padRow(texts, texts.length);
+      const aligns = cells.map((cell, idx) => getTableCellAlign(cell) || colAligns[idx] || "");
+      const sep = aligns.map((a) => (a === "left" ? ":---" : a === "center" ? ":---:" : a === "right" ? "---:" : "---"));
+      return `${padRow(texts, texts.length)}\n${padRow(sep, texts.length)}`;
+    }
+
+    const headerTr = theadRows[0] || allRows[0];
+    const bodyTrs = theadRows.length ? [...theadRows.slice(1), ...nonTheadRows] : allRows.slice(1);
+    const headerTexts = rowCellsText(headerTr);
+    const bodyTexts = bodyTrs.map(rowCellsText);
+    const width = Math.max(headerTexts.length, ...bodyTexts.map((r) => r.length), 0);
+    if (!width) return "";
+
+    const headerCells = Array.from(headerTr.children).filter((c) => c.tagName === "TH" || c.tagName === "TD");
+    const fallbackRowCells = bodyTrs[0]
+      ? Array.from(bodyTrs[0].children).filter((c) => c.tagName === "TH" || c.tagName === "TD")
+      : [];
+    const aligns = Array.from({length: width}, (_, idx) =>
+      getTableCellAlign(headerCells[idx]) ||
+      getTableCellAlign(fallbackRowCells[idx]) ||
+      colAligns[idx] ||
+      ""
+    );
+    const sep = aligns.map((a) =>
+      a === "left" ? ":---" : a === "center" ? ":---:" : a === "right" ? "---:" : "---"
+    );
+    const lines = [padRow(headerTexts, width), padRow(sep, width)];
+    for (const row of bodyTexts) lines.push(padRow(row, width));
+    return lines.join("\n");
+  };
+
+  const serializeListElement = (listEl, ctx) => {
+    const items = Array.from(listEl.children).filter((c) => c.tagName === "LI");
+    if (!items.length) return "";
+    const isOrdered = listEl.tagName === "OL";
+    const baseStart = Number.parseInt(listEl.getAttribute("start") || "1", 10);
+    let num = Number.isFinite(baseStart) ? baseStart : 1;
+    const isLoose = items.some((li) => Boolean(li.querySelector(":scope > p")));
+    const serializedItems = [];
+
+    for (const li of items) {
+      const marker = isOrdered ? `${num}. ` : "- ";
+      if (isOrdered) num += 1;
+      const checkbox = li.querySelector(
+        ":scope > input.task-list-item-checkbox, :scope > p:first-child > input.task-list-item-checkbox, :scope > label:first-child > input.task-list-item-checkbox"
+      ) || (li.classList.contains("task-list-item") ? li.querySelector(":scope > input[type='checkbox'], :scope > p:first-child > input[type='checkbox']") : null);
+      const itemPrefix = checkbox ? `${marker}[${checkbox.checked ? "x" : " "}] ` : marker;
+      const itemCtx = checkbox ? {...ctx, skipNodes: new Set([...(ctx.skipNodes || []), checkbox])} : ctx;
+
+      const chunks = [];
+      let inlineBuf = [];
+      const flushInline = () => {
+        if (!inlineBuf.length) return;
+        const text = serializeInlineNodes(inlineBuf, itemCtx);
+        inlineBuf = [];
+        if (text) chunks.push({kind: "inline", text});
+      };
+      for (const child of Array.from(li.childNodes)) {
+        if (itemCtx.skipNodes?.has(child)) continue;
+        if (isCopyBlockElement(child)) {
+          flushInline();
+          const blockText = serializeBlockNode(child, itemCtx);
+          if (blockText) {
+            chunks.push({
+              kind: child.tagName === "UL" || child.tagName === "OL" ? "sublist" : "block",
+              text: blockText,
+            });
+          }
+        } else {
+          inlineBuf.push(child);
+        }
+      }
+      flushInline();
+
+      if (!chunks.length) {
+        serializedItems.push(itemPrefix.trimEnd());
+        continue;
+      }
+
+      const indent = " ".repeat(marker.length);
+      let combined = "";
+      chunks.forEach((chunk, idx) => {
+        if (idx === 0) {
+          combined = chunk.text;
+        } else {
+          const prev = chunks[idx - 1];
+          const sep = prev.kind === "inline" && chunk.kind === "sublist" ? "\n" : "\n\n";
+          combined += sep + chunk.text;
+        }
+      });
+
+      const lines = combined.split("\n");
+      const formatted = lines
+        .map((line, idx) => {
+          if (idx === 0) return `${itemPrefix}${line}`;
+          return line === "" ? "" : `${indent}${line}`;
+        })
+        .join("\n");
+      serializedItems.push(formatted);
+    }
+
+    return serializedItems.join(isLoose ? "\n\n" : "\n");
+  };
+
+  const serializeDefinitionList = (dlEl, ctx) => {
+    const blocks = [];
+    let pendingGroup = [];
+    const flush = () => {
+      if (pendingGroup.length) {
+        blocks.push(pendingGroup.join("\n"));
+        pendingGroup = [];
+      }
+    };
+    for (const child of Array.from(dlEl.children)) {
+      if (child.tagName === "DT") {
+        if (pendingGroup.some((line) => line.startsWith(": "))) flush();
+        const term = serializeInlineNodes(child.childNodes, ctx);
+        if (term) pendingGroup.push(term);
+      } else if (child.tagName === "DD") {
+        const hasBlock = Array.from(child.children).some(isCopyBlockElement);
+        const def = hasBlock ? serializeBlockChildren(child.childNodes, ctx) : serializeInlineNodes(child.childNodes, ctx);
+        if (def) {
+          const lines = def.split("\n");
+          pendingGroup.push(
+            lines.map((line, idx) => (idx === 0 ? `: ${line}` : line === "" ? "" : `  ${line}`)).join("\n")
+          );
+        }
+      }
+    }
+    flush();
+    return blocks.join("\n\n");
+  };
+
+  const serializeAlertElement = (el, ctx) => {
+    const calloutType = el.dataset.spsCalloutType;
+    const titleEl = el.querySelector(":scope > .md-alert__title");
+    if (calloutType || titleEl) {
+      let type = calloutType || "NOTE";
+      if (!calloutType) {
+        const cls = Array.from(el.classList).find((c) => c.startsWith("md-alert--"));
+        if (cls) type = cls.slice(10).toUpperCase();
+      }
+      let title = "";
+      if (el.hasAttribute("data-sps-callout-title")) {
+        title = el.dataset.spsCalloutTitle || "";
+      } else if (titleEl) {
+        const labelText = (titleEl.querySelector(".md-alert__label")?.textContent || "").trim();
+        const hasImgIcon = Boolean(titleEl.querySelector(".md-alert__icon img"));
+        if (hasImgIcon || (labelText && labelText !== COPY_CALLOUT_DEFAULT_LABELS[type])) {
+          title = serializeInlineNodes(titleEl.childNodes, ctx);
+        }
+      }
+      const header = title ? `> [!${type}] ${title}` : `> [!${type}]`;
+      const bodyNodes = Array.from(el.childNodes).filter((n) => n !== titleEl);
+      const body = serializeBlockChildren(bodyNodes, ctx);
+      return body ? `${header}\n${prefixQuoteLines(body)}` : header;
+    }
+    const containerType = el.dataset.spsContainerType;
+    if (containerType) {
+      const body = serializeBlockChildren(el.childNodes, ctx);
+      return body ? `::: ${containerType}\n${body}\n:::` : `::: ${containerType}\n:::`;
+    }
+    return serializeBlockChildren(el.childNodes, ctx);
+  };
+
+  const serializeFootnotesSection = (sectionEl, ctx) => {
+    const items = Array.from(sectionEl.querySelectorAll("ol > li"));
+    if (!items.length) return "";
+    const defs = [];
+    items.forEach((li, idx) => {
+      const fnIdx = getFootnoteIndexForItem(li, idx);
+      const id = fnIdx > 0 ? String(fnIdx) : String(li.id || idx + 1).replace(/^fn/, "");
+      const body = serializeBlockChildren(li.childNodes, ctx);
+      if (!body) return;
+      const lines = body.split("\n");
+      defs.push(
+        lines.map((line, i) => (i === 0 ? `[^${id}]: ${line}` : line === "" ? "" : `    ${line}`)).join("\n")
+      );
+    });
+    return defs.join("\n\n");
+  };
+
+  const serializeBlockNode = (node, ctx) => {
+    if (node.nodeType === 3) {
+      const text = (node.nodeValue || "").replace(/[ \t\r\n\f\v]+/g, " ").trim();
+      return text;
+    }
+    if (node.nodeType !== 1) return "";
+    if (ctx.skipNodes?.has(node)) return "";
+    if (node.matches(COPY_IGNORED_SELECTOR)) return "";
+
+    if (node.matches(".mermaid[data-sps-md-source], div.mermaid[data-mermaid-source]")) {
+      const lang = node.dataset.spsMdLang || "mermaid";
+      const source = node.dataset.spsMdSource ?? node.dataset.mermaidSource ?? node.textContent ?? "";
+      return formatCodeFence(source, lang);
+    }
+    if (node.matches(".md-diagram")) {
+      let lang = node.dataset.spsMdLang || "";
+      let source = node.dataset.spsMdSource ?? "";
+      if (!source && node.classList.contains("md-diagram--echarts") && node.hasAttribute("data-sps-echarts-source")) {
+        lang = lang || "echarts";
+        try {
+          source = decodeURIComponent(node.getAttribute("data-sps-echarts-source") || "");
+        } catch {
+          source = "";
+        }
+      }
+      if (!source) {
+        const preCode = node.querySelector("pre code");
+        if (preCode) {
+          source = preCode.textContent || "";
+          if (!lang) {
+            const cls = Array.from(node.classList).find((c) => c.startsWith("md-diagram--"));
+            lang = cls ? cls.slice(12) : "";
+          }
+        }
+      }
+      return source ? formatCodeFence(source, lang) : "";
+    }
+    if (node.matches(".katex-block, .katex-display")) {
+      const tex = extractKatexSource(node).trim();
+      if (!tex) return "";
+      if (ctx.inTableCell) {
+        return `$$${escapeTablePipes(tex.replace(/\r?\n+/g, " "))}$$`;
+      }
+      return `$$\n${tex}\n$$`;
+    }
+    if (node.classList.contains("code-block") || node.tagName === "PRE") {
+      if (node.classList.contains("code-lines")) return "";
+      const codeEl = node.tagName === "PRE"
+        ? node.querySelector(":scope > code") || node
+        : node.querySelector("pre:not(.code-lines) > code") || node.querySelector("pre:not(.code-lines)");
+      if (!codeEl) return "";
+      const lang = getCodeElementLanguage(node);
+      return formatCodeFence(codeEl.textContent || "", lang);
+    }
+    if (node.classList.contains("md-alert")) {
+      return serializeAlertElement(node, ctx);
+    }
+    if (node.matches(".footnotes, .markdown-footnotes, .sps-footnote-registry")) {
+      return serializeFootnotesSection(node, ctx);
+    }
+    if (node.tagName === "HR") {
+      return node.classList.contains("footnotes-sep") ? "" : "---";
+    }
+    if (/^H[1-6]$/.test(node.tagName)) {
+      const level = Number(node.tagName.slice(1));
+      const text = serializeInlineNodes(node.childNodes, ctx);
+      return text ? `${"#".repeat(level)} ${text}` : "";
+    }
+    if (node.tagName === "P") {
+      return serializeInlineNodes(node.childNodes, ctx);
+    }
+    if (node.tagName === "BLOCKQUOTE") {
+      const body = serializeBlockChildren(node.childNodes, ctx);
+      return body ? prefixQuoteLines(body) : "";
+    }
+    if (node.tagName === "UL" || node.tagName === "OL") {
+      return serializeListElement(node, ctx);
+    }
+    if (node.tagName === "DL") {
+      return serializeDefinitionList(node, ctx);
+    }
+    if (node.tagName === "TABLE") {
+      return serializeTableElement(node, ctx);
+    }
+    if (node.tagName === "DETAILS") {
+      const summary = node.querySelector(":scope > summary");
+      const summaryText = summary ? serializeInlineNodes(summary.childNodes, ctx) : "";
+      const rest = Array.from(node.childNodes).filter((n) => n !== summary);
+      const body = serializeBlockChildren(rest, ctx);
+      const parts = ["<details>"];
+      if (summaryText) parts.push(`<summary>${summaryText}</summary>`);
+      if (body) parts.push(summaryText ? `\n${body}` : body);
+      parts.push("</details>");
+      return parts.join("\n");
+    }
+    if (node.tagName === "IFRAME") {
+      const src = (node.getAttribute("src") || "").trim();
+      return src && isSafeShareUrl(src, {tag: "iframe", attr: "src"}) ? `<iframe src="${escapeHtml(src)}"></iframe>` : "";
+    }
+    return serializeBlockChildren(node.childNodes, ctx);
+  };
+
+  const serializeBlockChildren = (nodes, ctx) => {
+    const blocks = [];
+    let inlineBuf = [];
+    const flushInline = () => {
+      if (!inlineBuf.length) return;
+      const text = serializeInlineNodes(inlineBuf, ctx);
+      inlineBuf = [];
+      if (text) blocks.push(text);
+    };
+    for (const node of Array.from(nodes || [])) {
+      if (node.nodeType === 1 && node.matches(COPY_IGNORED_SELECTOR)) continue;
+      if (isCopyBlockElement(node)) {
+        flushInline();
+        const block = serializeBlockNode(node, ctx);
+        if (block) blocks.push(block);
+      } else {
+        inlineBuf.push(node);
+      }
+    }
+    flushInline();
+    return blocks.join("\n\n");
+  };
+
+  const serializeSelectionToMarkdown = (selection) => {
+    const ranges = [];
+    for (let i = 0; i < selection.rangeCount; i += 1) {
+      const range = selection.getRangeAt(i);
+      if (!range.collapsed) ranges.push(range);
+    }
+    if (!ranges.length) return null;
+
+    const scopedRanges = [];
+    for (const range of ranges) {
+      const scope = findArticleCopyScope(range);
+      if (!scope) return null;
+      scopedRanges.push({range, scope});
+    }
+
+    if (scopedRanges.length === 1) {
+      const sole = scopedRanges[0].range;
+      const startEl = getCopyNodeElement(sole.startContainer);
+      const endEl = getCopyNodeElement(sole.endContainer);
+      const startPre = startEl?.closest("pre");
+      const endPre = endEl?.closest("pre");
+      if (startPre && startPre === endPre && !startPre.classList.contains("code-lines")) {
+        return sole.cloneContents().textContent || "";
+      }
+    }
+
+    const footnotesHiddenOnPage =
+      document.body.classList.contains("sps-footnote-tab") ||
+      (document.body.classList.contains("layout-share") &&
+        !document.body.classList.contains("pdf-export-preview") &&
+        !document.body.classList.contains("pdf-export-embedded"));
+
+    const parts = [];
+    for (const {range, scope} of scopedRanges) {
+      const normalized = normalizeSelectionRange(range, scope.scopeRoot);
+      if (!normalized) continue;
+      const fragment = normalized.cloneContents();
+      if (footnotesHiddenOnPage) {
+        fragment.querySelectorAll(COPY_HIDDEN_FOOTNOTES_SELECTOR).forEach((n) => n.remove());
+      }
+      fragment.querySelectorAll(COPY_IGNORED_SELECTOR).forEach((n) => n.remove());
+      pruneEmptyBoundaryBlocks(fragment, true);
+      pruneEmptyBoundaryBlocks(fragment, false);
+      const contextual = reconstructAncestorContext(fragment, normalized, scope.scopeRoot);
+      const mdText = serializeBlockChildren(contextual.childNodes, {inTableCell: false});
+      if (mdText) parts.push(mdText);
+    }
+    return parts.join("\n\n");
+  };
+
+  const initShareMarkdownCopy = () => {
+    if (markdownCopyReady) return;
+    if (!document.body.classList.contains("layout-share")) return;
+    markdownCopyReady = true;
+    document.addEventListener("copy", (event) => {
+      if (!document.body.classList.contains("layout-share")) return;
+      if (!event.clipboardData) return;
+      if (isEditableOrSourceNode(document.activeElement) || isEditableOrSourceNode(event.target)) return;
+      const selection = window.getSelection?.();
+      if (!selection || selection.isCollapsed || !selection.rangeCount) return;
+      const markdown = serializeSelectionToMarkdown(selection);
+      if (markdown === null || markdown === "") return;
+      event.clipboardData.setData("text/plain", markdown);
+      event.preventDefault();
+      readerAnnounce("Copied as Markdown");
+    });
+  };
+
+
   const initMcpDebugLogs = () => {
     const panel = document.querySelector(".mcp-logs-panel");
     if (!panel) return;
@@ -6162,6 +7395,7 @@ const initImageViewer = () => {
   initReaderBehavior();
   initShareDocNavigation();
   initImageViewer();
+  initShareMarkdownCopy();
   initScrollTop();
 
   refreshShareDynamicContent();
