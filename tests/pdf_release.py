@@ -63,9 +63,9 @@ class PdfReleaseTests:
         share = self.share()
         self.pdf_visitor(share)
         with self.isolated_pdf_quota_settings():
-            self.rows("DELETE FROM settings WHERE key = 'pdf_export_requests'")
+            self.rows("INSERT OR REPLACE INTO settings(key, value, updated_at) VALUES ('pdf_export_ip_requests', '10', '2026-01-01'), ('pdf_export_fingerprint_requests', '6', '2026-01-01')")
             self.rows("UPDATE settings SET value = '600' WHERE key = 'pdf_export_window_seconds'")
-            self.rows("INSERT INTO settings(key, value, updated_at) VALUES ('pdf_export_ip_requests', '10', '2026-01-01'), ('pdf_export_fingerprint_requests', '6', '2026-01-01')")
+            self.rows("DELETE FROM settings WHERE key = 'pdf_export_requests'")
             results = self.pdf_workers(share, 12)
             self.assertEqual(results.count('accepted'), 4, results)
             self.assertEqual(results.count('limited'), 8, results)
