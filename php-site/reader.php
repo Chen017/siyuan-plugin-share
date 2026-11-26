@@ -267,39 +267,6 @@ function doc_has_empty_content(array $doc): bool {
     return ($stripped ?? trim($body)) === '';
 }
 
-function find_doc_tree_node_by_id(array $nodes, string $targetDocId): ?array {
-    foreach ($nodes as $node) {
-        $doc = $node['doc'] ?? null;
-        if ($doc && (string)($doc['doc_id'] ?? '') === $targetDocId) {
-            return $node;
-        }
-        if (!empty($node['children'])) {
-            $found = find_doc_tree_node_by_id($node['children'], $targetDocId);
-            if ($found !== null) {
-                return $found;
-            }
-        }
-    }
-    return null;
-}
-
-function find_first_non_empty_descendant_doc(array $nodes): ?array {
-    foreach ($nodes as $node) {
-        $doc = $node['doc'] ?? null;
-        $hasChildren = !empty($node['children']);
-        if ($doc && !($hasChildren && doc_has_empty_content($doc))) {
-            return $doc;
-        }
-        if ($hasChildren) {
-            $found = find_first_non_empty_descendant_doc($node['children']);
-            if ($found !== null) {
-                return $found;
-            }
-        }
-    }
-    return null;
-}
-
 function render_reader_library(string $title, string $slug): string {
     return '<a class="reader-library" href="' . base_path() . '/s/' . rawurlencode($slug) . '" data-share-nav="doc" data-doc-id="">'
         . render_reader_icon('book') . '<span>' . htmlspecialchars($title) . '</span></a>';
@@ -557,22 +524,6 @@ function route_share(string $slug, ?string $docId = null): void {
                 render_share_not_found_page();
                 return;
             }
-            $documentTree = build_doc_tree($docs, $activeDocId);
-            if (doc_has_empty_content($doc)) {
-                $activeNode = find_doc_tree_node_by_id($documentTree, (string)$activeDocId);
-                if ($activeNode && !empty($activeNode['children'])) {
-                    $fallbackDoc = find_first_non_empty_descendant_doc($activeNode['children']);
-                    if ($fallbackDoc) {
-                        $fallbackId = (string)$fallbackDoc['doc_id'];
-                        if (!$isPartial) {
-                            redirect('/s/' . rawurlencode($slug) . '/' . rawurlencode($fallbackId));
-                        }
-                        $doc = $fallbackDoc;
-                        $activeDocId = $fallbackId;
-                        $documentTree = build_doc_tree($docs, $activeDocId);
-                    }
-                }
-            }
             $docTitleRaw = trim((string)($doc['title'] ?? '')) ?: $shareTitleRaw;
             $docTitle = htmlspecialchars($docTitleRaw);
             $front = extract_front_matter($loadDocMarkdown($doc));
@@ -581,6 +532,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $markdown = replace_custom_emoji_tokens($markdown, (int)$shareId, $assetBasePath);
             $markdown = insert_adjacent_emoji_image_spacing($markdown);
             $checkShareAccess();
+            $documentTree = build_doc_tree($docs, $activeDocId);
             $treeHtml = render_doc_tree($documentTree, $slug, $activeDocId, 0, '', $assetBasePath);
             $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
             $sidebar .= render_reader_library($shareTitleRaw, $slug);
@@ -721,20 +673,6 @@ function route_share(string $slug, ?string $docId = null): void {
             if (!$doc) {
                 render_share_not_found_page();
                 return;
-            }
-            if (doc_has_empty_content($doc)) {
-                $activeNode = find_doc_tree_node_by_id($notebookTree, (string)$docId);
-                if ($activeNode && !empty($activeNode['children'])) {
-                    $fallbackDoc = find_first_non_empty_descendant_doc($activeNode['children']);
-                    if ($fallbackDoc) {
-                        $fallbackId = (string)$fallbackDoc['doc_id'];
-                        if (!$isPartial) {
-                            redirect('/s/' . rawurlencode($slug) . '/' . rawurlencode($fallbackId));
-                        }
-                        $doc = $fallbackDoc;
-                        $docId = $fallbackId;
-                    }
-                }
             }
             $docTitleRaw = trim((string)($doc['title'] ?? '')) ?: $shareTitleRaw;
             $docTitle = htmlspecialchars($docTitleRaw);
