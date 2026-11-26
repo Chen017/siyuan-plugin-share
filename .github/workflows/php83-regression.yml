@@ -45,6 +45,7 @@ jobs:
           SIYUAN_BROWSER_EXECUTABLE="$chrome" SIYUAN_PLAYWRIGHT_MODULE="$RUNNER_TEMP/browser-test/node_modules/playwright" node tests/pdf-delimiter.cjs
           SIYUAN_BROWSER_EXECUTABLE="$chrome" SIYUAN_PLAYWRIGHT_MODULE="$RUNNER_TEMP/browser-test/node_modules/playwright" node tests/heading-spacing.cjs
           SIYUAN_BROWSER_EXECUTABLE="$chrome" SIYUAN_PLAYWRIGHT_MODULE="$RUNNER_TEMP/browser-test/node_modules/playwright" node tests/tree-groups.cjs
+          SIYUAN_BROWSER_EXECUTABLE="$chrome" SIYUAN_PLAYWRIGHT_MODULE="$RUNNER_TEMP/browser-test/node_modules/playwright" node tests/celebration-browser.cjs
           SIYUAN_CHROMIUM_EXECUTABLE="$chrome" \
           SIYUAN_BROWSER_EXECUTABLE="$chrome" \
           SIYUAN_PLAYWRIGHT_MODULE="$RUNNER_TEMP/browser-test/node_modules/playwright" \

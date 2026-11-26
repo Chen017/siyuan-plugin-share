@@ -602,7 +602,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $content .= $sidebar;
             $content .= $mainHtml;
             $content .= render_share_footer() . '</div>';
-            render_page($docTitleRaw, $content, null, '', ['layout' => 'share', 'markdown' => true, 'footer_in_shell' => true]);
+            render_page($docTitleRaw, $content, null, '', ['layout' => 'share', 'markdown' => true, 'footer_in_shell' => true, 'celebration' => true]);
             return;
         }
 
@@ -638,7 +638,7 @@ function route_share(string $slug, ?string $docId = null): void {
         $content .= '<div class="markdown-body" data-md-id="doc">' . render_markdown($markdown) . '</div>';
         $content .= render_share_markdown_source($markdown);
         $content .= '</div></div>' . render_share_footer() . '</div>';
-        render_page($docTitleRaw, $content, null, '', ['layout' => 'share', 'markdown' => true, 'footer_in_shell' => true]);
+        render_page($docTitleRaw, $content, null, '', ['layout' => 'share', 'markdown' => true, 'footer_in_shell' => true, 'celebration' => true]);
     }
 
     if ($share['type'] === 'notebook') {
@@ -716,7 +716,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $content .= $sidebar;
             $content .= $mainHtml;
             $content .= render_share_footer() . '</div>';
-            render_page($docTitleRaw, $content, null, '', ['layout' => 'share', 'markdown' => true, 'footer_in_shell' => true]);
+            render_page($docTitleRaw, $content, null, '', ['layout' => 'share', 'markdown' => true, 'footer_in_shell' => true, 'celebration' => true]);
         }
 
         if (!$docId) {
@@ -734,7 +734,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $content .= $sidebar;
             $content .= $mainHtml;
             $content .= render_share_footer() . '</div>';
-            render_page($shareTitleRaw, $content, null, '', ['layout' => 'share', 'markdown' => true, 'footer_in_shell' => true]);
+            render_page($shareTitleRaw, $content, null, '', ['layout' => 'share', 'markdown' => true, 'footer_in_shell' => true, 'celebration' => true]);
         }
 
     }

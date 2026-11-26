@@ -4,9 +4,9 @@ WORKDIR /build
 RUN npm install --no-save --no-package-lock --ignore-scripts terser@5.44.0 clean-css@5.3.3
 COPY scripts/minify-css.cjs /build/minify-css.cjs
 COPY php-site/assets/ /build/assets/
-RUN set -e; for f in app.js controls.js pdf-export.js pdf-text-layer.js; do \
+RUN set -e; for f in app.js controls.js pdf-export.js pdf-text-layer.js celebration.js; do \
       ./node_modules/.bin/terser "assets/$f" --compress --mangle --output "assets/$f.min" && mv "assets/$f.min" "assets/$f"; \
-    done && node /build/minify-css.cjs assets/style.css assets/reader-style.css assets/controls.css assets/pdf-export.css
+    done && node /build/minify-css.cjs assets/style.css assets/reader-style.css assets/controls.css assets/pdf-export.css assets/celebration.css
 
 FROM php:8.3.36-fpm-alpine
 

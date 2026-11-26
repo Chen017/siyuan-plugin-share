@@ -283,5 +283,5 @@ if ($path === '/') {
     $hasHome = reader_home_url_key($home) !== '';
     if ($hasHome) $content .= '<a class="button primary" href="' . htmlspecialchars($home, ENT_QUOTES) . '">Open notebook' . render_reader_icon('arrow') . '</a>';
     $content .= '<a class="button' . ($hasHome ? '' : ' primary') . '" href="' . $base . '/login">Sign in</a></div></div></section>';
-    render_page('Home', $content, null);
+    render_page('Home', $content, null, '', ['celebration' => true]);
 }

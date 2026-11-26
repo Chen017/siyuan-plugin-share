@@ -150,7 +150,7 @@
     document.addEventListener("keydown", (event) => {
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "k" || event.altKey) return;
       const input = document.querySelector("[data-share-search-input]");
-      if (!input || document.querySelector("dialog[open], .image-viewer:not([hidden])")) return;
+      if (!input || document.querySelector("dialog[open], .image-viewer:not([hidden]), .sps-celebration-overlay:not([hidden])")) return;
       event.preventDefault();
       document.dispatchEvent(new Event("sps:reader-show-sidebar"));
       document.querySelector("[data-reader-show-tree]")?.click();

@@ -74,6 +74,7 @@ require_once __DIR__ . '/markdown.php';
 require_once __DIR__ . '/share-access.php';
 require_once __DIR__ . '/share-assets.php';
 require_once __DIR__ . '/reader.php';
+require_once __DIR__ . '/celebration.php';
 require_once __DIR__ . '/mcp-content.php';
 require_once __DIR__ . '/mcp-oauth.php';
 require_once __DIR__ . '/mcp-server.php';
@@ -373,6 +374,8 @@ function render_page(string $title, string $content, ?array $user = null, string
     if (!empty($options['pdf_export']) && $includeMarkdown) $layoutClass .= ' pdf-export-preview';
     if (!empty($options['pdf_embedded'])) $layoutClass .= ' pdf-export-embedded';
     $navKey = (string)($options['nav'] ?? '');
+    $showCelebration = celebration_should_render($layout, $options);
+    $celebrationPreview = $showCelebration && celebration_is_preview_request();
     echo "<!doctype html>";
     $pageLanguage = 'en';
     echo "<html lang='{$pageLanguage}'>";
@@ -407,6 +410,9 @@ function render_page(string $title, string $content, ?array $user = null, string
     if ($layout === 'share' && !empty($options['pdf_export'])) {
         $pdfStyleUrl = htmlspecialchars(site_asset_url('pdf-export.css'), ENT_QUOTES, 'UTF-8');
         echo "<link rel='stylesheet' href='{$pdfStyleUrl}'>";
+    }
+    if ($showCelebration) {
+        echo render_celebration_head();
     }
     echo "</head>";
     echo "<body class='{$layoutClass}'>";
@@ -498,6 +504,9 @@ function render_page(string $title, string $content, ?array $user = null, string
         $pdfJsUrl = htmlspecialchars(site_asset_url('pdf-export.js'), ENT_QUOTES, 'UTF-8');
         $pdfCssUrl = htmlspecialchars(site_asset_url('pdf-export.css'), ENT_QUOTES, 'UTF-8');
         echo "<script defer src='{$pdfJsUrl}' data-pdf-css='{$pdfCssUrl}'></script>";
+    }
+    if ($showCelebration) {
+        echo render_celebration_footer($celebrationPreview);
     }
     echo "</body>";
     echo "</html>";

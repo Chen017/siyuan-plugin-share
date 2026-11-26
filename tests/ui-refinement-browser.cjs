@@ -13,8 +13,10 @@ const textContrast = node => {
  const browser=await chromium.launch({executablePath:process.env.SIYUAN_BROWSER_EXECUTABLE||undefined,headless:true});
  const context=await browser.newContext({viewport:{width:1280,height:900},hasTouch:true});
  const errors=[];
+ const base=new URL(shareUrl).origin;
+ await context.addCookies([{name:'sps_celebration_202611',value:'1',url:base,sameSite:'Lax'}]);
  context.on('page',page=>page.on('pageerror',error=>errors.push(error.message)));
- const page=await context.newPage(), base=new URL(shareUrl).origin;
+ const page=await context.newPage();
  const settle=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
  const noOverflow=async p=>assert(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'No page horizontal overflow');
  const chooseScope=async(options,name)=>{

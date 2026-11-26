@@ -17,7 +17,10 @@ const chooseScope = async (page, value) => {
   const base = new URL(shareUrl).origin;
   const context = await browser.newContext({ viewport: { width: 1100, height: 900 }, acceptDownloads: true });
   const errors = [];
-  const giveCookie = (ctx) => ctx.addCookies([{ name: 'sps_pdf_visitor', value: fixture.visitorCookie, url: base, httpOnly: true, sameSite: 'Lax' }]);
+  const giveCookie = (ctx) => ctx.addCookies([
+    { name: 'sps_pdf_visitor', value: fixture.visitorCookie, url: base, httpOnly: true, sameSite: 'Lax' },
+    { name: 'sps_celebration_202611', value: '1', url: base, sameSite: 'Lax' },
+  ]);
   const release = (page) => page.evaluate(async () => {
     const d = document.querySelector('[data-pdf-preview]').dataset;
     await fetch(d.exportUrl + '/release', { method: 'POST', body: new URLSearchParams({ csrf: d.csrf, lease: d.lease }) });

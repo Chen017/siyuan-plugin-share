@@ -279,6 +279,50 @@ class Regression(AdminShareTests, SelectedFixTests, PdfCookieTests, PdfReleaseTe
         _, _, gate = visitor.request('/s/' + protected['slug'])
         self.assertIn('>Unlock</button>', gate.decode())
 
+    def test_celebration_gating_and_markdown_payload(self):
+        share = self.share(docId=self.name + '_cel_doc', title='Cel Doc', markdown='# Hello')
+        protected = self.share(docId=self.name + '_cel_lock', password='lock-pass')
+        expired = self.share(docId=self.name + '_cel_exp', expiresAt=(int(time.time()) - 60) * 1000)
+        visitor = Client(self.base)
+        admin = self.admin()
+
+        for path in [
+            '/login?celebration=preview',
+            '/unknown-celebration-404?celebration=preview',
+            '/s/' + share['slug'] + '/export?celebration=preview',
+            '/s/' + protected['slug'] + '?celebration=preview',
+            '/s/' + expired['slug'] + '?celebration=preview',
+        ]:
+            _, _, body = visitor.request(path)
+            self.assertNotIn(b'celebration.js', body, path)
+            self.assertNotIn(b'sps-celebration-data', body, path)
+
+        for path in ['/dashboard?celebration=preview', '/admin?celebration=preview']:
+            status, _, body = admin.request(path)
+            self.assertEqual(status, 200, path)
+            self.assertNotIn(b'celebration.js', body, path)
+            self.assertNotIn(b'sps-celebration-data', body, path)
+
+        for path in ['/?celebration=preview', '/s/' + share['slug'] + '?celebration=preview']:
+            status, _, body = visitor.request(path)
+            self.assertEqual(status, 200, path)
+            text = body.decode()
+            self.assertIn('celebration.css', text, path)
+            self.assertIn('celebration.js', text, path)
+            match = re.search(r"<script type='application/json' id='sps-celebration-data'>(.*?)</script>", text, re.S)
+            self.assertIsNotNone(match, path)
+            payload = json.loads(match.group(1))
+            self.assertEqual(payload['preview'], True)
+            self.assertIn('<h3>1. 阅读与界面体验</h3>', payload['changelogZhHtml'])
+            self.assertIn('<h3>1. Reading &amp; Interface Experience</h3>', payload['changelogEnHtml'])
+            self.assertIn('<hr', payload['changelogZhHtml'])
+            self.assertIn('<ul>', payload['changelogEnHtml'])
+
+        status, _, suppressed = visitor.request('/s/' + share['slug'], headers={'Cookie': 'sps_celebration_202611=1'})
+        self.assertEqual(status, 200)
+        self.assertNotIn(b'celebration.js', suppressed)
+        self.assertNotIn(b'sps-celebration-data', suppressed)
+
     def test_authentication_and_sessions(self):
         self.assertEqual(self.api('auth/verify')['user']['username'], self.name)
         self.api('auth/verify', key='wrong', status=401)

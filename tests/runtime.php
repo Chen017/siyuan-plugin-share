@@ -171,4 +171,24 @@ unlink($zipPath);
 
 require __DIR__ . '/legacy-migration.php';
 
+$bounds = celebration_window_bounds();
+check($bounds['end'] - $bounds['start'] === (15 * 86400) - 1, 'Celebration window covers full 14-day span in Asia/Shanghai');
+check(!celebration_is_active($bounds['start'] - 1), 'Celebration inactive before start window');
+check(celebration_is_active($bounds['start']), 'Celebration active at start boundary');
+check(celebration_is_active($bounds['end']), 'Celebration active at end boundary');
+check(!celebration_is_active($bounds['end'] + 1), 'Celebration inactive after end window');
+check(!celebration_should_render('public', [], $bounds['start'], [], []), 'Celebration requires explicit route opt-in');
+check(!celebration_should_render('auth', ['celebration' => true], $bounds['start'], [], []), 'Celebration never renders on auth layout');
+check(!celebration_should_render('app', ['celebration' => true], $bounds['start'], [], []), 'Celebration never renders on admin layout');
+check(!celebration_should_render('share', ['celebration' => true, 'pdf_export' => true], $bounds['start'], [], []), 'Celebration never renders on PDF export pages');
+check(!celebration_should_render('share', ['celebration' => true, 'pdf_embedded' => true], $bounds['start'], [], []), 'Celebration never renders in embedded PDF frames');
+check(celebration_should_render('share', ['celebration' => true], $bounds['start'], [], []), 'Celebration renders on eligible share inside window');
+check(celebration_should_render('public', ['celebration' => true], $bounds['start'], [], []), 'Celebration renders on eligible public home inside window');
+check(!celebration_should_render('share', ['celebration' => true], $bounds['start'], [CELEBRATION_COOKIE_NAME => '1'], []), 'Seen cookie suppresses celebration');
+check(celebration_should_render('share', ['celebration' => true], $bounds['end'] + 100, [CELEBRATION_COOKIE_NAME => '1'], ['celebration' => 'preview']), 'Preview mode bypasses time window and seen cookie');
+$celPayload = celebration_payload(false);
+check(str_contains($celPayload['changelogZhHtml'], '<h3>1. 阅读与界面体验</h3>') && str_contains($celPayload['changelogZhHtml'], '<ul>') && str_contains($celPayload['changelogZhHtml'], '<strong>') && str_contains($celPayload['changelogZhHtml'], '<hr'), 'Chinese celebration changelog is rendered from Markdown');
+check(str_contains($celPayload['changelogEnHtml'], '<h3>1. Reading &amp; Interface Experience</h3>') && str_contains($celPayload['changelogEnHtml'], '<ul>') && str_contains($celPayload['changelogEnHtml'], '<strong>') && str_contains($celPayload['changelogEnHtml'], '<hr'), 'English celebration changelog is rendered from Markdown');
+check(!str_contains($celPayload['changelogZhHtml'], '### ') && !str_contains($celPayload['changelogEnHtml'], '**'), 'Rendered celebration changelog leaves no raw Markdown syntax');
+
 echo "Runtime checks passed: {$checks}; PHP " . PHP_VERSION . "\n";
