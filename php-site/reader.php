@@ -263,7 +263,9 @@ function doc_has_empty_content(array $doc): bool {
     }
     $front = extract_front_matter((string)$doc['short_markdown']);
     $body = strip_duplicate_title_heading((string)$front['body'], (string)($doc['title'] ?? ''));
-    $stripped = preg_replace('/[\p{Z}\s]+/u', '', $body);
+    $body = preg_replace('/<span\b[^>]*class=(["\'])(?:(?!\1).)*\bsps-block-anchor\b(?:(?!\1).)*\1[^>]*><\/span>/iu', '', $body) ?? $body;
+    $body = preg_replace('/(?:&nbsp;|&#160;|&#x0*a0;|&#8203;|&#x0*200[bcd];|&ZeroWidthSpace;)/iu', '', $body) ?? $body;
+    $stripped = preg_replace('/[\p{Z}\p{Cf}\p{Cc}\s]+/u', '', $body);
     return ($stripped ?? trim($body)) === '';
 }
 

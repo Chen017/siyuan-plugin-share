@@ -157,7 +157,7 @@ class Regression(AdminShareTests, SelectedFixTests, PdfCookieTests, PdfReleaseTe
         share = self.api('shares/notebook', {
             'notebookId': self.name, 'title': '课程 <Notebook>',
             'docs': [
-                {'docId': self.name + 'root', 'title': '课程 <A>', 'markdown': ''},
+                {'docId': self.name + 'root', 'title': '课程 <A>', 'markdown': '\u200b\n'},
                 {'docId': self.name + 'child', 'parentId': self.name + 'root', 'title': '内部讲义', 'markdown': '# 正文'},
                 {'docId': self.name + 'other', 'title': '课程 B', 'markdown': '说明'},
             ],
