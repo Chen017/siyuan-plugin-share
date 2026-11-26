@@ -4854,3 +4854,148 @@ body.layout-share .reader-frame :is(.kb-sidebar,.share-toc) { background: var(--
 body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-body :is(hr.footnotes-sep, .footnotes, .markdown-footnotes) {
   display: none !important;
 }
+
+/* Unified vertical floating action card (scroll-top + mobile drawer trigger). */
+.reader-floating-actions {
+  position: fixed;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-soft);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+  transition: opacity var(--motion-feedback) ease, transform var(--motion-feedback) var(--ease-response);
+}
+
+.reader-floating-actions.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.reader-floating-actions :is(.scroll-top, .reader-fab-nav) {
+  position: relative;
+  inset: auto;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 1;
+  pointer-events: inherit;
+  transform: none;
+  transition: color var(--motion-feedback) ease, background-color var(--motion-feedback) ease;
+}
+
+.reader-floating-actions :is(.scroll-top, .reader-fab-nav) svg {
+  position: relative;
+  z-index: 1;
+  width: 20px;
+  height: 20px;
+}
+
+.reader-floating-actions :is(.scroll-top, .reader-fab-nav)::after {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  pointer-events: none;
+  transition: background-color var(--motion-feedback) ease;
+}
+
+.reader-floating-actions :is(.scroll-top, .reader-fab-nav):hover {
+  transform: none;
+}
+
+.reader-floating-actions :is(.scroll-top, .reader-fab-nav):hover::after {
+  background: var(--surface-muted);
+}
+
+body.layout-share .reader-floating-actions :is(.scroll-top, .reader-fab-nav):active {
+  background: transparent;
+  color: var(--reader-selected-text);
+}
+
+.reader-floating-actions :is(.scroll-top, .reader-fab-nav):active::after {
+  background: var(--reader-selected);
+}
+
+.reader-floating-actions :is(.scroll-top, .reader-fab-nav):focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -3px;
+}
+
+.reader-floating-actions:has(.reader-fab-nav:not([hidden])) .scroll-top {
+  color: var(--muted);
+}
+
+.reader-floating-actions:has(.reader-fab-nav:not([hidden])) .scroll-top:hover {
+  color: var(--text);
+}
+
+.reader-floating-actions .reader-fab-nav:not([hidden])::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 24px;
+  height: 1px;
+  background: var(--border);
+  pointer-events: none;
+  z-index: 1;
+}
+
+@media (hover: none) {
+  .reader-floating-actions :is(.scroll-top, .reader-fab-nav):hover::after {
+    background: transparent;
+  }
+}
+
+@media (max-width: 960px) {
+  body.layout-share .reader-frame > .share-footer,
+  body.layout-share .reader-frame > .share-shell > .share-footer {
+    padding: 20px 16px calc(96px + env(safe-area-inset-bottom));
+  }
+}
+
+.pdf-export-embedded .reader-floating-actions,
+.pdf-export-preview .reader-floating-actions {
+  display: none !important;
+}
+
+@media print {
+  .reader-floating-actions {
+    display: none !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .reader-floating-actions {
+    border: 1px solid ButtonText;
+    background: Canvas;
+  }
+  .reader-floating-actions .reader-fab-nav:not([hidden])::before {
+    background: ButtonText;
+  }
+  .reader-floating-actions :is(.scroll-top, .reader-fab-nav):focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: -3px;
+  }
+}

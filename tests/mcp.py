@@ -10,6 +10,7 @@ from contextlib import closing
 import hashlib
 import http.cookiejar
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -25,6 +26,7 @@ import urllib.request
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
+ENV_INTERNAL_TOKEN = 'env-override-internal-token-64hex'
 CONFIG = """<?php
 return [
     'chunk_cleanup_probability' => 0,
@@ -779,13 +781,25 @@ class McpIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(st_bad, 401)
 
-        # Valid internal header authenticates without OAuth Bearer token
+        # Lower-priority config.php token must fail with 401 while MCP_INTERNAL_TOKEN env var is set
+        st_cfg, _, _ = stateless.request(
+            '/mcp',
+            json.dumps({'jsonrpc': '2.0', 'id': 11, 'method': 'tools/list'}),
+            headers={
+                'Content-Type': 'application/json',
+                'X-MCP-Internal-Token': 'test-internal-gateway-token-64hex',
+            },
+            method='POST',
+        )
+        self.assertEqual(st_cfg, 401)
+
+        # Valid internal header from Docker/env authenticates without OAuth Bearer token
         st_ok, _, raw_list = stateless.request(
             '/mcp',
             json.dumps({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'}),
             headers={
                 'Content-Type': 'application/json',
-                'X-MCP-Internal-Token': 'test-internal-gateway-token-64hex',
+                'X-MCP-Internal-Token': ENV_INTERNAL_TOKEN,
             },
             method='POST',
         )
@@ -803,7 +817,7 @@ class McpIntegrationTests(unittest.TestCase):
             }),
             headers={
                 'Content-Type': 'application/json',
-                'X-MCP-Internal-Token': 'test-internal-gateway-token-64hex',
+                'X-MCP-Internal-Token': ENV_INTERNAL_TOKEN,
             },
             method='POST',
         )
@@ -857,12 +871,25 @@ def main():
                     encoding='utf-8',
                 )
                 output = (work / 'server.log').open('w', encoding='utf-8')
-                process = subprocess.Popen([*php_args, '-S', f'127.0.0.1:{port}', '-t', str(app), str(router)], stdout=output, stderr=output)
+                process = subprocess.Popen(
+                    [*php_args, '-S', f'127.0.0.1:{port}', '-t', str(app), str(router)],
+                    stdout=output,
+                    stderr=output,
+                    env={**os.environ, 'MCP_INTERNAL_TOKEN': ENV_INTERNAL_TOKEN, 'MCP_INTERNAL_USER_ID': '1'},
+                )
             else:
                 name = 'siyuan-mcp-test-' + uuid.uuid4().hex[:10]
                 container = name
                 command(
-                    ['docker', 'create', '--name', name, '--volume', '/var/www/html/storage', '--volume', '/var/www/html/uploads', '-p', '127.0.0.1::80', args.docker],
+                    [
+                        'docker', 'create', '--name', name,
+                        '-e', f'MCP_INTERNAL_TOKEN={ENV_INTERNAL_TOKEN}',
+                        '-e', 'MCP_INTERNAL_USER_ID=1',
+                        '--volume', '/var/www/html/storage',
+                        '--volume', '/var/www/html/uploads',
+                        '-p', '127.0.0.1::80',
+                        args.docker,
+                    ],
                     stdout=subprocess.DEVNULL,
                 )
                 for src, dst in [

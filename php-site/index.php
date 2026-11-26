@@ -433,7 +433,10 @@ function render_page(string $title, string $content, ?array $user = null, string
         if (empty($options['pdf_export'])) echo "</div>";
         echo "<div class='share-side-backdrop' data-share-drawer-close></div>";
         echo "<p class='reader-status sr-only' data-reader-status role='status' aria-live='polite'></p>";
+        echo "<div class='reader-floating-actions' data-reader-floating-actions>";
         echo "<button class='scroll-top' type='button' data-scroll-top aria-label='Back to top'><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' d='m6 12 6-6 6 6M12 6v13'/></svg></button>";
+        echo "<button class='reader-fab-nav' type='button' data-share-drawer-open data-share-drawer-fab aria-label='Open navigation' aria-expanded='false' hidden><svg viewBox='0 0 24 24' aria-hidden='true'><path fill='currentColor' d='M4 6h16v2H4zM4 11h16v2H4zM4 16h16v2H4z'/></svg></button>";
+        echo "</div>";
         echo "</div>";
     } elseif ($user) {
         $navItems = [

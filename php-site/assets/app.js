@@ -2035,7 +2035,10 @@
         `<footer class="share-footer">Maintained by <a href="https://github.com/Chen017/siyuan-plugin-share" target="_blank" rel="noopener noreferrer">Chen017</a> · Upstream: <a href="https://github.com/b8l8u8e8/siyuan-plugin-share" target="_blank" rel="noopener noreferrer">Siyuan Share</a></footer>` +
         `</div>` +
         `<div class="share-side-backdrop" data-share-drawer-close></div>` +
-        `<button class="scroll-top" type="button" data-scroll-top aria-label="Back to top"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2c-2.76 0-5 2.24-5 5v2.5L4 13l4.5 1L12 22l3.5-8L20 13l-3-3.5V7c0-2.76-2.24-5-5-5zm0 3a2 2 0 0 1 2 2v1.5l-2 2-2-2V7a2 2 0 0 1 2-2z"/></svg></button>` +
+        `<div class="reader-floating-actions" data-reader-floating-actions>` +
+        `<button class="scroll-top" type="button" data-scroll-top aria-label="Back to top"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="m6 12 6-6 6 6M12 6v13"/></svg></button>` +
+        `<button class="reader-fab-nav" type="button" data-share-drawer-open data-share-drawer-fab aria-label="Open navigation" aria-expanded="false" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 6h16v2H4zM4 11h16v2H4zM4 16h16v2H4z"/></svg></button>` +
+        `</div>` +
         `</div>` +
         scriptTags +
         `</body></html>`,
@@ -3052,21 +3055,25 @@
   };
 
   const initShareDrawer = () => {
-    const openBtn = document.querySelector("[data-share-drawer-open]");
+    const openBtns = Array.from(document.querySelectorAll("[data-share-drawer-open]"));
+    const primaryOpenBtn = openBtns.find((btn) => !btn.hasAttribute("data-share-drawer-fab")) || openBtns[0] || null;
     const backdrop = document.querySelector("[data-share-drawer-close]");
     const sidebar = document.querySelector(".kb-sidebar, .share-toc");
-    if (openBtn && !sidebar) {
-      openBtn.hidden = true;
+    if (!sidebar) {
+      openBtns.forEach((btn) => {
+        btn.hidden = true;
+        btn.style.display = "none";
+      });
+      return;
     }
-    if (!openBtn && !backdrop) return;
-    if (!sidebar) return;
+    if (!openBtns.length && !backdrop) return;
     const mq = window.matchMedia("(max-width: 960px)");
     const heading = document.createElement("div");
     heading.className = "reader-drawer-heading";
     heading.innerHTML = '<span>Reading navigation</span><button class="reader-drawer-close" type="button" aria-label="Close navigation"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>';
     sidebar.prepend(heading);
     sidebar.id ||= "reader-navigation";
-    openBtn?.setAttribute("aria-controls", sidebar.id);
+    openBtns.forEach((btn) => btn.setAttribute("aria-controls", sidebar.id));
     let returnFocus = null;
     const updateAccessibility = (open) => {
       const modal = mq.matches && open;
@@ -3081,26 +3088,28 @@
         sidebar.removeAttribute("role");
         sidebar.removeAttribute("aria-modal");
       }
-      document.querySelectorAll(".kb-main, .share-footer, .reader-mobile-bar, .scroll-top").forEach((node) => { node.inert = modal; });
-      openBtn?.setAttribute("aria-expanded", String(modal));
-      openBtn?.setAttribute("aria-label", modal ? "Close navigation" : "Open navigation");
+      document.querySelectorAll(".kb-main, .share-footer, .reader-mobile-bar, .reader-floating-actions, .scroll-top").forEach((node) => { node.inert = modal; });
+      openBtns.forEach((btn) => {
+        btn.setAttribute("aria-expanded", String(modal));
+        btn.setAttribute("aria-label", modal ? "Close navigation" : "Open navigation");
+      });
     };
-    const setOpen = (open, restoreFocus = true) => {
+    const setOpen = (open, restoreFocus = true, triggerEl = null) => {
       const wasOpen = document.body.classList.contains("share-side-open");
-      if (open && !wasOpen) returnFocus = document.activeElement;
+      if (open && !wasOpen) returnFocus = triggerEl || document.activeElement;
       document.body.classList.toggle("share-side-open", open && mq.matches);
       updateAccessibility(open && mq.matches);
       if (open && mq.matches) heading.querySelector("button").focus({preventScroll: true});
-      else if (wasOpen && restoreFocus) (returnFocus?.isConnected ? returnFocus : openBtn)?.focus({preventScroll: true});
+      else if (wasOpen && restoreFocus) (returnFocus?.isConnected ? returnFocus : primaryOpenBtn)?.focus({preventScroll: true});
     };
     heading.querySelector("button").addEventListener("click", () => setOpen(false));
-    if (openBtn) {
-      openBtn.addEventListener("click", () => {
+    openBtns.forEach((btn) => {
+      btn.addEventListener("click", () => {
         const isOpen = document.body.classList.contains("share-side-open");
-        setOpen(!isOpen);
-        if (!isOpen) returnFocus = openBtn;
+        setOpen(!isOpen, true, btn);
+        if (!isOpen) returnFocus = btn;
       });
-    }
+    });
     if (backdrop) {
       backdrop.addEventListener("click", () => setOpen(false));
     }
@@ -3137,11 +3146,13 @@
         (sidebar.querySelector(".kb-tree-item.is-active, .kb-tree-item, .kb-tree-toggle") || heading.querySelector("button")).focus({preventScroll: true});
       }
     });
-    if (openBtn && sidebar) {
+    if (openBtns.length && sidebar) {
       const updateTrigger = () => {
-        const shouldShow = mq.matches;
-        openBtn.hidden = !shouldShow;
-        openBtn.style.display = shouldShow ? "inline-flex" : "none";
+        const shouldShow = mq.matches && Boolean(sidebar);
+        openBtns.forEach((btn) => {
+          btn.hidden = !shouldShow;
+          btn.style.display = shouldShow ? (btn.hasAttribute("data-share-drawer-fab") ? "flex" : "inline-flex") : "none";
+        });
         if (!mq.matches) setOpen(false, false);
         else updateAccessibility(document.body.classList.contains("share-side-open"));
       };
@@ -3363,8 +3374,11 @@
   const initScrollTop = () => {
     const btn = document.querySelector("[data-scroll-top]");
     if (!btn) return;
+    const container = btn.closest("[data-reader-floating-actions]") || document.querySelector("[data-reader-floating-actions]");
     const toggle = () => {
-      btn.classList.toggle("is-visible", window.scrollY > 320);
+      const visible = window.scrollY > 320;
+      btn.classList.toggle("is-visible", visible);
+      container?.classList.toggle("is-visible", visible);
     };
     btn.addEventListener("click", () => {
       window.scrollTo({top: 0, behavior: scrollBehavior()});

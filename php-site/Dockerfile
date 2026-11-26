@@ -60,7 +60,8 @@ RUN set -eux; \
         echo "post_max_size = 100M"; \
         echo "memory_limit = 256M"; \
         echo "max_execution_time = 300"; \
-    } > /usr/local/etc/php/conf.d/uploads.ini
+    } > /usr/local/etc/php/conf.d/uploads.ini \
+    && printf "[www]\nclear_env = no\n" > /usr/local/etc/php-fpm.d/zz-env.conf
 
 # Configure nginx
 RUN cat > /etc/nginx/nginx.conf <<'NGINXCONF'

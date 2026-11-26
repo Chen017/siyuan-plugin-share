@@ -3,3 +3,5 @@ tests/__pycache__/
 php-site/storage/
 php-site/uploads/
 backups/
+.env
+docker-compose.override.yml

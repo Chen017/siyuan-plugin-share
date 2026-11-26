@@ -65,7 +65,7 @@ const textContrast = node => {
    await page.emulateMedia({colorScheme,reducedMotion:'reduce'});await page.setViewportSize({width,height:844});await settle();
    await noOverflow(page);
    if (width<=390) {
-    await page.locator('[data-share-drawer-open]').click();await page.locator('[data-share-tab="toc"]').click();
+    await page.locator('.reader-mobile-bar [data-share-drawer-open]').click();await page.locator('[data-share-tab="toc"]').click();
     const entry=page.locator('.share-toc-link').first();
     await entry.locator('.share-toc-text').evaluate(node=>{node.textContent='A complete long mathematical heading for composition and primitive recursion';});
     assert(await entry.evaluate(node=>node.scrollWidth<=node.clientWidth+1),'Mobile contents wraps its complete title');
@@ -100,6 +100,46 @@ const textContrast = node => {
    assert(Math.abs((await modal.boundingBox()).height-compactHeight)<3,'Returning to single document shrinks the dialog');
    assert.equal(await modal.evaluate(n=>getComputedStyle(n).transitionDuration),'0s','Reduced motion disables resizing animation');
    await page.getByRole('button',{name:'Close export dialog',exact:true}).click();await modal.waitFor({state:'hidden'});
+   const fabRestore = await page.evaluate(() => {
+    const main = document.querySelector('.kb-main');
+    const prev = main ? main.style.minHeight : '';
+    if (document.documentElement.scrollHeight - innerHeight < 420 && main) main.style.minHeight = `${innerHeight + 500}px`;
+    window.scrollTo(0, 400);
+    return prev;
+   });
+   await settle();
+   const floatingCard = page.locator('[data-reader-floating-actions]');
+   await floatingCard.waitFor({state:'visible'});
+   assert(await floatingCard.evaluate(n=>n.classList.contains('is-visible')), `${colorScheme}/${width} floating card is visible past 320px`);
+   await noOverflow(page);
+   const cardBox = await floatingCard.boundingBox();
+   assert(cardBox.x >= 0 && cardBox.x + cardBox.width <= width + 1 && cardBox.y >= 0 && cardBox.y + cardBox.height <= 845, `${colorScheme}/${width} floating card within viewport`);
+   const floatingContrast = node => node.evaluate(n => {
+    const style = getComputedStyle(n), bg = getComputedStyle(n.closest('[data-reader-floating-actions]')).backgroundColor;
+    const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1; const ctx = canvas.getContext('2d');
+    const lum = c => { ctx.clearRect(0,0,1,1); ctx.fillStyle = c; ctx.fillRect(0,0,1,1); const v = [...ctx.getImageData(0,0,1,1).data].slice(0,3).map(x => { x /= 255; return x <= .04045 ? x / 12.92 : ((x + .055) / 1.055) ** 2.4; }); return .2126 * v[0] + .7152 * v[1] + .0722 * v[2]; };
+    const fg = lum(style.color), bgL = lum(bg);
+    return (Math.max(fg, bgL) + .05) / (Math.min(fg, bgL) + .05);
+   });
+   const topBtn = floatingCard.locator('[data-scroll-top]');
+   const topBox = await topBtn.boundingBox();
+   assert(topBox.width >= 43.9 && topBox.height >= 43.9, `${colorScheme}/${width} scroll-top >= 44x44: ${JSON.stringify(topBox)}`);
+   assert(await floatingContrast(topBtn) >= 4.5, `${colorScheme}/${width} scroll-top contrast`);
+   const navFab = floatingCard.locator('[data-share-drawer-fab]');
+   if (width <= 960) {
+    assert(!(await navFab.evaluate(n=>n.hidden)), `${colorScheme}/${width} nav FAB visible on narrow viewport`);
+    const navBox = await navFab.boundingBox();
+    assert(navBox.width >= 43.9 && navBox.height >= 43.9, `${colorScheme}/${width} nav FAB >= 44x44: ${JSON.stringify(navBox)}`);
+    assert(await floatingContrast(navFab) >= 4.5, `${colorScheme}/${width} nav FAB contrast`);
+   } else {
+    assert(await navFab.evaluate(n=>n.hidden), `${colorScheme}/${width} nav FAB hidden on desktop`);
+   }
+   await page.evaluate(prev => {
+    const main = document.querySelector('.kb-main');
+    if (main) main.style.minHeight = prev;
+    window.scrollTo(0, 0);
+   }, fabRestore);
+   await settle();
    await page.screenshot({path:path.join(output,`ui-reader-${colorScheme}-${width}.png`),animations:'disabled'});
   }
   await page.setViewportSize({width:390,height:844});await page.emulateMedia({forcedColors:'active',reducedMotion:'reduce'});

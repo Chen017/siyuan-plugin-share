@@ -15,6 +15,8 @@ services:
       - ./php-site/config.php:/var/www/html/config.php:ro
     environment:
       - TZ=Asia/Shanghai
+      - MCP_INTERNAL_TOKEN=${MCP_INTERNAL_TOKEN:-}
+      - MCP_INTERNAL_USER_ID=${MCP_INTERNAL_USER_ID:-1}
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/login | grep -F '<h1>Sign in</h1>' >/dev/null"]

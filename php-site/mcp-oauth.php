@@ -462,10 +462,17 @@ function mcp_www_authenticate_header(?string $error = null): string {
 
 function mcp_authenticate_bearer_request(): array {
     global $config;
-    $configuredInternal = trim((string)($config['mcp_internal_token'] ?? ''));
+    $envToken = getenv('MCP_INTERNAL_TOKEN');
+    $configuredInternal = ($envToken !== false && trim($envToken) !== '')
+        ? trim($envToken)
+        : trim((string)($config['mcp_internal_token'] ?? ''));
     $providedInternal = trim((string)($_SERVER['HTTP_X_MCP_INTERNAL_TOKEN'] ?? ''));
     if ($configuredInternal !== '' && $providedInternal !== '' && hash_equals($configuredInternal, $providedInternal)) {
-        $internalUid = max(1, (int)($config['mcp_internal_user_id'] ?? 1));
+        $envUid = getenv('MCP_INTERNAL_USER_ID');
+        $rawUid = ($envUid !== false && trim($envUid) !== '')
+            ? trim($envUid)
+            : ($config['mcp_internal_user_id'] ?? 1);
+        $internalUid = max(1, (int)$rawUid);
         $pdo = db();
         $userStmt = $pdo->prepare('SELECT * FROM users WHERE id = :uid AND role = "admin" AND disabled = 0 LIMIT 1');
         $userStmt->execute([':uid' => $internalUid]);

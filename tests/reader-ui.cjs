@@ -23,7 +23,10 @@ function page({mobile = false, reduced = false, record, welcome = true, beforeEv
   w.scrollTo = options => { w.lastScroll = options; };
   w.fetch = async () => { throw new Error('Unexpected fetch'); };
   if (record) w.localStorage.setItem('sps:reading:book', JSON.stringify(record));
-  w.document.body.insertAdjacentHTML('beforeend', '<button data-scroll-top>Top</button>');
+  w.document.body.insertAdjacentHTML(
+    'beforeend',
+    '<div class="reader-floating-actions" data-reader-floating-actions><button class="scroll-top" type="button" data-scroll-top aria-label="Back to top">Top</button><button class="reader-fab-nav" type="button" data-share-drawer-open data-share-drawer-fab aria-label="Open navigation" aria-expanded="false" hidden>Nav</button></div>',
+  );
   beforeEval?.(w);
   w.eval(source);
   return {w, doc: w.document, errors, close: () => w.close()};
@@ -74,14 +77,36 @@ const payload = title => ({ok: true, json: async () => ({code: 0, data: {html: m
     assert.equal(p.doc.querySelector('[data-reader-resume]').hidden, false);
     assert.equal(p.doc.querySelector('[data-reader-resume]').textContent.trim(), '课程 B');
     const sidebar = p.doc.querySelector('aside'), open = p.doc.querySelector('[data-share-drawer-open]');
+    const fab = p.doc.querySelector('[data-share-drawer-fab]'), floating = p.doc.querySelector('[data-reader-floating-actions]');
+    const scrollBtn = p.doc.querySelector('[data-scroll-top]');
+    assert(fab && !fab.hidden, 'Mobile page with sidebar shows floating navigation button');
+    assert(!floating.classList.contains('is-visible'));
+    Object.defineProperty(p.w, 'scrollY', {value: 400, configurable: true});
+    p.w.dispatchEvent(new p.w.Event('scroll'));
+    assert(floating.classList.contains('is-visible') && scrollBtn.classList.contains('is-visible'), 'Scrolling past 320px reveals the floating action card');
+    Object.defineProperty(p.w, 'scrollY', {value: 0, configurable: true});
+    p.w.dispatchEvent(new p.w.Event('scroll'));
+    assert(!floating.classList.contains('is-visible') && !scrollBtn.classList.contains('is-visible'));
+    scrollBtn.click();
+    assert.equal(p.w.lastScroll.behavior, 'smooth', 'Scroll-top uses smooth scrolling when reduced motion is off');
     assert(sidebar.inert, 'Closed mobile navigation cannot receive focus');
     open.click();
     assert.equal(sidebar.getAttribute('aria-modal'), 'true');
     assert.equal(p.doc.activeElement.getAttribute('aria-label'), 'Close navigation');
     assert(p.doc.querySelector('.kb-main').inert, 'Modal drawer isolates the reading area');
+    assert(floating.inert, 'Modal drawer marks floating action card inert');
     p.doc.dispatchEvent(new p.w.KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
     assert(sidebar.inert);
+    assert(!floating.inert);
     assert.equal(p.doc.activeElement, open, 'Dismiss returns focus to its trigger');
+    fab.click();
+    assert.equal(sidebar.getAttribute('aria-modal'), 'true');
+    assert.equal(fab.getAttribute('aria-expanded'), 'true');
+    assert.equal(open.getAttribute('aria-expanded'), 'true');
+    assert(floating.inert);
+    p.doc.dispatchEvent(new p.w.KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
+    assert(!floating.inert);
+    assert.equal(p.doc.activeElement, fab, 'Escape after opening from FAB returns focus to FAB');
     p.doc.querySelector('[data-reader-show-tree]').click();
     assert.equal(open.getAttribute('aria-expanded'), 'true');
     assert(p.doc.activeElement.matches('.kb-tree-item, .kb-tree-toggle'), 'Browse focuses the document tree');
@@ -154,6 +179,7 @@ const payload = title => ({ok: true, json: async () => ({code: 0, data: {html: m
 
   const resize = page();
   try {
+    assert.equal(resize.doc.querySelector('[data-share-drawer-fab]').hidden, true, 'Desktop keeps floating navigation FAB hidden');
     const divider = resize.doc.querySelector('[data-reader-sidebar-resizer]');
     assert(divider && !divider.hidden);
     divider.dispatchEvent(new resize.w.KeyboardEvent('keydown', {key:'ArrowRight',bubbles:true}));
@@ -173,6 +199,11 @@ const payload = title => ({ok: true, json: async () => ({code: 0, data: {html: m
     assert(!resize.doc.cookie.includes('sps_reader_sidebar_width'));
     assert.equal(resize.doc.querySelector('.reader-frame').style.getPropertyValue('--sidebar-width'),'');
   } finally { resize.close(); }
+  const noSidebar = page({mobile: true, beforeEval(w) { w.document.querySelector('.kb-sidebar')?.remove(); }});
+  try {
+    assert.equal(noSidebar.doc.querySelector('[data-share-drawer-fab]').hidden, true, 'Pages without a sidebar hide the floating navigation FAB');
+    assert.equal(noSidebar.doc.querySelector('[data-share-drawer-open]').hidden, true);
+  } finally { noSidebar.close(); }
   const search = page({mobile: true, reduced: true});
   try {
     const input = search.doc.querySelector('input'), results = search.doc.querySelector('[data-share-search-results]');
