@@ -1912,6 +1912,66 @@ body.layout-share .pdf-doc > h1 {
   color: var(--primary-700);
 }
 
+.markdown-source-wrap {
+  display: none;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  overflow: hidden;
+}
+
+.markdown-source-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px 6px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-muted);
+}
+
+.markdown-source-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+
+.button.markdown-source-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 4px 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--primary);
+  box-shadow: none;
+}
+
+.button.markdown-source-copy:hover,
+.button.markdown-source-copy:focus-visible,
+.button.markdown-source-copy:active {
+  transform: none;
+  box-shadow: none;
+  background: var(--reader-selected);
+  color: var(--reader-selected-text);
+  border-color: var(--border);
+}
+
+.button.markdown-source-copy.is-copied {
+  color: var(--text);
+}
+
+.button.markdown-source-copy .reader-icon {
+  width: 15px;
+  height: 15px;
+}
+
 .markdown-source {
   display: none;
   width: 100%;
@@ -1927,10 +1987,16 @@ body.layout-share .pdf-doc > h1 {
   resize: vertical;
 }
 
+.markdown-source-wrap .markdown-source {
+  border: 0;
+  border-radius: 0;
+}
+
 .share-article.is-markdown .markdown-body {
   display: none;
 }
 
+.share-article.is-markdown .markdown-source-wrap,
 .share-article.is-markdown .markdown-source {
   display: block;
 }
@@ -2333,10 +2399,32 @@ body.layout-share .markdown-body :is(h1,h2,h3,h4,h5,h6) + :is(h1,h2,h3,h4,h5,h6)
 }
 
 .katex-block {
+  display: block;
+  max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
-
+  padding-block: .25em;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x;
   -ms-overflow-style: none;
+}
+
+body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-body .katex-block > .katex-display {
+  overflow-x: visible;
+  overflow-y: visible;
+  padding-block: 0;
+}
+
+body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-body .katex-display > .katex {
+  display: inline-block;
+  max-width: none;
+  min-width: 100%;
+}
+
+body.layout-share:not(.pdf-export-preview):not(.pdf-export-embedded) .markdown-body :is(li, blockquote, dd) {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .markdown-body table {
@@ -2535,6 +2623,7 @@ body.layout-share .markdown-body :is(p, li) > a > img:not(.sps-emoji) {
   .markdown-body pre,
   .markdown-body .highlight,
   .markdown-body table,
+  .markdown-body .katex-block,
   .markdown-body .katex-display,
   .markdown-body .md-diagram,
   .markdown-body .mermaid,
@@ -2548,6 +2637,7 @@ body.layout-share .markdown-body :is(p, li) > a > img:not(.sps-emoji) {
 .markdown-body .mermaid,
 .markdown-body pre,
 .markdown-body table,
+.markdown-body .katex-block,
 .markdown-body .katex-display {
   max-width: 100%;
 }
@@ -4983,6 +5073,21 @@ body.layout-share .reader-floating-actions :is(.scroll-top, .reader-fab-nav):act
 @media print {
   .reader-floating-actions {
     display: none !important;
+  }
+}
+
+button.kb-tree-folder {
+  appearance: none;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+@media (pointer: coarse) {
+  .button.markdown-source-copy {
+    min-height: 44px;
+    padding: 8px 12px;
   }
 }
 

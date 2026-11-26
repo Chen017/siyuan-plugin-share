@@ -23,6 +23,32 @@
     const status = document.querySelector("[data-reader-status]");
     if (status) status.textContent = message;
   };
+  const writeClipboardText = async (text) => {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch {
+        // Fall through to execCommand fallback if Clipboard API rejects.
+      }
+    }
+    const helper = document.createElement("textarea");
+    helper.value = text;
+    helper.setAttribute("readonly", "true");
+    helper.style.position = "fixed";
+    helper.style.top = "-9999px";
+    helper.style.left = "-9999px";
+    document.body.appendChild(helper);
+    helper.select();
+    let ok = false;
+    try {
+      ok = document.execCommand("copy");
+    } catch {
+      ok = false;
+    }
+    helper.remove();
+    return ok;
+  };
 
   // Shared account/share fields. Passwords are revealed only from a local input;
   // no saved hash is sent to the browser or treated as a recoverable password.
@@ -3367,7 +3393,37 @@
         const label = btn.querySelector("[data-share-toggle-label]") || btn;
         label.textContent = isMarkdown ? "Preview" : "Source";
         btn.setAttribute("aria-pressed", isMarkdown ? "true" : "false");
-        revealSurface(container.querySelector(isMarkdown ? ".markdown-source" : ".markdown-body"), 0);
+        revealSurface(container.querySelector(isMarkdown ? ".markdown-source-wrap, .markdown-source" : ".markdown-body"), 0);
+      });
+    });
+    document.querySelectorAll("[data-share-copy-source]").forEach((btn) => {
+      if (btn.dataset.shareCopyBound === "1") return;
+      btn.dataset.shareCopyBound = "1";
+      let resetTimer = 0;
+      btn.addEventListener("click", async () => {
+        const container = btn.closest(".share-article");
+        const source = container?.querySelector("textarea.markdown-source");
+        if (!source) return;
+        const label = btn.querySelector("[data-share-copy-label]") || btn;
+        const success = await writeClipboardText(source.value || "");
+        clearTimeout(resetTimer);
+        if (success) {
+          label.textContent = "Copied";
+          btn.setAttribute("aria-label", "Copied Markdown source");
+          btn.classList.add("is-copied");
+          readerAnnounce("Markdown source copied");
+          resetTimer = window.setTimeout(() => {
+            label.textContent = "Copy";
+            btn.setAttribute("aria-label", "Copy Markdown source");
+            btn.classList.remove("is-copied");
+          }, 1500);
+        } else {
+          label.textContent = "Copy failed";
+          readerAnnounce("Copy failed. Select the source and copy it manually.");
+          resetTimer = window.setTimeout(() => {
+            label.textContent = "Copy";
+          }, 2000);
+        }
       });
     });
   };
@@ -5059,29 +5115,6 @@ const initImageViewer = () => {
       waitForMermaidFonts(() => renderMermaid(container));
     };
 
-    const writeClipboardText = async (text) => {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(text);
-        return true;
-      }
-      const helper = document.createElement("textarea");
-      helper.value = text;
-      helper.setAttribute("readonly", "true");
-      helper.style.position = "fixed";
-      helper.style.top = "-9999px";
-      helper.style.left = "-9999px";
-      document.body.appendChild(helper);
-      helper.select();
-      let ok = false;
-      try {
-        ok = document.execCommand("copy");
-      } catch {
-        ok = false;
-      }
-      helper.remove();
-      return ok;
-    };
-
     const buildLineNumbers = (raw) => {
       const trimmed = raw.replace(/\r?\n$/, "");
       const lines = trimmed ? trimmed.split("\n") : [""];
@@ -6101,7 +6134,7 @@ const initImageViewer = () => {
 
 
   const COPY_IGNORED_SELECTOR =
-    "script, style, template, noscript, [hidden], .sps-footnote-action, .sps-block-ref-action, .sps-block-anchor, .sps-block-anchor-wrapper, .footnote-backref, [data-footnote-backref], a[href^=\"#fnref\"], .code-header, .code-lines, .iframe-fullscreen-toggle, .share-document-actions, .kb-breadcrumbs, textarea.markdown-source";
+    "script, style, template, noscript, [hidden], .sps-footnote-action, .sps-block-ref-action, .sps-block-anchor, .sps-block-anchor-wrapper, .footnote-backref, [data-footnote-backref], a[href^=\"#fnref\"], .code-header, .code-lines, .iframe-fullscreen-toggle, .share-document-actions, .kb-breadcrumbs, .markdown-source-wrap, .markdown-source-header, [data-share-copy-source], textarea.markdown-source";
   const COPY_HIDDEN_FOOTNOTES_SELECTOR =
     "hr.footnotes-sep, .footnotes, .markdown-footnotes, .sps-footnote-registry";
   const COPY_ATOMIC_VOID_SELECTOR =

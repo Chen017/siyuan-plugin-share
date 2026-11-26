@@ -247,10 +247,57 @@ function render_reader_icon(string $name): string {
         'book' => '<path d="M12 6.5C9.5 4.5 6 4.5 3 5.5v14c3-1 6.5-1 9 1 2.5-2 6-2 9-1v-14c-3-1-6.5-1-9 1Zm0 0v14"/>',
         'home' => '<path d="m3 10 9-7 9 7M5 9v11h5v-6h4v6h5V9"/>',
         'code' => '<path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-14-2 18"/>',
+        'copy' => '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
         'download' => '<path d="M12 3v12m-4-4 4 4 4-4M4 16v5h16v-5"/>',
         'arrow' => '<path d="M4 12h16m-6-6 6 6-6 6"/>',
     ];
     return '<svg class="reader-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' . ($paths[$name] ?? '') . '</svg>';
+}
+
+function doc_has_empty_content(array $doc): bool {
+    if (!empty($doc['is_blank_markdown'])) {
+        return true;
+    }
+    if (!array_key_exists('short_markdown', $doc) || $doc['short_markdown'] === null) {
+        return false;
+    }
+    $front = extract_front_matter((string)$doc['short_markdown']);
+    $body = strip_duplicate_title_heading((string)$front['body'], (string)($doc['title'] ?? ''));
+    $stripped = preg_replace('/[\p{Z}\s]+/u', '', $body);
+    return ($stripped ?? trim($body)) === '';
+}
+
+function find_doc_tree_node_by_id(array $nodes, string $targetDocId): ?array {
+    foreach ($nodes as $node) {
+        $doc = $node['doc'] ?? null;
+        if ($doc && (string)($doc['doc_id'] ?? '') === $targetDocId) {
+            return $node;
+        }
+        if (!empty($node['children'])) {
+            $found = find_doc_tree_node_by_id($node['children'], $targetDocId);
+            if ($found !== null) {
+                return $found;
+            }
+        }
+    }
+    return null;
+}
+
+function find_first_non_empty_descendant_doc(array $nodes): ?array {
+    foreach ($nodes as $node) {
+        $doc = $node['doc'] ?? null;
+        $hasChildren = !empty($node['children']);
+        if ($doc && !($hasChildren && doc_has_empty_content($doc))) {
+            return $doc;
+        }
+        if ($hasChildren) {
+            $found = find_first_non_empty_descendant_doc($node['children']);
+            if ($found !== null) {
+                return $found;
+            }
+        }
+    }
+    return null;
 }
 
 function render_reader_library(string $title, string $slug): string {
@@ -280,7 +327,8 @@ function render_doc_tree(array $nodes, string $slug, ?string $activeId = null, i
     foreach ($nodes as $node) {
         $doc = $node['doc'] ?? null;
         $hasChildren = !empty($node['children']);
-        $isActive = $doc && $activeId && (string)$doc['doc_id'] === (string)$activeId;
+        $isFolderDoc = $doc && $hasChildren && doc_has_empty_content($doc);
+        $isActive = $doc && !$isFolderDoc && $activeId && (string)$doc['doc_id'] === (string)$activeId;
         $shouldOpen = false;
         $nodeLabel = $doc ? (string)($doc['doc_id'] ?? '') : (string)($node['title'] ?? '');
         $pathKey = trim($path . '/' . $nodeLabel, '/');
@@ -303,7 +351,7 @@ function render_doc_tree(array $nodes, string $slug, ?string $activeId = null, i
         } else {
             $html .= '<span class="kb-tree-spacer"></span>';
         }
-        if ($doc) {
+        if ($doc && !$isFolderDoc) {
             $docId = (string)$doc['doc_id'];
             $docTitle = htmlspecialchars($doc['title'] ?? $docId);
             $docPath = base_path() . '/s/' . $slug . '/' . rawurlencode($docId);
@@ -313,9 +361,10 @@ function render_doc_tree(array $nodes, string $slug, ?string $activeId = null, i
             $html .= render_doc_tree_icon($doc, $assetBasePath);
             $html .= '<span class="kb-tree-label">' . $docTitle . '</span></a>';
         } else {
-            $html .= '<div class="kb-tree-folder" title="' . htmlspecialchars((string)$node['title'], ENT_QUOTES, 'UTF-8') . '">';
-            $html .= render_doc_tree_icon(null, $assetBasePath);
-            $html .= '<span class="kb-tree-label">' . htmlspecialchars((string)$node['title']) . '</span></div>';
+            $folderTitleRaw = $doc ? (string)($doc['title'] ?? $doc['doc_id'] ?? $node['title']) : (string)$node['title'];
+            $html .= '<button class="kb-tree-folder" type="button" title="' . htmlspecialchars($folderTitleRaw, ENT_QUOTES, 'UTF-8') . '" data-tree-folder="1">';
+            $html .= render_doc_tree_icon($doc, $assetBasePath);
+            $html .= '<span class="kb-tree-label">' . htmlspecialchars($folderTitleRaw) . '</span></button>';
         }
         $html .= '</div>';
         if ($hasChildren) {
@@ -370,6 +419,18 @@ function render_share_document_actions(string $slug, string $docId): string {
     return '<div class="share-document-actions">' . render_reader_home_link($slug)
         . '<button class="button ghost share-view-toggle" type="button" data-share-toggle aria-pressed="false">' . render_reader_icon('code') . '<span data-share-toggle-label>Source</span></button>'
         . render_pdf_export_link(['slug' => $slug, 'doc_id' => $docId]) . '</div>';
+}
+
+function render_share_markdown_source(string $markdown): string {
+    $html  = '<div class="markdown-source-wrap" data-share-source-wrap>';
+    $html .= '<div class="markdown-source-header">';
+    $html .= '<span class="markdown-source-label">Markdown</span>';
+    $html .= '<button class="button ghost markdown-source-copy" type="button" data-share-copy-source aria-label="Copy Markdown source">'
+        . render_reader_icon('copy') . '<span data-share-copy-label>Copy</span></button>';
+    $html .= '</div>';
+    $html .= '<textarea class="markdown-source" data-md-id="doc" readonly spellcheck="false" aria-label="Markdown source">' . htmlspecialchars($markdown) . '</textarea>';
+    $html .= '</div>';
+    return $html;
 }
 
 function render_notebook_welcome(string $title, string $slug): string {
@@ -437,7 +498,7 @@ function route_share(string $slug, ?string $docId = null): void {
     }
 
     $pdo = db();
-    $stmt = $pdo->prepare('SELECT id, doc_id, title, icon, hpath, parent_id, sort_index, sort_order, updated_at FROM share_docs WHERE share_id = :sid ORDER BY sort_order ASC, id ASC');
+    $stmt = $pdo->prepare('SELECT id, doc_id, title, icon, hpath, parent_id, sort_index, sort_order, updated_at, CASE WHEN LENGTH(markdown) <= 1024 THEN markdown ELSE NULL END AS short_markdown, CASE WHEN TRIM(REPLACE(REPLACE(REPLACE(markdown, char(13), \'\'), char(10), \'\'), char(9), \'\')) = \'\' THEN 1 ELSE 0 END AS is_blank_markdown FROM share_docs WHERE share_id = :sid ORDER BY sort_order ASC, id ASC');
     $stmt->execute([':sid' => $shareId]);
     $docs = $stmt->fetchAll(PDO::FETCH_ASSOC);
     $docMarkdownStmt = $pdo->prepare('SELECT markdown FROM share_docs WHERE share_id = :sid AND id = :id LIMIT 1');
@@ -496,6 +557,22 @@ function route_share(string $slug, ?string $docId = null): void {
                 render_share_not_found_page();
                 return;
             }
+            $documentTree = build_doc_tree($docs, $activeDocId);
+            if (doc_has_empty_content($doc)) {
+                $activeNode = find_doc_tree_node_by_id($documentTree, (string)$activeDocId);
+                if ($activeNode && !empty($activeNode['children'])) {
+                    $fallbackDoc = find_first_non_empty_descendant_doc($activeNode['children']);
+                    if ($fallbackDoc) {
+                        $fallbackId = (string)$fallbackDoc['doc_id'];
+                        if (!$isPartial) {
+                            redirect('/s/' . rawurlencode($slug) . '/' . rawurlencode($fallbackId));
+                        }
+                        $doc = $fallbackDoc;
+                        $activeDocId = $fallbackId;
+                        $documentTree = build_doc_tree($docs, $activeDocId);
+                    }
+                }
+            }
             $docTitleRaw = trim((string)($doc['title'] ?? '')) ?: $shareTitleRaw;
             $docTitle = htmlspecialchars($docTitleRaw);
             $front = extract_front_matter($loadDocMarkdown($doc));
@@ -504,7 +581,6 @@ function route_share(string $slug, ?string $docId = null): void {
             $markdown = replace_custom_emoji_tokens($markdown, (int)$shareId, $assetBasePath);
             $markdown = insert_adjacent_emoji_image_spacing($markdown);
             $checkShareAccess();
-            $documentTree = build_doc_tree($docs, $activeDocId);
             $treeHtml = render_doc_tree($documentTree, $slug, $activeDocId, 0, '', $assetBasePath);
             $sidebar = '<aside class="kb-sidebar" data-share-sidebar data-share-slug="' . htmlspecialchars($slug) . '">';
             $sidebar .= render_reader_library($shareTitleRaw, $slug);
@@ -558,7 +634,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $mainHtml .= '</div>';
             $mainHtml .= '</div>';
             $mainHtml .= '<div class="markdown-body" data-md-id="doc">' . render_markdown($markdown) . '</div>';
-            $mainHtml .= '<textarea class="markdown-source" data-md-id="doc" readonly spellcheck="false" aria-label="Markdown source">' . htmlspecialchars($markdown) . '</textarea>';
+            $mainHtml .= render_share_markdown_source($markdown);
             $mainHtml .= '</div></div>';
             if ($isPartial) {
                 api_response(200, [
@@ -606,7 +682,7 @@ function route_share(string $slug, ?string $docId = null): void {
         $content .= '</div>';
         $content .= '</div>';
         $content .= '<div class="markdown-body" data-md-id="doc">' . render_markdown($markdown) . '</div>';
-        $content .= '<textarea class="markdown-source" data-md-id="doc" readonly spellcheck="false" aria-label="Markdown source">' . htmlspecialchars($markdown) . '</textarea>';
+        $content .= render_share_markdown_source($markdown);
         $content .= '</div></div>' . render_share_footer() . '</div>';
         render_page($docTitleRaw, $content, null, '', ['layout' => 'share', 'markdown' => true, 'footer_in_shell' => true]);
     }
@@ -646,6 +722,20 @@ function route_share(string $slug, ?string $docId = null): void {
                 render_share_not_found_page();
                 return;
             }
+            if (doc_has_empty_content($doc)) {
+                $activeNode = find_doc_tree_node_by_id($notebookTree, (string)$docId);
+                if ($activeNode && !empty($activeNode['children'])) {
+                    $fallbackDoc = find_first_non_empty_descendant_doc($activeNode['children']);
+                    if ($fallbackDoc) {
+                        $fallbackId = (string)$fallbackDoc['doc_id'];
+                        if (!$isPartial) {
+                            redirect('/s/' . rawurlencode($slug) . '/' . rawurlencode($fallbackId));
+                        }
+                        $doc = $fallbackDoc;
+                        $docId = $fallbackId;
+                    }
+                }
+            }
             $docTitleRaw = trim((string)($doc['title'] ?? '')) ?: $shareTitleRaw;
             $docTitle = htmlspecialchars($docTitleRaw);
             $front = extract_front_matter($loadDocMarkdown($doc));
@@ -672,7 +762,7 @@ function route_share(string $slug, ?string $docId = null): void {
             $mainHtml .= '</div>';
             $mainHtml .= '</div>';
             $mainHtml .= '<div class="markdown-body" data-md-id="doc">' . render_markdown($markdown) . '</div>';
-            $mainHtml .= '<textarea class="markdown-source" data-md-id="doc" readonly spellcheck="false" aria-label="Markdown source">' . htmlspecialchars($markdown) . '</textarea>';
+            $mainHtml .= render_share_markdown_source($markdown);
             $mainHtml .= '</div></div>';
             if ($isPartial) {
                 api_response(200, [

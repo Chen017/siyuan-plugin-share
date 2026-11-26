@@ -6,7 +6,7 @@ const path = require('node:path');
 const {JSDOM, VirtualConsole} = require('jsdom');
 const source = fs.readFileSync(path.join(__dirname, '../php-site/assets/app.js'), 'utf8');
 const delay = (ms = 35) => new Promise(resolve => setTimeout(resolve, ms));
-const main = (title = '笔记本', welcome = false) => `<main class="kb-main"><section class="share-article"><h1 class="kb-title">${title}</h1>${welcome ? '<div data-notebook-welcome><button data-reader-show-tree>展开文档树</button><a data-reader-resume hidden><span></span></a></div>' : '<button data-share-toggle aria-pressed="false"><svg aria-hidden="true"></svg><span data-share-toggle-label>Source</span></button><textarea class="markdown-source" readonly aria-label="Markdown source">## Chapter</textarea><div class="markdown-body" data-sps-rendered="1"><h2 id="chapter">Chapter</h2></div>'}</section></main>`;
+const main = (title = '笔记本', welcome = false) => `<main class="kb-main"><section class="share-article"><h1 class="kb-title">${title}</h1>${welcome ? '<div data-notebook-welcome><button data-reader-show-tree>展开文档树</button><a data-reader-resume hidden><span></span></a></div>' : '<button data-share-toggle aria-pressed="false"><svg aria-hidden="true"></svg><span data-share-toggle-label>Source</span></button><div class="markdown-source-wrap" data-share-source-wrap><div class="markdown-source-header"><span class="markdown-source-label">Markdown</span><button type="button" data-share-copy-source aria-label="Copy Markdown source"><span data-share-copy-label>Copy</span></button></div><textarea class="markdown-source" readonly aria-label="Markdown source">## Chapter</textarea></div><div class="markdown-body" data-sps-rendered="1"><h2 id="chapter">Chapter</h2></div>'}</section></main>`;
 function page({mobile = false, reduced = false, record, welcome = true, beforeEval} = {}) {
   const dom = new JSDOM(`<body class="layout-share"><header><button data-share-drawer-open>导航</button><span data-reader-mobile-title>笔记本</span></header><div class="reader-frame"><div class="share-shell" data-share-doc-id="${welcome ? '' : 'a'}"><aside class="kb-sidebar" data-share-sidebar data-share-slug="book"><div data-share-search><input data-share-search-input><button data-share-search-clear hidden>清除</button><div data-share-search-results hidden></div></div><div data-share-tabs data-share-default="tree"><button data-share-tab="tree">文档树</button><button data-share-tab="toc">目录</button></div><div data-share-panel="tree"><div class="kb-side-body"><ul><li class="kb-tree-node is-collapsed" data-tree-key="doc:a"><button class="kb-tree-toggle" aria-expanded="false">展开</button><a class="kb-tree-item" href="/s/book/a" data-doc-id="a" data-share-nav="doc">课程 A</a><ul class="kb-tree-children"><li><a class="kb-tree-item" href="/s/book/b" data-doc-id="b" data-share-nav="doc">课程 B</a></li></ul></li></ul></div></div><div data-share-panel="toc" hidden></div></aside>${main(welcome ? '笔记本' : '课程 A', welcome)}</div><footer class="share-footer"></footer></div><div data-share-drawer-close></div><p data-reader-status role="status"></p></body>`, {url: 'https://reader.test/s/book', runScripts: 'outside-only', pretendToBeVisual: true, virtualConsole: new VirtualConsole()});
   const w = dom.window, errors = [];
@@ -152,6 +152,17 @@ const payload = title => ({ok: true, json: async () => ({code: 0, data: {html: m
     assert.equal(toggle.getAttribute('aria-pressed'), 'true');
     assert.equal(toggle.textContent, 'Preview');
     assert(toggle.querySelector('svg'), 'Source switching preserves its icon');
+    let copiedSource = '';
+    Object.defineProperty(racing.w.navigator, 'clipboard', {
+      configurable: true,
+      value: {writeText: async text => { copiedSource = text; }},
+    });
+    const copyBtn = racing.doc.querySelector('[data-share-copy-source]');
+    copyBtn.click();
+    await delay();
+    assert.equal(copiedSource, '## Chapter', 'Source copy button copies raw Markdown source');
+    assert.equal(copyBtn.querySelector('[data-share-copy-label]').textContent, 'Copied');
+    assert.equal(racing.doc.querySelector('[data-reader-status]').textContent, 'Markdown source copied');
     toggle.click();
     assert.equal(toggle.textContent, 'Source');
     assert.equal(toggle.getAttribute('aria-pressed'), 'false');
@@ -235,5 +246,19 @@ const payload = title => ({ok: true, json: async () => ({code: 0, data: {html: m
     assert.equal(search.w.surfaceAnimations.length, 0, 'Reduced Motion skips all custom surface animations');
     assert.equal(search.errors.length, 0);
   } finally { search.close(); }
+  const folderOnly = page({beforeEval(w) {
+    const list = w.document.querySelector('[data-share-panel="tree"] ul');
+    list.insertAdjacentHTML('beforeend', '<li class="kb-tree-node is-collapsed" data-tree-key="doc:empty-folder"><div class="kb-tree-row"><button class="kb-tree-toggle" type="button" aria-expanded="false">Expand</button><button class="kb-tree-folder" type="button" data-tree-folder="1"><span class="kb-tree-label">Lecture</span></button></div><ul class="kb-tree-children"><li><a class="kb-tree-item" href="/s/book/lec1" data-doc-id="lec1" data-share-nav="doc">Lecture 1</a></li></ul></li>');
+  }});
+  try {
+    const folderNode = folderOnly.doc.querySelector('[data-tree-key="doc:empty-folder"]');
+    const folderBtn = folderNode.querySelector('.kb-tree-folder');
+    folderBtn.click();
+    assert(folderNode.classList.contains('is-open'), 'Clicking an empty-doc folder expands its children instead of navigating');
+    assert.equal(folderNode.querySelector('.kb-tree-toggle').getAttribute('aria-expanded'), 'true');
+    folderBtn.click();
+    assert(folderNode.classList.contains('is-collapsed'), 'Clicking an open folder collapses its children');
+    assert.equal(folderOnly.errors.length, 0);
+  } finally { folderOnly.close(); }
   console.log('Reader UI passed: local resume, stale records, drawer focus/inert, navigation races, search cancellation, keyboard results and same-tab navigation.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
