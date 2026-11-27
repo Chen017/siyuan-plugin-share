@@ -4211,9 +4211,6 @@ body.layout-share :is(.kb-tree-item, .share-toc-link, .reader-nav-button, .reade
 
 /* PDF quota layout; sheet transitions live in pdf-export.css, loaded after this file. */
 .pdf-quota-summary { margin: 0; color: var(--text); font-weight: 600; }
-.pdf-quota-notice details { margin-top: 6px; }
-.pdf-quota-notice summary { cursor: pointer; }
-.pdf-quota-notice details p { margin-bottom: 0; }
 .pdf-export-embedded .reader-mobile-bar { display: none !important; }
 .error-page__back { transition: color var(--motion-feedback) ease; }
 .error-page__back:hover { gap: 6px; }

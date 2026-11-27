@@ -645,7 +645,7 @@ function route_pdf_export(string $slug, string $action = ''): never {
         $content .= '</fieldset>';
         if (count($docs) > 2000) $content .= '<p>Only the first 2,000 documents are listed. Open other documents from the share page to export them.</p>';
         $content .= '<fieldset data-pdf-challenge hidden><legend>Security check (once per browser cookie)</legend><p>Enter the verification code to continue exporting.</p><img data-pdf-captcha-image alt="Verification code"><button class="button ghost" type="button" data-pdf-captcha-refresh>Refresh code</button><label>Verification code <input class="input" name="captcha_answer" autocomplete="off" maxlength="8"></label></fieldset>';
-        $content .= '</div></div><div class="pdf-export-footer"><p data-pdf-selected-count role="status" aria-live="polite" hidden></p><button class="button primary" type="submit" disabled>Export</button><div class="pdf-progress" data-pdf-progress hidden><div class="pdf-progress-label"><span>Estimated progress</span><span data-pdf-percent>0%</span></div><progress max="100" value="0" aria-label="Estimated export progress"></progress></div><p data-pdf-form-status role="status" aria-live="polite"></p></div></form>';
+        $content .= '</div></div><div class="pdf-export-footer"><p data-pdf-selected-count role="status" aria-live="polite" hidden></p><button class="button primary" type="submit" disabled>Export</button><div class="pdf-progress" data-pdf-progress hidden><div class="pdf-progress-label"><span data-pdf-progress-title>Estimated progress</span><span data-pdf-percent>0%</span></div><progress max="100" value="0" aria-label="Estimated export progress"></progress><div class="pdf-progress-meta" data-pdf-timing hidden><span data-pdf-elapsed></span><span data-pdf-eta></span></div></div><p data-pdf-form-status role="status" aria-live="polite"></p></div></form>';
         $content .= '<iframe class="pdf-export-worker" name="sps-pdf-worker" data-pdf-worker title="PDF generation task" aria-hidden="true" tabindex="-1"></iframe>';
         if (!$dialog) $content .= '<a href="' . htmlspecialchars(base_path() . '/s/' . rawurlencode($slug)) . '">Back to share</a>';
         $content .= '</main>';
@@ -694,12 +694,15 @@ function route_pdf_export(string $slug, string $action = ''): never {
         }
         pdf_export_share($slug);
         $expires = pdf_export_lease($shareId, $visitor, $lease);
-        $manifest = json_encode(array_map(static fn($doc) => ['title' => (string)$doc['title'],
-            'source' => base_path() . build_share_redirect_path($slug, (string)$doc['doc_id'], '')], $docs), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_THROW_ON_ERROR);
+        $manifest = json_encode(array_map(static fn($doc) => [
+            'title' => (string)$doc['title'],
+            'source' => base_path() . build_share_redirect_path($slug, (string)$doc['doc_id'], ''),
+            'bytes' => max(1, (int)($doc['markdown_bytes'] ?? 0)),
+        ], $docs), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_THROW_ON_ERROR);
         $auto = ($_POST['auto_download'] ?? '') === '1' ? '1' : '0';
         $renewAfter = max(1, (int)$expires['expires_at'] - time() - (int)floor($limits['lease_seconds'] * 2 / 3));
         $content = '<div class="pdf-export-toolbar" data-pdf-preview data-pdf-job="1" data-pdf-auto="' . $auto . '" data-pdf-renew-after="' . $renewAfter . '"' . pdf_export_worker_attributes($url, $lease) . '>';
-        $content .= '<div class="pdf-progress" data-pdf-progress hidden><div class="pdf-progress-label"><span>Estimated progress</span><span data-pdf-percent>0%</span></div><progress max="100" value="0" aria-label="Estimated export progress"></progress></div><p data-pdf-status role="status">Preparing documents…</p><button class="button primary" type="button" data-pdf-download>Download PDF</button></div><script type="application/json" data-pdf-manifest>' . $manifest . '</script>';
+        $content .= '<div class="pdf-progress" data-pdf-progress hidden><div class="pdf-progress-label"><span data-pdf-progress-title>Estimated progress</span><span data-pdf-percent>0%</span></div><progress max="100" value="0" aria-label="Estimated export progress"></progress><div class="pdf-progress-meta" data-pdf-timing hidden><span data-pdf-elapsed></span><span data-pdf-eta></span></div></div><p data-pdf-status role="status">Preparing documents…</p><button class="button primary" type="button" data-pdf-download>Download PDF</button></div><script type="application/json" data-pdf-manifest>' . $manifest . '</script>';
         $complete = true;
         render_page(count($docs) === 1 ? (string)$docs[0]['title'] : (string)$share['title'], $content, null, '', ['layout' => 'share', 'pdf_export' => true]);
     } catch (Throwable $error) {

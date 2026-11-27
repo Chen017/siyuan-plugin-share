@@ -250,8 +250,7 @@ const chooseScope = async (page, value) => {
     assert.equal(await options.locator('[data-pdf-progress] progress').getAttribute('value'), '100');
     for (let index = 0; index < automaticDownloads.length; index++) await automaticDownloads[index].saveAs(path.join(output, `dialog-auto-${index + 1}.pdf`));
     await options.locator('[data-pdf-quota]').filter({ hasText: '118 documents remaining' }).waitFor();
-    await options.locator('[data-pdf-quota] summary').click();
-    assert.match(await options.locator('[data-pdf-quota]').innerText(), /Next recovery/);
+    assert.equal(await options.locator('[data-pdf-quota] details').count(), 0);
     assert.equal((await applicationPages()).length, pagesBefore, 'Dialog and automatic download open no extra application tabs');
     assert.equal(reader.url(), originalUrl, 'Reader stays on the document');
     await reader.getByRole('button', { name: 'Close export dialog' }).click();

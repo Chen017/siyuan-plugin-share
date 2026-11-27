@@ -1,12 +1,59 @@
 (() => {
   "use strict";
-  const updateProgress = (root, value) => {
+  const formatDuration = (seconds) => {
+    const total = Math.max(0, Math.floor(seconds));
+    const hours = Math.floor(total / 3600);
+    const mins = Math.floor((total % 3600) / 60);
+    const secs = total % 60;
+    if (hours > 0) return `${hours}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    return `${mins}:${String(secs).padStart(2, '0')}`;
+  };
+  const formatEta = (seconds) => {
+    if (!Number.isFinite(seconds) || seconds < 0) return 'Estimating remaining time…';
+    if (seconds < 5) return 'Less than 5s remaining';
+    if (seconds < 60) {
+      const rounded = Math.ceil(seconds / 5) * 5;
+      return rounded >= 60 ? 'About 1m remaining' : `About ${rounded}s remaining`;
+    }
+    if (seconds < 180) {
+      const rounded = Math.ceil(seconds / 15) * 15;
+      const mins = Math.floor(rounded / 60);
+      const secs = rounded % 60;
+      return secs > 0 ? `About ${mins}m ${secs}s remaining` : `About ${mins}m remaining`;
+    }
+    if (seconds < 3600) {
+      const mins = Math.max(3, Math.round(seconds / 60));
+      return `About ${mins}m remaining`;
+    }
+    const totalMins = Math.round(seconds / 60);
+    const hours = Math.floor(totalMins / 60);
+    const mins = totalMins % 60;
+    return mins > 0 ? `About ${hours}h ${mins}m remaining` : `About ${hours}h remaining`;
+  };
+  const nextPaint = () => new Promise((resolve) => {
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    const timer = setTimeout(finish, 32);
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => { clearTimeout(timer); setTimeout(finish, 0); });
+    }
+  });
+  const updateProgress = (root, value, timing) => {
     const progress = root.querySelector('[data-pdf-progress]');
     if (!progress || !Number.isFinite(value)) return;
-    const percent = Math.max(0, Math.min(100, Math.floor(value)));
+    const percent = value >= 100 ? 100 : Math.max(0, Math.min(100, Math.floor(value)));
     progress.hidden = false;
     progress.querySelector('progress').value = percent;
     progress.querySelector('[data-pdf-percent]').textContent = `${percent}%`;
+    const timingBox = progress.querySelector('[data-pdf-timing]');
+    if (timingBox && timing) {
+      const elapsedEl = timingBox.querySelector('[data-pdf-elapsed]');
+      const etaEl = timingBox.querySelector('[data-pdf-eta]');
+      const hasTiming = Boolean(timing.elapsedText || timing.etaText);
+      timingBox.hidden = !hasTiming;
+      if (elapsedEl) elapsedEl.textContent = timing.elapsedText || '';
+      if (etaEl) etaEl.textContent = timing.etaText || '';
+    }
   };
   let dialog;
   let dialogFrame;
@@ -176,19 +223,10 @@
     form.querySelector('[data-pdf-clear]')?.addEventListener('click', () => { boxes.forEach(box => { box.checked = false; }); updateSelection(); });
     updateSelection();
     const showQuota = (value) => {
-      const next = value.next_recovery_at ? `Next recovery: ${new Date(value.next_recovery_at * 1000).toLocaleString('en-GB')} (${value.next_recovery_count} documents, local time). ` : 'Full quota available. ';
-      const expanded = quota.querySelector('details')?.open || false;
       const summary = document.createElement('p');
       summary.className = 'pdf-quota-summary';
       summary.textContent = `${value.remaining} documents remaining · ${value.limit} per ${value.window_seconds / 60} minutes`;
-      const details = document.createElement('details');
-      details.open = expanded;
-      const label = document.createElement('summary');
-      label.textContent = 'Quota and recovery details';
-      const description = document.createElement('p');
-      description.textContent = `${value.used} documents used. ${next}Quota recovers per document on a rolling basis.`;
-      details.append(label, description);
-      quota.replaceChildren(summary, details);
+      quota.replaceChildren(summary);
     };
     showQuota(JSON.parse(quota.dataset.pdfQuota));
     const refreshQuota = async () => {
@@ -229,7 +267,10 @@
     window.addEventListener('message', (message) => {
       if (message.origin !== location.origin || message.source !== worker.contentWindow || message.data?.type !== 'sps-pdf-export') return;
       formStatus.textContent = String(message.data.message || '');
-      updateProgress(form, message.data.percent);
+      updateProgress(form, message.data.percent, {
+        elapsedText: message.data.elapsedText || '',
+        etaText: message.data.etaText || '',
+      });
       form.dataset.completedCount = String(Math.max(0, Number(message.data.completedCount) || 0));
       form.dataset.totalCount = String(Math.max(0, Number(message.data.totalCount) || 0));
       if (message.data.state === 'done') setState('done');
@@ -305,7 +346,7 @@
         if (cancelled) return;
         HTMLFormElement.prototype.submit.call(form);
         setState('running');
-        updateProgress(form, 0);
+        updateProgress(form, 0, { elapsedText: 'Elapsed 0:00', etaText: 'Estimating remaining time…' });
         formStatus.textContent = 'Preparing documents for download…';
       } catch (error) {
         formStatus.textContent = error.message || "Unable to prepare the export. Reload the page and retry.";
@@ -322,6 +363,9 @@
     const automatic = panel.dataset.pdfAuto === '1';
     const url = panel.dataset.exportUrl;
     const fields = (extra = {}) => new URLSearchParams({ csrf: panel.dataset.csrf, lease: panel.dataset.lease, ...extra });
+    const BASE_DOC_WEIGHT = 4096;
+    const docWeights = docs.map((doc) => BASE_DOC_WEIGHT + Math.max(1, Number(doc.bytes) || 1024));
+    const totalWeight = docWeights.reduce((sum, weight) => sum + weight, 0) || 1;
     const completed = new Set();
     const names = new Map();
     const filenames = docs.map((doc, index) => {
@@ -336,12 +380,6 @@
     let busy = false;
     let stopRun = () => {};
     let renewAt = Date.now() + Number(panel.dataset.pdfRenewAfter) * 1000;
-    const report = (message, state = 'progress', retryable = false, fraction = 0) => {
-      status.textContent = message;
-      const percent = 100 * (completed.size + fraction) / docs.length;
-      updateProgress(panel, percent);
-      if (automatic && parent !== window) parent.postMessage({ type: 'sps-pdf-export', state, message, retryable, percent, completedCount: completed.size, totalCount: docs.length }, location.origin);
-    };
     const release = () => {
       if (released) return;
       released = true;
@@ -361,6 +399,94 @@
       busy = true;
       button.disabled = true;
       const controller = new AbortController();
+      const runStartedAt = Date.now();
+      let activeIndex = -1;
+      let activeFraction = 0;
+      let docStartedAt = runStartedAt;
+      let maxPercent = 0;
+      for (const idx of completed) maxPercent += 100 * docWeights[idx] / totalWeight;
+      maxPercent = Math.min(99, maxPercent);
+      let pageEmaMs = null;
+      let msPerWeight = null;
+      let currentPage = 0;
+      let currentTotalPages = 0;
+      let lastMessage = '';
+      let lastEtaMs = null;
+      let lastEtaAt = 0;
+      const computePercent = (state) => {
+        if (state === 'done' || completed.size === docs.length) return 100;
+        let doneWeight = 0;
+        for (const idx of completed) doneWeight += docWeights[idx];
+        if (activeIndex >= 0 && !completed.has(activeIndex)) {
+          doneWeight += docWeights[activeIndex] * Math.max(0, Math.min(1, activeFraction));
+        }
+        const raw = Math.min(99, 100 * doneWeight / totalWeight);
+        maxPercent = Math.max(maxPercent, raw);
+        return maxPercent;
+      };
+      const computeEtaMs = () => {
+        let remCurrentDocMs;
+        if (currentTotalPages > 0 && pageEmaMs !== null && (currentPage >= 2 || (currentPage >= 1 && currentTotalPages <= 2))) {
+          const remPages = Math.max(0, currentTotalPages - currentPage);
+          const tailMs = activeFraction < 0.90 ? Math.min(3000, Math.max(400, 0.08 * currentTotalPages * pageEmaMs)) : 400;
+          remCurrentDocMs = remPages * pageEmaMs + tailMs;
+        } else if (completed.size > 0 && msPerWeight !== null && activeIndex >= 0) {
+          remCurrentDocMs = docWeights[activeIndex] * Math.max(0, 1 - activeFraction) * msPerWeight;
+        } else {
+          return null;
+        }
+        let futureWeight = 0;
+        for (let i = 0; i < docs.length; i++) {
+          if (i !== activeIndex && !completed.has(i)) futureWeight += docWeights[i];
+        }
+        let remFutureMs = 0;
+        if (futureWeight > 0) {
+          let rate = msPerWeight;
+          if (rate === null && activeIndex >= 0) {
+            const estDocTotal = Math.max(1, (Date.now() - docStartedAt) + remCurrentDocMs);
+            rate = estDocTotal / docWeights[activeIndex];
+          }
+          remFutureMs = (rate || 0) * futureWeight;
+        }
+        return Math.max(0, remCurrentDocMs + remFutureMs);
+      };
+      const getTiming = (state, refreshEta = true) => {
+        const elapsedSec = Math.max(0, Math.floor((Date.now() - runStartedAt) / 1000));
+        if (state === 'done') return { elapsedText: `Completed in ${formatDuration(elapsedSec)}`, etaText: '' };
+        if (state === 'error') return { elapsedText: `Stopped after ${formatDuration(elapsedSec)}`, etaText: '' };
+        if (refreshEta) {
+          const etaMs = computeEtaMs();
+          if (etaMs !== null) {
+            lastEtaMs = etaMs;
+            lastEtaAt = Date.now();
+          }
+        }
+        const displayedEtaMs = lastEtaMs === null ? null : Math.max(5000, lastEtaMs - (Date.now() - lastEtaAt));
+        return {
+          elapsedText: `Elapsed ${formatDuration(elapsedSec)}`,
+          etaText: displayedEtaMs === null ? 'Estimating remaining time…' : formatEta(displayedEtaMs / 1000),
+        };
+      };
+      const report = (message, state = 'progress', retryable = false, refreshEta = true) => {
+        lastMessage = message;
+        status.textContent = message;
+        const percent = computePercent(state);
+        const timing = getTiming(state, refreshEta);
+        updateProgress(panel, percent, timing);
+        if (automatic && parent !== window) {
+          parent.postMessage({
+            type: 'sps-pdf-export',
+            state,
+            message,
+            retryable,
+            percent,
+            completedCount: completed.size,
+            totalCount: docs.length,
+            elapsedText: timing.elapsedText,
+            etaText: timing.etaText,
+          }, location.origin);
+        }
+      };
       let pending;
       let error;
       let warning = '';
@@ -376,7 +502,15 @@
         const item = pending;
         if (!item || message.data.index !== item.index || message.source !== item.frame.contentWindow) return;
         if (Number.isFinite(message.data.progress)) {
-          report(`Document ${item.index + 1} / ${docs.length}: ${message.data.message}`, 'progress', false, message.data.progress);
+          activeFraction = Math.max(activeFraction, Math.min(1, message.data.progress));
+          if (Number.isFinite(message.data.page) && Number.isFinite(message.data.totalPages)) {
+            currentPage = message.data.page;
+            currentTotalPages = message.data.totalPages;
+          }
+          if (Number.isFinite(message.data.pageMs) && message.data.pageMs > 0) {
+            pageEmaMs = pageEmaMs === null ? message.data.pageMs : 0.35 * message.data.pageMs + 0.65 * pageEmaMs;
+          }
+          report(`Document ${item.index + 1} / ${docs.length}: ${message.data.message}`, 'progress', false, true);
           return;
         }
         if (message.data.error) item.reject(new Error(message.data.error));
@@ -437,14 +571,23 @@
         catch (reason) { abort(reason); }
         finally { ticking = false; }
       }, 1000);
+      const elapsedTicker = setInterval(() => {
+        if (!error && !released && lastMessage) report(lastMessage, 'progress', false, false);
+      }, 1000);
       try {
         if (Date.now() >= renewAt) await request({ renew: '1' }, controller.signal);
         for (let index = 0; index < docs.length; index++) {
           if (completed.has(index)) continue;
-          report(`Document ${index + 1} / ${docs.length}: Preparing ${filenames[index]}…`, 'progress', false, .03);
+          activeIndex = index;
+          activeFraction = 0.03;
+          docStartedAt = Date.now();
+          currentPage = 0;
+          currentTotalPages = 0;
+          report(`Document ${index + 1} / ${docs.length}: Preparing ${filenames[index]}…`, 'progress', false, true);
           const blob = await render(index);
           if (error || released) throw error || new Error('Task cancelled.');
-          report(`Document ${index + 1} / ${docs.length}: Preparing download…`, 'progress', false, .98);
+          activeFraction = 0.98;
+          report(`Document ${index + 1} / ${docs.length}: Preparing download…`, 'progress', false, true);
           await request({ finish: index, renew: '1' }, controller.signal);
           if (error || released) throw error || new Error('Task cancelled.');
           const blobUrl = URL.createObjectURL(blob);
@@ -453,20 +596,26 @@
           document.body.append(anchor); anchor.click(); anchor.remove();
           setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
           completed.add(index);
-          report(`Downloaded ${completed.size} / ${docs.length}. Preparing the remaining documents…`);
+          const sample = Math.max(1, Date.now() - docStartedAt) / docWeights[index];
+          msPerWeight = msPerWeight === null ? sample : 0.4 * sample + 0.6 * msPerWeight;
+          activeIndex = -1;
+          activeFraction = 0;
+          report(`Downloaded ${completed.size} / ${docs.length}. Preparing the remaining documents…`, 'progress', false, true);
         }
         if (error) throw error;
         release();
-        report(`Started ${completed.size} individual PDF downloads. ${warning}If files are missing, allow multiple downloads in your browser.`, 'done');
+        report(`Started ${completed.size} individual PDF downloads. ${warning}If files are missing, allow multiple downloads in your browser.`, 'done', false, false);
       } catch (reason) {
         abort(reason);
+        activeIndex = -1;
         let retryable = !released;
         if (retryable) {
           try { await request({ abandon: '1', renew: '1' }); }
           catch { retryable = false; release(); }
         }
-        report(`Downloaded ${completed.size} / ${docs.length}. ${reason.message || 'Download failed. Please retry.'}`, 'error', retryable);
+        report(`Downloaded ${completed.size} / ${docs.length}. ${reason.message || 'Download failed. Please retry.'}`, 'error', retryable, false);
       } finally {
+        clearInterval(elapsedTicker);
         clearInterval(heartbeat);
         window.removeEventListener('message', onMessage);
         busy = false;
@@ -497,7 +646,7 @@
   let prepared = false;
   let finished = false;
   const send = (result) => parent.postMessage({ type: 'sps-pdf-document', index: Number(preview.dataset.pdfIndex), ...result }, location.origin);
-  const progress = (value, message) => send({ progress: value, message });
+  const progress = (value, message, meta = {}) => send({ progress: value, message, ...meta });
   function updateControls() { button.disabled = !prepared || busy || finished; }
   updateControls();
   let library;
@@ -540,7 +689,7 @@
     }
   };
   const makePdf = async (section) => {
-    progress(.18, 'Measuring layout and preparing text…');
+    progress(.16, 'Preparing page layout…');
     const root = document.createElement('div');
     root.className = 'pdf-document pdf-download-document';
     const copy = section.cloneNode(true);
@@ -575,11 +724,12 @@
       const size = await worker.get('pageSize');
       const container = await worker.get('container');
       removeMetricsGuard = SPSPdfTextLayer.protectFontMetrics(container);
-      await SPSPdfTextLayer.prepareMathSvg(container);
+      await SPSPdfTextLayer.prepareMathSvg(container, (ratio) => progress(.18 + .02 * ratio, 'Preparing formulas…'));
       const height = container.getBoundingClientRect().height;
       // Match jsPDF's canvas rounding, otherwise a 1px remainder creates a page.
       const pageHeight = Math.floor(size.inner.px.width * size.inner.ratio);
-      const text = await SPSPdfTextLayer.capture(container);
+      const text = await SPSPdfTextLayer.capture(container, (ratio) => progress(.20 + .04 * ratio, 'Measuring text and layout…'));
+      progress(.24, 'Planning pages…');
       const bounds = container.getBoundingClientRect();
       const origin = bounds.top;
       const sourceUrl = new URL(section.dataset.pdfSource || location.href, location.origin);
@@ -704,18 +854,27 @@
         if (element.matches('img,svg,canvas,tr,pre,hr,.katex,.katex-display') || /^(avoid|avoid-page)$/.test(style.breakInside || style.pageBreakInside)) protectedRanges.push({ top, bottom });
       }
       const pages = SPSPdfTextLayer.paginate(text, height, pageHeight, protectedRanges, forcedBreaks);
-      progress(.25, `Rendering pages 0 / ${pages.length}…`);
+      progress(.25, `Rendering pages 0 / ${pages.length}…`, { page: 0, totalPages: pages.length });
+      await nextPaint();
       let pdf;
       for (let page = 0; page < pages.length;) {
+        const pageStart = performance.now();
         const last = Math.min(page + pagesPerBatch, pages.length);
         // toCanvas detaches its overlay. Reuse this exact paginated layout so
         // later pages cannot be reflowed or measured differently.
         if (!container.isConnected) document.body.append(worker.prop.overlay);
-        worker = worker.set({ html2canvas: { scale: renderScale, backgroundColor: '#ffffff', useCORS: true, allowTaint: false, logging: false,
-          ignoreElements: (element) => element === documentBody || element === preview,
-          windowWidth: innerWidth, scrollX: 0, scrollY: 0, y: pages[page].start, width: size.inner.px.width,
-          height: pages[last - 1].end - pages[page].start } }).toCanvas();
-        await worker;
+        const slowTimer = setTimeout(() => {
+          progress(.25 + .65 * page / pages.length, `Rendering page ${page + 1} / ${pages.length} (complex page, still working)…`, { page, totalPages: pages.length });
+        }, 3000);
+        try {
+          worker = worker.set({ html2canvas: { scale: renderScale, backgroundColor: '#ffffff', useCORS: true, allowTaint: false, logging: false,
+            ignoreElements: (element) => element === documentBody || element === preview,
+            windowWidth: innerWidth, scrollX: 0, scrollY: 0, y: pages[page].start, width: size.inner.px.width,
+            height: pages[last - 1].end - pages[page].start } }).toCanvas();
+          await worker;
+        } finally {
+          clearTimeout(slowTimer);
+        }
         const canvas = await worker.get('canvas');
         const batchStart = pages[page].start;
         for (; page < last; page++) {
@@ -742,9 +901,11 @@
           if (needsSlice) slice.width = slice.height = 0;
         }
         canvas.width = canvas.height = 0;
-        progress(.25 + .65 * page / pages.length, `Rendering pages ${page} / ${pages.length}…`);
+        const pageMs = Math.max(1, performance.now() - pageStart);
+        progress(.25 + .65 * page / pages.length, `Rendering pages ${page} / ${pages.length}…`, { page, totalPages: pages.length, pageMs });
+        await nextPaint();
       }
-      progress(.93, 'Adding searchable text and finishing PDF…');
+      progress(.90, 'Adding links…');
       const mmPerPixel = size.inner.width / size.inner.px.width;
       for (const link of links) {
         const page = SPSPdfTextLayer.pageAt(pages, link.y + link.height / 2);
@@ -767,8 +928,12 @@
           pdf.link(x, y, w, h, { url: link.url });
         }
       }
-      SPSPdfTextLayer.write(pdf, text, { width: size.inner.width, pixelWidth: size.inner.px.width, pixelHeight: pageHeight, pages }, await loadProvenanceFont());
+      progress(.91, 'Adding searchable text…');
+      await SPSPdfTextLayer.writeAsync(pdf, text, { width: size.inner.width, pixelWidth: size.inner.px.width, pixelHeight: pageHeight, pages }, await loadProvenanceFont(), (ratio) => progress(.91 + .05 * ratio, 'Adding searchable text…'));
+      progress(.96, 'Adding metadata…');
       await addProvenance(pdf, section);
+      progress(.97, 'Finalizing PDF file…');
+      await nextPaint();
       return pdf.output('blob');
     } finally {
       removeMetricsGuard();
@@ -793,15 +958,17 @@
   const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   Promise.all([loadLibrary(), loadProvenanceFont()]).catch(() => {});
   const prepare = async () => {
-    progress(.08, 'Loading images, fonts and formulas…');
+    progress(.06, 'Loading document content…');
     const deadline = Date.now() + 25000;
     while (!Array.from(documentBody.querySelectorAll(".markdown-body")).every((node) => node.dataset.spsRendered === "1")) {
       if (Date.now() > deadline) throw new Error("Unable to load the layout components. Reload the preview and retry.");
       await pause(100);
     }
+    progress(.08, 'Loading images, fonts and formulas…');
     documentBody.querySelectorAll("details").forEach((item) => { item.open = true; });
     // Observe asynchronous Mermaid/Graphviz rendering until it settles.
     let lastChange = Date.now();
+    let lastPrepareReport = 0.08;
     const observer = new MutationObserver(() => { lastChange = Date.now(); });
     observer.observe(documentBody, { childList: true, subtree: true, attributes: true });
     try {
@@ -809,9 +976,21 @@
       do {
         const images = Array.from(documentBody.querySelectorAll("img"));
         images.forEach((img) => { if (img.loading !== "eager") img.loading = "eager"; });
-        const pending = images.some((img) => !img.complete);
-        const diagrams = Array.from(documentBody.querySelectorAll(".mermaid")).some((node) => !node.querySelector("svg, img"))
-          || !!documentBody.querySelector(".md-graphviz:empty");
+        const loadedImages = images.filter((img) => img.complete).length;
+        const pending = loadedImages < images.length;
+        const mermaidNodes = Array.from(documentBody.querySelectorAll(".mermaid"));
+        const readyMermaid = mermaidNodes.filter((node) => node.querySelector("svg, img")).length;
+        const graphvizTotal = documentBody.querySelectorAll(".md-graphviz").length;
+        const graphvizPending = documentBody.querySelectorAll(".md-graphviz:empty").length;
+        const diagrams = readyMermaid < mermaidNodes.length || graphvizPending > 0;
+        const totalItems = images.length + mermaidNodes.length + graphvizTotal;
+        const readyItems = loadedImages + readyMermaid + (graphvizTotal - graphvizPending);
+        const subRatio = totalItems > 0 ? readyItems / totalItems : 1;
+        const subProgress = Math.min(.15, .08 + .07 * subRatio);
+        if (subProgress >= lastPrepareReport + .01) {
+          lastPrepareReport = subProgress;
+          progress(subProgress, images.length > 0 && pending ? `Loading images (${loadedImages} / ${images.length})…` : 'Loading diagrams and fonts…');
+        }
         const settle = documentBody.querySelector('.mermaid, .md-graphviz') ? 1000 : 100;
         if (!pending && !diagrams && Date.now() - lastChange > settle) break;
         await pause(150);
@@ -819,6 +998,7 @@
     } finally {
       observer.disconnect();
     }
+    progress(.16, 'Layout ready. Starting PDF generation…');
     const incomplete = Array.from(documentBody.querySelectorAll("img")).some((img) => !img.complete || img.naturalWidth === 0);
     const sections = documentBody.querySelectorAll(".pdf-doc");
     if (sections.length > 1) {

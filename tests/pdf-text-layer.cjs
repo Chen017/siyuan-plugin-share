@@ -38,3 +38,23 @@ for (const sample of samples) {
 api.SPSPdfTextLayer.write(pdf, records, { width: 182, pixelWidth: 687, pixelHeight: 1000 }, fs.readFileSync(path.join(__dirname, '../php-site/assets/vendor/fonts/pdf-provenance.ttf')).toString('base64'));
 fs.writeFileSync(path.join(output, 'selectable.pdf'), Buffer.from(pdf.output('arraybuffer')));
 fs.writeFileSync(path.join(output, 'expected.json'), JSON.stringify(samples));
+
+(async () => {
+  const asyncApi = {};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../php-site/assets/pdf-text-layer.js'), 'utf8'), { globalThis: asyncApi, Intl, setTimeout });
+  const asyncPdf = new jsPDF({ compress: true });
+  asyncPdf.text('Visible reference', 14, 16);
+  const ratios = [];
+  const manyRecords = Array.from({ length: 1600 }, (_, i) => records[i % records.length]);
+  await asyncApi.SPSPdfTextLayer.writeAsync(
+    asyncPdf,
+    manyRecords,
+    { width: 182, pixelWidth: 687, pixelHeight: 1000 },
+    fs.readFileSync(path.join(__dirname, '../php-site/assets/vendor/fonts/pdf-provenance.ttf')).toString('base64'),
+    (ratio) => ratios.push(ratio),
+  );
+  assert.ok(ratios.length >= 2, 'writeAsync reports intermediate and final progress');
+  assert.equal(ratios[ratios.length - 1], 1);
+  for (let i = 1; i < ratios.length; i++) assert.ok(ratios[i] >= ratios[i - 1], 'writeAsync progress is monotonic');
+  assert.ok(Buffer.from(asyncPdf.output('arraybuffer')).length > 1000);
+})().catch((error) => { console.error(error); process.exitCode = 1; });

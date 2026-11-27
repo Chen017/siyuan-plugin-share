@@ -5,37 +5,49 @@
 (() => {
   'use strict';
   // Animation frames stop in background tabs; a timer keeps batch exports moving.
-  const pause = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const pause = () => (typeof setTimeout === 'function' ? new Promise((resolve) => setTimeout(resolve, 0)) : Promise.resolve());
   const hex = (number, width) => number.toString(16).padStart(width, '0');
   const utf16 = (text) => Array.from({ length: text.length }, (_, index) => hex(text.charCodeAt(index), 4)).join('');
 
-  async function capture(container) {
+  async function capture(container, onProgress) {
     const origin = container.getBoundingClientRect();
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
     const segmenter = globalThis.Intl?.Segmenter ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
     const range = document.createRange();
-    const records = [];
+    const textNodes = [];
+    let totalChars = 0;
     let node;
-    let measured = 0;
     while ((node = walker.nextNode())) {
       const parent = node.parentElement;
       if (!parent || parent.closest('.markdown-source, .katex-mathml, script, style, svg title, svg desc')) continue;
       const style = getComputedStyle(parent);
       if (style.visibility !== 'visible' || style.display === 'none') continue;
-      const pieces = segmenter ? segmenter.segment(node.data) : Array.from(node.data, (segment) => ({ segment }));
+      textNodes.push(node);
+      totalChars += node.data.length;
+    }
+    const records = [];
+    let measured = 0;
+    let processedChars = 0;
+    for (const current of textNodes) {
+      const pieces = segmenter ? segmenter.segment(current.data) : Array.from(current.data, (segment) => ({ segment }));
       let offset = 0;
       for (const piece of pieces) {
         const text = piece.segment;
-        range.setStart(node, offset);
+        range.setStart(current, offset);
         offset += text.length;
-        range.setEnd(node, offset);
+        processedChars += text.length;
+        range.setEnd(current, offset);
         const rect = range.getBoundingClientRect();
         if (!/[\r\n\t]/.test(text) && rect.width > 0.01 && rect.height > 0.01) {
           records.push({ text, x: rect.left - origin.left, y: rect.top - origin.top, width: rect.width, height: rect.height });
         }
-        if (++measured % 1000 === 0) await pause();
+        if (++measured % 1000 === 0) {
+          if (typeof onProgress === 'function' && totalChars > 0) onProgress(Math.min(1, processedChars / totalChars));
+          await pause();
+        }
       }
     }
+    if (typeof onProgress === 'function') onProgress(1);
     return records;
   }
 
@@ -61,7 +73,7 @@
     return () => style.remove();
   }
 
-  async function prepareMathSvg(container) {
+  async function prepareMathSvg(container, onProgress) {
     // html2canvas reserializes SVGs without KaTeX's inherited styles and
     // positioning. Snapshot each symbol at its laid-out size instead, while
     // leaving the formula's text and layout in the DOM for pagination/selection.
@@ -88,7 +100,15 @@
       svg.replaceWith(image);
       return image;
     }).filter(Boolean);
-    await Promise.all(images.map((image) => image.decode()));
+    if (images.length === 0) {
+      if (typeof onProgress === 'function') onProgress(1);
+      return;
+    }
+    let decoded = 0;
+    await Promise.all(images.map((image) => image.decode().then(() => {
+      decoded++;
+      if (typeof onProgress === 'function') onProgress(decoded / images.length);
+    })));
   }
 
   // Use actual text boxes, not an arbitrary pixel row, as page boundaries.
@@ -151,7 +171,7 @@
     return low - 1;
   }
 
-  function write(pdf, records, geometry, registrationFont) {
+  function prepareWrite(pdf, records, geometry, registrationFont) {
     const glyphs = new Map();
     for (const record of records) if (!glyphs.has(record.text)) glyphs.set(record.text, glyphs.size);
     const values = Array.from(glyphs.keys());
@@ -193,22 +213,41 @@
     const mmPerPixel = geometry.width / geometry.pixelWidth;
     const pageHeight = pdf.internal.pageSize.getHeight() * unit;
     const number = (value) => value.toFixed(4);
-    for (const record of records) {
-      let page = Math.floor((record.y + record.height / 2) / geometry.pixelHeight);
-      if (geometry.pages) page = pageAt(geometry.pages, record.y + record.height / 2);
-      if (page < 0 || page >= pdf.getNumberOfPages()) continue;
-      pdf.setPage(page + 1);
-      const glyph = glyphs.get(record.text);
-      const fontId = ids[Math.floor(glyph / 255)];
-      const x = (14 + record.x * mmPerPixel) * unit;
-      const start = geometry.pages ? geometry.pages[page].start : page * geometry.pixelHeight;
-      const y = pageHeight - (16 + (record.y - start + record.height) * mmPerPixel) * unit;
-      const size = record.height * mmPerPixel * unit;
-      pdf.saveGraphicsState();
-      pdf.setGState(transparent);
-      pdf.internal.write(`BT /${fontId} ${number(size)} Tf 0 Tr ${number(record.width / record.height * 100)} Tz 1 0 0 1 ${number(x)} ${number(y)} Tm <${hex(glyph % 255 + 1, 2)}> Tj ET`);
-      pdf.restoreGraphicsState();
-    }
+    return { glyphs, ids, unit, transparent, mmPerPixel, pageHeight, number };
   }
-  globalThis.SPSPdfTextLayer = { capture, protectFontMetrics, prepareMathSvg, paginate, pageAt, write };
+
+  function writeRecord(pdf, record, geometry, state) {
+    let page = Math.floor((record.y + record.height / 2) / geometry.pixelHeight);
+    if (geometry.pages) page = pageAt(geometry.pages, record.y + record.height / 2);
+    if (page < 0 || page >= pdf.getNumberOfPages()) return;
+    pdf.setPage(page + 1);
+    const glyph = state.glyphs.get(record.text);
+    const fontId = state.ids[Math.floor(glyph / 255)];
+    const x = (14 + record.x * state.mmPerPixel) * state.unit;
+    const start = geometry.pages ? geometry.pages[page].start : page * geometry.pixelHeight;
+    const y = state.pageHeight - (16 + (record.y - start + record.height) * state.mmPerPixel) * state.unit;
+    const size = record.height * state.mmPerPixel * state.unit;
+    pdf.saveGraphicsState();
+    pdf.setGState(state.transparent);
+    pdf.internal.write(`BT /${fontId} ${state.number(size)} Tf 0 Tr ${state.number(record.width / record.height * 100)} Tz 1 0 0 1 ${state.number(x)} ${state.number(y)} Tm <${hex(glyph % 255 + 1, 2)}> Tj ET`);
+    pdf.restoreGraphicsState();
+  }
+
+  function write(pdf, records, geometry, registrationFont) {
+    const state = prepareWrite(pdf, records, geometry, registrationFont);
+    for (const record of records) writeRecord(pdf, record, geometry, state);
+  }
+
+  async function writeAsync(pdf, records, geometry, registrationFont, onProgress) {
+    const state = prepareWrite(pdf, records, geometry, registrationFont);
+    for (let i = 0; i < records.length; i++) {
+      writeRecord(pdf, records[i], geometry, state);
+      if ((i + 1) % 1500 === 0) {
+        if (typeof onProgress === 'function' && records.length > 0) onProgress((i + 1) / records.length);
+        await pause();
+      }
+    }
+    if (typeof onProgress === 'function') onProgress(1);
+  }
+  globalThis.SPSPdfTextLayer = { capture, protectFontMetrics, prepareMathSvg, paginate, pageAt, write, writeAsync };
 })();
